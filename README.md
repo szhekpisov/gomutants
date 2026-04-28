@@ -4,7 +4,7 @@ A mutation testing tool for Go. Drop-in replacement for [go-gremlins](https://gi
 
 ## Features
 
-- **10 mutation types** — token-level and block-level mutations (see below)
+- **16 mutation types** — token-level and block-level mutations (see below)
 - **Fast** — parallel workers with `go test -overlay` (no source tree copies)
 - **Generics support** — byte-level patching preserves all Go syntax
 - **Gremlins-compatible** — JSON report format for easy migration
@@ -95,6 +95,12 @@ Priority: defaults < config file < CLI flags.
 | `CONDITIONALS_NEGATION` | Negate comparisons | `==` <-> `!=`, `<` <-> `>=`, `>` <-> `<=` |
 | `INCREMENT_DECREMENT` | Swap increment/decrement | `++` <-> `--` |
 | `INVERT_NEGATIVES` | Invert negation | `-x` -> `+x`, `a - b` -> `a + b` |
+| `INVERT_ASSIGNMENTS` | Swap arithmetic compound assignments | `+=` <-> `-=`, `*=` <-> `/=`, `%=` -> `*=` |
+| `INVERT_BITWISE` | Swap bitwise binary operators | `&` <-> `\|`, `^` -> `&`, `<<` <-> `>>` |
+| `INVERT_BITWISE_ASSIGNMENTS` | Swap bitwise compound assignments | `&=` <-> `\|=`, `^=` -> `&=`, `<<=` <-> `>>=` |
+| `INVERT_LOGICAL` | Swap logical operators | `&&` <-> `\|\|` |
+| `INVERT_LOOP_CTRL` | Swap loop control | `break` <-> `continue` |
+| `REMOVE_SELF_ASSIGNMENTS` | Drop op from compound assignment | `x += y` -> `x = y` |
 
 ### Block-level
 

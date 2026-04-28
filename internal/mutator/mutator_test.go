@@ -195,6 +195,271 @@ func f(a, b int) int { return a - b }
 	}
 }
 
+// --- Compound-assignment / bitwise / logical / loop-ctrl mutators ---
+
+func TestInvertAssignments(t *testing.T) {
+	src := `package p
+func f(a, b int) {
+	a += b
+	a -= b
+	a *= b
+	a /= b
+	a %= b
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertAssignments)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 5 {
+		t.Fatalf("expected 5 candidates, got %d", len(candidates))
+	}
+
+	expected := map[string]string{
+		"+=": "-=", "-=": "+=", "*=": "/=", "/=": "*=", "%=": "*=",
+	}
+	for i, c := range candidates {
+		want, ok := expected[c.Original]
+		if !ok {
+			t.Errorf("candidate %d: unexpected original %q", i, c.Original)
+		} else if c.Replacement != want {
+			t.Errorf("candidate %d: %q→%q, want %q→%q", i, c.Original, c.Replacement, c.Original, want)
+		}
+		if c.Type != mutator.InvertAssignments {
+			t.Errorf("candidate %d: type=%v, want %v", i, c.Type, mutator.InvertAssignments)
+		}
+	}
+}
+
+func TestInvertAssignmentsSkipsPlainAssign(t *testing.T) {
+	src := `package p
+func f() {
+	x := 0
+	x = 1
+	_ = x
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertAssignments)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for plain/short assigns, got %d", len(got))
+	}
+}
+
+func TestInvertBitwise(t *testing.T) {
+	src := `package p
+func f(a, b uint) uint {
+	_ = a & b
+	_ = a | b
+	_ = a ^ b
+	_ = a &^ b
+	_ = a << 1
+	_ = a >> 1
+	return 0
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertBitwise)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 6 {
+		t.Fatalf("expected 6 candidates, got %d", len(candidates))
+	}
+
+	expected := map[string]string{
+		"&": "|", "|": "&", "^": "&", "&^": "&", "<<": ">>", ">>": "<<",
+	}
+	for i, c := range candidates {
+		want, ok := expected[c.Original]
+		if !ok {
+			t.Errorf("candidate %d: unexpected original %q", i, c.Original)
+		} else if c.Replacement != want {
+			t.Errorf("candidate %d: %q→%q, want %q→%q", i, c.Original, c.Replacement, c.Original, want)
+		}
+	}
+}
+
+func TestInvertBitwiseSkipsArithmetic(t *testing.T) {
+	src := `package p
+func f(a, b int) int { return a + b }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertBitwise)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for arithmetic source, got %d", len(got))
+	}
+}
+
+func TestInvertBitwiseAssignments(t *testing.T) {
+	src := `package p
+func f(a, b uint) {
+	a &= b
+	a |= b
+	a ^= b
+	a &^= b
+	a <<= 1
+	a >>= 1
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertBitwiseAssignments)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 6 {
+		t.Fatalf("expected 6 candidates, got %d", len(candidates))
+	}
+
+	expected := map[string]string{
+		"&=": "|=", "|=": "&=", "^=": "&=", "&^=": "&=", "<<=": ">>=", ">>=": "<<=",
+	}
+	for i, c := range candidates {
+		want, ok := expected[c.Original]
+		if !ok {
+			t.Errorf("candidate %d: unexpected original %q", i, c.Original)
+		} else if c.Replacement != want {
+			t.Errorf("candidate %d: %q→%q, want %q→%q", i, c.Original, c.Replacement, c.Original, want)
+		}
+	}
+}
+
+func TestInvertLogical(t *testing.T) {
+	src := `package p
+func f(a, b bool) bool {
+	return a && b || a
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertLogical)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	expected := map[string]string{"&&": "||", "||": "&&"}
+	for i, c := range candidates {
+		want, ok := expected[c.Original]
+		if !ok {
+			t.Errorf("candidate %d: unexpected original %q", i, c.Original)
+		} else if c.Replacement != want {
+			t.Errorf("candidate %d: %q→%q, want %q→%q", i, c.Original, c.Replacement, c.Original, want)
+		}
+	}
+}
+
+func TestInvertLoopCtrl(t *testing.T) {
+	src := `package p
+func f() {
+	for i := 0; i < 10; i++ {
+		if i == 5 {
+			break
+		}
+		if i == 3 {
+			continue
+		}
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertLoopCtrl)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+
+	if candidates[0].Original != "break" || candidates[0].Replacement != "continue" {
+		t.Errorf("candidate 0: got %q→%q, want \"break\"→\"continue\"", candidates[0].Original, candidates[0].Replacement)
+	}
+	if candidates[1].Original != "continue" || candidates[1].Replacement != "break" {
+		t.Errorf("candidate 1: got %q→%q, want \"continue\"→\"break\"", candidates[1].Original, candidates[1].Replacement)
+	}
+}
+
+func TestInvertLoopCtrlSkipsLabelled(t *testing.T) {
+	src := `package p
+func f() {
+Outer:
+	for {
+		for {
+			break Outer
+		}
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertLoopCtrl)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for labelled break, got %d", len(got))
+	}
+}
+
+func TestInvertLoopCtrlSkipsGotoFallthrough(t *testing.T) {
+	src := `package p
+func f(x int) int {
+	switch x {
+	case 1:
+		fallthrough
+	case 2:
+		goto end
+	}
+end:
+	return 0
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertLoopCtrl)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for goto/fallthrough, got %d", len(got))
+	}
+}
+
+func TestRemoveSelfAssignments(t *testing.T) {
+	src := `package p
+func f(a, b uint) {
+	a += b
+	a -= b
+	a *= b
+	a /= b
+	a %= b
+	a &= b
+	a |= b
+	a ^= b
+	a &^= b
+	a <<= 1
+	a >>= 1
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RemoveSelfAssignments)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 11 {
+		t.Fatalf("expected 11 candidates (one per compound op), got %d", len(candidates))
+	}
+
+	for i, c := range candidates {
+		if c.Replacement != "=" {
+			t.Errorf("candidate %d: replacement=%q, want %q", i, c.Replacement, "=")
+		}
+	}
+}
+
+func TestRemoveSelfAssignmentsSkipsPlainAssign(t *testing.T) {
+	src := `package p
+func f() {
+	x := 0
+	x = 1
+	_ = x
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RemoveSelfAssignments)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for plain/short assigns, got %d", len(got))
+	}
+}
+
 // --- Block-level mutators ---
 
 func TestBranchIf(t *testing.T) {
@@ -446,8 +711,8 @@ func TestRegistryEnabledMutators(t *testing.T) {
 	reg := mutator.NewRegistry()
 
 	all := reg.Mutators()
-	if len(all) != 10 {
-		t.Fatalf("expected 10 mutators, got %d", len(all))
+	if len(all) != 16 {
+		t.Fatalf("expected 16 mutators, got %d", len(all))
 	}
 
 	only := reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil)
@@ -456,8 +721,8 @@ func TestRegistryEnabledMutators(t *testing.T) {
 	}
 
 	disabled := reg.EnabledMutators(nil, []string{"ARITHMETIC_BASE", "BRANCH_IF"})
-	if len(disabled) != 8 {
-		t.Fatalf("expected 8 after disabling 2, got %d", len(disabled))
+	if len(disabled) != 14 {
+		t.Fatalf("expected 14 after disabling 2, got %d", len(disabled))
 	}
 }
 
@@ -490,6 +755,34 @@ func f(a, b int) int {
 	}
 	if a != b || a >= b {
 		return a
+	}
+	// Compound assignments — InvertAssignments / RemoveSelfAssignments / InvertBitwiseAssignments.
+	a += b
+	a -= b
+	a *= b
+	a /= b
+	a %= b
+	a &= b
+	a |= b
+	a ^= b
+	a &^= b
+	a <<= 1
+	a >>= 1
+	// Bitwise binary — InvertBitwise.
+	_ = a & b
+	_ = a | b
+	_ = a ^ b
+	_ = a &^ b
+	_ = a << 1
+	_ = a >> 1
+	// Loop control — InvertLoopCtrl.
+	for i := 0; i < 10; i++ {
+		if i == 5 {
+			break
+		}
+		if i == 3 {
+			continue
+		}
 	}
 	return 0
 }
@@ -732,8 +1025,8 @@ func f(x int) {
 func TestRegistryEnabledMutatorsNoFilter(t *testing.T) {
 	reg := mutator.NewRegistry()
 	all := reg.EnabledMutators(nil, nil)
-	if len(all) != 10 {
-		t.Errorf("expected 10, got %d", len(all))
+	if len(all) != 16 {
+		t.Errorf("expected 16, got %d", len(all))
 	}
 }
 
