@@ -9,10 +9,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+SUMMARIZE_ONLY=0
+if [[ "${1:-}" == "--summarize-only" ]]; then
+  SUMMARIZE_ONLY=1
+fi
+
 GOMUTANT="$REPO_ROOT/bin/gomutant"
 GREMLINS="${GREMLINS:-$(command -v gremlins || true)}"
 
-[[ -x "$GOMUTANT" ]] || { echo "Building gomutant..."; go build -o "$GOMUTANT" .; }
+if (( SUMMARIZE_ONLY == 0 )); then
+  # Always rebuild so a stale binary from an old branch can't silently mislead
+  # the report.
+  echo "Building gomutant..."
+  go build -o "$GOMUTANT" .
+fi
+
 [[ -n "$GREMLINS" ]] || { echo "gremlins not on PATH" >&2; exit 1; }
 
 for bin in hyperfine jq; do
@@ -23,6 +34,7 @@ OUT_DIR="$REPO_ROOT/benchmarks/out"
 mkdir -p "$OUT_DIR"
 
 WORKERS=10
+RUNS=5
 # Set high enough that gremlins (which fork-execs `go test` per mutant on macOS)
 # actually completes its mutant tests instead of silently timing out. gomutant
 # is unaffected — it pre-builds and reuses test binaries.
@@ -32,13 +44,11 @@ TIMEOUT_COEF=50
 MATCHED_MUTATORS="ARITHMETIC_BASE,CONDITIONALS_BOUNDARY,CONDITIONALS_NEGATION,INCREMENT_DECREMENT,INVERT_NEGATIVES"
 
 # gremlins auto-appends /... and accepts one path; gomutant takes explicit /...
-# ran_path: path arg for gremlins (no trailing /...)
-# gom_path: path arg for gomutant (trailing /... where applicable)
-# Spec format: "label|description|gom_path|gre_path|gom_extra_flags|runs"
+# Spec format: "label|description|gom_path|gre_path|gom_extra_flags"
 SCENARIOS=(
-  "small-defaults|./testdata/simple/ with each tool's default mutators|./testdata/simple/|./testdata/simple||5"
-  "mutator-defaults|./internal/mutator with each tool's default mutators|./internal/mutator/...|./internal/mutator||5"
-  "mutator-matched|./internal/mutator with matched 5-mutator set (apples-to-apples)|./internal/mutator/...|./internal/mutator|--only $MATCHED_MUTATORS|5"
+  "small-defaults|./testdata/simple/ with each tool's default mutators|./testdata/simple/|./testdata/simple|"
+  "mutator-defaults|./internal/mutator with each tool's default mutators|./internal/mutator/...|./internal/mutator|"
+  "mutator-matched|./internal/mutator with matched 5-mutator set (apples-to-apples)|./internal/mutator/...|./internal/mutator|--only $MATCHED_MUTATORS"
 )
 
 cpu_info() {
@@ -49,10 +59,8 @@ cpu_info() {
   fi
 }
 
-json_num() { jq -r "${2} // 0" "$1"; }
-
 run_scenario() {
-  local label="$1" desc="$2" gom_path="$3" gre_path="$4" gom_extra="$5" runs="$6"
+  local label="$1" desc="$2" gom_path="$3" gre_path="$4" gom_extra="$5"
 
   echo
   echo "===== Scenario: $label ====="
@@ -70,8 +78,8 @@ run_scenario() {
   eval "$gom_cmd" >/dev/null 2>&1 || true
   eval "$gre_cmd" >/dev/null 2>&1 || true
 
-  echo "Running hyperfine ($runs runs each)..."
-  hyperfine --warmup 0 --runs "$runs" --export-json "$hf_json" \
+  echo "Running hyperfine ($RUNS runs each)..."
+  hyperfine --warmup 0 --runs "$RUNS" --export-json "$hf_json" \
     -n gomutant "$gom_cmd" \
     -n gremlins "$gre_cmd"
 }
@@ -106,13 +114,6 @@ summarize_scenario() {
   gre_total=$(jq '[.files[].mutations[]] | length' "$gre_json")
   gre_eff=$(jq -r '.test_efficacy // 0' "$gre_json")
 
-  local speedup
-  if awk "BEGIN{exit !($gom_mean>0)}"; then
-    speedup=$(awk "BEGIN{printf \"%.2fx\", $gre_mean / $gom_mean}")
-  else
-    speedup="n/a"
-  fi
-
   # Per-mutant time uses (killed + lived) — the mutants that actually had tests
   # executed against them. NOT_COVERED and NOT_VIABLE are filtered before any
   # test runs, so they don't represent test-execution work.
@@ -128,6 +129,23 @@ summarize_scenario() {
     gre_per=$(awk "BEGIN{printf \"%.0f\", ($gre_mean * 1000) / $gre_exec}")
   else
     gre_per="n/a"
+  fi
+
+  # Print whichever side is faster, with the multiple. No more "0.41x faster"
+  # riddles.
+  local winner_line
+  if awk "BEGIN{exit !($gom_mean>0 && $gre_mean>0)}"; then
+    if awk "BEGIN{exit !($gom_mean<$gre_mean)}"; then
+      local r
+      r=$(awk "BEGIN{printf \"%.2f\", $gre_mean / $gom_mean}")
+      winner_line="**Winner (wall-clock): gomutant — ${r}× faster**"
+    else
+      local r
+      r=$(awk "BEGIN{printf \"%.2f\", $gom_mean / $gre_mean}")
+      winner_line="**Winner (wall-clock): gremlins — ${r}× faster**"
+    fi
+  else
+    winner_line="Wall-clock comparison unavailable (zero mean)."
   fi
 
   cat <<EOF
@@ -146,21 +164,24 @@ summarize_scenario() {
 | Tested mutants (k+l)    | $gom_exec | $gre_exec |
 | Time per tested mutant (ms) | $gom_per | $gre_per |
 
-gomutant vs gremlins wall-clock ratio: **${speedup}** (>1 means gomutant is faster).
+$winner_line
 
 EOF
 }
 
-for spec in "${SCENARIOS[@]}"; do
-  IFS='|' read -r label desc gom_path gre_path gom_extra runs <<<"$spec"
-  run_scenario "$label" "$desc" "$gom_path" "$gre_path" "$gom_extra" "$runs"
-done
+if (( SUMMARIZE_ONLY == 0 )); then
+  for spec in "${SCENARIOS[@]}"; do
+    IFS='|' read -r label desc gom_path gre_path gom_extra <<<"$spec"
+    run_scenario "$label" "$desc" "$gom_path" "$gre_path" "$gom_extra"
+  done
+fi
 
 RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
 {
   echo "# Benchmark Results: gomutant vs gremlins"
   echo
-  echo "_Generated: $(date -u +'%Y-%m-%dT%H:%M:%SZ')_"
+  # Date-only so reruns within the same day produce a stable diff.
+  echo "_Generated: $(date -u +'%Y-%m-%d')_"
   echo
   echo "| | |"
   echo "|---|---|"
@@ -171,11 +192,12 @@ RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
   echo "| gremlins | $("$GREMLINS" --version 2>&1 | head -1) |"
   echo "| workers | $WORKERS |"
   echo "| timeout-coefficient | $TIMEOUT_COEF |"
+  echo "| hyperfine runs per scenario | $RUNS |"
   echo
   echo "Raw hyperfine output and per-run JSON reports are in \`benchmarks/out/\`."
   echo
   for spec in "${SCENARIOS[@]}"; do
-    IFS='|' read -r label desc gom_path gre_path gom_extra runs <<<"$spec"
+    IFS='|' read -r label desc gom_path gre_path gom_extra <<<"$spec"
     summarize_scenario "$label" "$desc"
   done
   cat <<'EOF'

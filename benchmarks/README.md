@@ -15,11 +15,15 @@ brew install hyperfine jq        # macOS
 From the repo root:
 
 ```bash
-go build -o bin/gomutant .
 bash benchmarks/run.sh
+
+# Re-render benchmarks/results.md from the JSON in benchmarks/out/ without
+# rerunning hyperfine (useful when only the formatter changed):
+bash benchmarks/run.sh --summarize-only
 ```
 
-The script runs three scenarios with hyperfine (5 runs each):
+The script always rebuilds `bin/gomutant` first so a stale binary can't silently
+skew results. It then runs three scenarios with hyperfine (5 runs each):
 
 | Scenario | Target | Notes |
 |---|---|---|

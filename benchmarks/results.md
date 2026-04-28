@@ -1,6 +1,6 @@
 # Benchmark Results: gomutant vs gremlins
 
-_Generated: 2026-04-27T16:52:37Z_
+_Generated: 2026-04-28_
 
 | | |
 |---|---|
@@ -30,7 +30,7 @@ Raw hyperfine output and per-run JSON reports are in `benchmarks/out/`.
 | Tested mutants (k+l)    | 24 | 14 |
 | Time per tested mutant (ms) | 255 | 335 |
 
-gomutant vs gremlins wall-clock ratio: **0.77x** (>1 means gomutant is faster).
+**Winner (wall-clock): gremlins — 1.31× faster**
 
 ### mutator-defaults — ./internal/mutator with each tool's default mutators
 
@@ -47,7 +47,7 @@ gomutant vs gremlins wall-clock ratio: **0.77x** (>1 means gomutant is faster).
 | Tested mutants (k+l)    | 80 | 19 |
 | Time per tested mutant (ms) | 183 | 317 |
 
-gomutant vs gremlins wall-clock ratio: **0.41x** (>1 means gomutant is faster).
+**Winner (wall-clock): gremlins — 2.43× faster**
 
 ### mutator-matched — ./internal/mutator with matched 5-mutator set (apples-to-apples)
 
@@ -64,13 +64,13 @@ gomutant vs gremlins wall-clock ratio: **0.41x** (>1 means gomutant is faster).
 | Tested mutants (k+l)    | 19 | 19 |
 | Time per tested mutant (ms) | 244 | 315 |
 
-gomutant vs gremlins wall-clock ratio: **1.29x** (>1 means gomutant is faster).
+**Winner (wall-clock): gomutant — 1.29× faster**
 
 ## Reading the results
 
 - **Wall-clock** is what the user waits for. On out-of-the-box defaults gomutant runs more mutators (10 vs 5), so it does more total work and finishes later despite per-mutant being faster.
-- **Time per tested mutant** normalizes for that — it isolates engine speed from the size of the workload. gomutant wins this consistently because it pre-builds and reuses test binaries; gremlins shells out a fresh `go test` per mutant.
-- The `mutator-matched` scenario removes the workload difference entirely. It is the cleanest engine-only comparison.
+- **Time per tested mutant** normalizes for that — it's the metric that isolates engine speed from the size of the workload. gomutant wins this consistently because it pre-builds and reuses test binaries; gremlins shells out a fresh `go test` per mutant.
+- The `mutator-matched` scenario removes the workload difference entirely. It's the cleanest engine-only comparison.
 
 ## Caveats
 
