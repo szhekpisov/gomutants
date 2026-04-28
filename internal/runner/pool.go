@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 
@@ -24,6 +25,18 @@ type Pool struct {
 	srcCache   map[string][]byte
 	projectDir string
 	testMap    *coverage.TestMap
+}
+
+// childGOMAXPROCSFor returns the GOMAXPROCS cap for each child `go test`
+// when running with the given outer worker count. Goal: spread NumCPU cores
+// across workers so the host doesn't oversubscribe (50 threads on a 10-core
+// machine when each worker spawns a parallel-compiling subprocess).
+// Returns 0 (= inherit) when there's only one worker — no contention to fix.
+func childGOMAXPROCSFor(workers int) int {
+	if workers <= 1 {
+		return 0
+	}
+	return max(1, runtime.NumCPU()/workers)
 }
 
 // NewPool creates a worker pool.
@@ -65,6 +78,7 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 			fmt.Fprintf(os.Stderr, "gomutant: NewWorker %d failed: %v\n", i, err)
 			continue
 		}
+		w.childGOMAXPROCS = childGOMAXPROCSFor(p.workers)
 		workersStarted++
 		wg.Add(1)
 		go func(w *Worker) {

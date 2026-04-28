@@ -103,6 +103,11 @@ type Worker struct {
 	sourceCache map[string][]byte // Read-only, shared across workers.
 	projectDir  string            // Working directory for go test.
 	testMap     *coverage.TestMap  // Per-test coverage map (may be nil).
+
+	// childGOMAXPROCS, if > 0, caps the GOMAXPROCS of each `go test` child.
+	// Limits compile + test runtime parallelism per child so N parallel workers
+	// don't oversubscribe a NumCPU-core host. Zero means inherit from parent.
+	childGOMAXPROCS int
 }
 
 // NewWorker creates a worker with stable temp file paths.
@@ -175,6 +180,16 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	// Put go test + its compiler + test-binary descendants in their own
 	// process group so we can kill the whole tree if RSS runs away.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if w.childGOMAXPROCS > 0 {
+		// exec auto-sets PWD=cmd.Dir only when cmd.Env is nil (see Go's
+		// exec.go ~L1220). When we set Env explicitly the child inherits the
+		// parent's stale PWD, which breaks module-relative paths. Mirror the
+		// auto-PWD behavior plus our GOMAXPROCS cap.
+		cmd.Env = append(os.Environ(),
+			"PWD="+cmd.Dir,
+			fmt.Sprintf("GOMAXPROCS=%d", w.childGOMAXPROCS),
+		)
+	}
 
 	var stdout, stderr cappedBuffer
 	cmd.Stdout = &stdout
