@@ -1,6 +1,6 @@
 # gomutant
 
-A fast mutation testing tool for Go. Drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins) with more mutators, generics support, and ~42% faster execution.
+A mutation testing tool for Go. Drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins) with more mutators, generics support, and faster per-mutant execution thanks to cached test binaries and `go test -overlay`.
 
 ## Features
 
@@ -148,18 +148,18 @@ Each worker owns a stable temp file. Mutations are applied as byte-level patches
 
 ## Benchmarks
 
-Tested on diffyml (792 mutants, 10 workers, darwin/arm64):
+Tested on [diffyml](https://github.com/szhekpisov/diffyml) (792 mutants, 10 workers, darwin/arm64):
 
 | Tool | Time | Mutants |
 |------|------|---------|
 | gremlins | ~276s | 779 |
 | gomutant | ~160s | 792 |
 
-~42% faster with more mutations discovered.
+~42% faster on this workload with more mutations discovered. The headline number is workload-specific — gomutant trades a fixed setup cost (coverage + per-test map build) for per-mutant savings via cached test binaries, so it pulls ahead on larger codebases. On tiny targets gremlins can still finish first; the matched-mutator-set engine comparison is in [`benchmarks/results.md`](benchmarks/results.md). Reproduce with `bash benchmarks/run.sh`.
 
 ### Self-efficacy
 
-gomutant achieves **69.32%** mutation efficacy on its own test suite (664 mutants across 8 packages). Full per-package breakdown: [testdata/golden/self-efficacy.txt](testdata/golden/self-efficacy.txt).
+gomutant kills **69.32%** of mutants in its own test suite (664 mutants across 8 packages). Coverage is high (97% of mutants are exercised by tests), but several packages — especially `main` (39.56%) and `internal/report` (61.70%) — still have meaningful test gaps that we plan to close. Per-package breakdown: [`testdata/golden/self-efficacy.txt`](testdata/golden/self-efficacy.txt).
 
 ## License
 
