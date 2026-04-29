@@ -54,6 +54,16 @@ func TestRunInvalidFlag(t *testing.T) {
 	}
 }
 
+func TestRunNegativeTestCPU(t *testing.T) {
+	err := run(context.Background(), []string{"--test-cpu", "-1"})
+	if err == nil {
+		t.Fatal("expected error for --test-cpu=-1")
+	}
+	if !strings.Contains(err.Error(), "test-cpu") {
+		t.Errorf("error should mention test-cpu, got: %v", err)
+	}
+}
+
 func TestReadModuleName(t *testing.T) {
 	dir := t.TempDir()
 	goMod := `module github.com/example/project

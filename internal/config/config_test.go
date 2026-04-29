@@ -34,6 +34,7 @@ func TestLoadValid(t *testing.T) {
 	path := filepath.Join(dir, ".gomutant.yml")
 
 	yaml := `workers: 4
+test-cpu: 2
 timeout-coefficient: 20
 coverpkg: "./pkg/..."
 output: report.json
@@ -55,6 +56,9 @@ only:
 
 	if cfg.Workers != 4 {
 		t.Errorf("Workers=%d, want 4", cfg.Workers)
+	}
+	if cfg.TestCPU != 2 {
+		t.Errorf("TestCPU=%d, want 2", cfg.TestCPU)
 	}
 	if cfg.TimeoutCoefficient != 20 {
 		t.Errorf("TimeoutCoefficient=%d, want 20", cfg.TimeoutCoefficient)
@@ -128,10 +132,13 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
-	cfg.ApplyFlags(8, 15, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", true, true)
+	cfg.ApplyFlags(8, 4, 15, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", true, true)
 
 	if cfg.Workers != 8 {
 		t.Errorf("Workers=%d, want 8", cfg.Workers)
+	}
+	if cfg.TestCPU != 4 {
+		t.Errorf("TestCPU=%d, want 4", cfg.TestCPU)
 	}
 	if cfg.TimeoutCoefficient != 15 {
 		t.Errorf("TimeoutCoefficient=%d, want 15", cfg.TimeoutCoefficient)
@@ -161,13 +168,17 @@ func TestApplyFlags(t *testing.T) {
 
 func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	cfg := Default()
+	cfg.TestCPU = 7
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
-	cfg.ApplyFlags(0, 0, "", "", "", "", "", false, false)
+	cfg.ApplyFlags(0, 0, 0, "", "", "", "", "", false, false)
 
 	if cfg.Workers != orig.Workers {
 		t.Errorf("Workers changed from %d to %d", orig.Workers, cfg.Workers)
+	}
+	if cfg.TestCPU != orig.TestCPU {
+		t.Errorf("TestCPU changed from %d to %d", orig.TestCPU, cfg.TestCPU)
 	}
 	if cfg.TimeoutCoefficient != orig.TimeoutCoefficient {
 		t.Errorf("TimeoutCoefficient changed")

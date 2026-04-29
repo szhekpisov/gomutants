@@ -9,6 +9,8 @@ concurrency:
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 jobs:
   changes:
@@ -50,6 +52,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
+          # --changed-since needs the merge-base with the PR base ref
+          # available locally; the default shallow clone hides it.
+          fetch-depth: 0
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
@@ -75,22 +80,74 @@ jobs:
       # mid-run SIGTERM, gomutant catches it gracefully (writes the partial
       # report, exits 0) but bash would otherwise queue the signal and die
       # with 143 the instant gomutant returns. Trapping in bash keeps the
-      # script alive long enough to run the threshold check.
+      # script alive long enough to run the post-run gate step.
       #
-      # -verbose so each completed mutant is logged, useful for debugging.
-      - name: Run mutation testing
+      # Two modes:
+      #  - PRs: --changed-since limits work to touched lines (~10× faster);
+      #    gate on "no LIVED mutant in the diff".
+      #  - Push to main: full-tree run; gate on the absolute test_efficacy
+      #    floor calibrated against history (catches coverage rot in code
+      #    no PR happens to touch).
+      - name: Run mutation testing (PR, changed-since)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          trap '' TERM
+          ./gomutant -workers=2 -verbose --changed-since "origin/${BASE_REF}" -o mutation-report.json ./internal/...
+
+      - name: Run mutation testing (full tree, post-merge)
+        if: github.event_name == 'push'
         run: |
           trap '' TERM
           ./gomutant -workers=2 -verbose -o mutation-report.json ./internal/...
 
-      - name: Check efficacy threshold
-        # Pinned to the local measurement on internal/ at PR time:
-        # 88.03% (522 killed, 71 lived, 53 not_viable, 9 timed_out,
-        # 26 not_covered). Threshold = current floor; any regression
-        # fails the gate. Bump alongside test improvements.
+      # On --changed-since runs the absolute test_efficacy floor is no
+      # longer meaningful (subset varies per PR). Gate instead on "no
+      # LIVED mutant on changed lines": every mutation introduced by the
+      # PR must be killed by some test.
+      - name: Gate on lived mutants (PR)
+        if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
-          EFFICACY=$(jq '.test_efficacy' mutation-report.json)
+          if [ ! -s mutation-report.json ]; then
+            echo "::error::mutation-report.json missing or empty"
+            exit 1
+          fi
+          # `// 0` defaults each missing field to 0 so a partial report
+          # produces a meaningful gate decision rather than failing
+          # opaquely on `[ null -gt 0 ]`. jq itself errors on malformed
+          # JSON, which `set -e` then propagates.
+          TOTAL=$(jq -r '.mutants_total // 0' mutation-report.json)
+          KILLED=$(jq -r '.mutants_killed // 0' mutation-report.json)
+          LIVED=$(jq -r '.mutants_lived // 0' mutation-report.json)
+          NOT_VIABLE=$(jq -r '.mutants_not_viable // 0' mutation-report.json)
+          NOT_COVERED=$(jq -r '.mutants_not_covered // 0' mutation-report.json)
+          # TIMED_OUT isn't a top-level field; derive as residual.
+          TIMED_OUT=$(( TOTAL - KILLED - LIVED - NOT_VIABLE - NOT_COVERED ))
+          echo "Mutants on changed lines: total=${TOTAL} killed=${KILLED} lived=${LIVED} not_viable=${NOT_VIABLE} not_covered=${NOT_COVERED} timed_out=${TIMED_OUT}"
+          if [ "${LIVED}" -gt 0 ]; then
+            echo "::error::${LIVED} mutant(s) on changed lines survived — strengthen tests or revert"
+            exit 1
+          fi
+
+      # Pinned to the local measurement on internal/ at PR time:
+      # 88.03% (522 killed, 71 lived, 53 not_viable, 9 timed_out,
+      # 26 not_covered). Threshold = current floor; any regression
+      # fails the gate. Bump alongside test improvements.
+      - name: Check efficacy threshold (post-merge)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          if [ ! -s mutation-report.json ]; then
+            echo "::error::mutation-report.json missing or empty"
+            exit 1
+          fi
+          EFFICACY=$(jq -r '.test_efficacy // empty' mutation-report.json)
+          if [ -z "${EFFICACY}" ]; then
+            echo "::error::test_efficacy missing from mutation-report.json"
+            exit 1
+          fi
           THRESHOLD=88.03
           echo "Test efficacy: ${EFFICACY}% (required: ${THRESHOLD}%)"
           if [ "$(echo "${EFFICACY} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then

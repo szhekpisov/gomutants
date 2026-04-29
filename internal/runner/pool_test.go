@@ -50,7 +50,7 @@ func setupTestProject(t *testing.T) string {
 }
 
 func TestPoolRunNoPending(t *testing.T) {
-	p := NewPool(2, 30*time.Second, t.TempDir(), nil, ".", nil)
+	p := NewPool(2, 0, 30*time.Second, t.TempDir(), nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, Status: mutator.StatusNotCovered},
 		{ID: 2, Status: mutator.StatusKilled},
@@ -69,7 +69,7 @@ func TestPoolRunNoPending(t *testing.T) {
 }
 
 func TestPoolRunEmpty(t *testing.T) {
-	p := NewPool(2, 30*time.Second, t.TempDir(), nil, ".", nil)
+	p := NewPool(2, 0, 30*time.Second, t.TempDir(), nil, ".", nil)
 	result := p.Run(context.Background(), nil, nil)
 	if result != nil {
 		t.Errorf("expected nil for nil input, got %v", result)
@@ -92,7 +92,7 @@ func TestPoolRunWithPending(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	p := NewPool(2, 30*time.Second, tmpDir, cache, dir, nil)
+	p := NewPool(2, 0, 30*time.Second, tmpDir, cache, dir, nil)
 
 	mutants := []mutator.Mutant{
 		{
@@ -161,7 +161,7 @@ func TestPoolRunNoWorkersAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := NewPool(4, 30*time.Second, blocker, nil, ".", nil)
+	p := NewPool(4, 0, 30*time.Second, blocker, nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, File: "/abs/f.go", Pkg: "p", Status: mutator.StatusPending},
 	}
@@ -196,7 +196,7 @@ func TestPoolRunNonDenseIDs(t *testing.T) {
 		}
 	}
 
-	p := NewPool(1, 30*time.Second, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, 0, 30*time.Second, t.TempDir(), cache, dir, nil)
 	mutants := []mutator.Mutant{
 		// Sparse IDs: 100 and 500. Not 1 and 2.
 		{ID: 100, File: srcPath, Pkg: "testmod",
@@ -234,7 +234,7 @@ func TestPoolRunCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	p := NewPool(1, 30*time.Second, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, 0, 30*time.Second, t.TempDir(), cache, dir, nil)
 
 	mutants := []mutator.Mutant{
 		{ID: 1, File: srcPath, Pkg: "testmod", StartOffset: plusIdx, EndOffset: plusIdx + 1, Replacement: "-", Status: mutator.StatusPending},
