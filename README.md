@@ -1,6 +1,11 @@
 # gomutant
 
-[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutant/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutant)
+[![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutant)](https://goreportcard.com/report/github.com/szhekpisov/gomutant)
+[![Go Reference](https://pkg.go.dev/badge/github.com/szhekpisov/gomutant.svg)](https://pkg.go.dev/github.com/szhekpisov/gomutant)
+[![codecov](https://codecov.io/gh/szhekpisov/gomutant/branch/main/graph/badge.svg)](https://codecov.io/gh/szhekpisov/gomutant)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Security & Static Analysis](https://github.com/szhekpisov/gomutant/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutant/actions/workflows/security.yml)
 
 > Mutation testing for Go: more mutators, generics support, per-test coverage routing, and PR-scoped runs as a first-class CI workflow.
 
@@ -243,8 +248,6 @@ gomutant kills **69.32%** of mutants in its own test suite (664 mutants across 8
 ## Contributing
 
 PRs accepted. Feel free to [open an issue](https://github.com/szhekpisov/gomutant/issues/new) or submit a pull request.
-
-This README follows the [Standard Readme](https://github.com/RichardLitt/standard-readme) specification.
 
 ## License
 
