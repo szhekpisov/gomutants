@@ -60,7 +60,7 @@ gomutant unleash ./...
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--workers` | `-w` | NumCPU | Parallel workers |
+| `--workers` | `-w` | NumCPU/2 | Parallel workers |
 | `--timeout-coefficient` | | 10 | Multiply baseline test time for per-mutant timeout |
 | `--coverpkg` | | | Coverage package pattern (passed to `go test -coverpkg`) |
 | `--output` | `-o` | `mutation-report.json` | JSON report path |
