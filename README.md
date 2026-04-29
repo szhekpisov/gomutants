@@ -21,7 +21,6 @@ A drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins)
 - [JSON report](#json-report)
 - [How it works](#how-it-works)
 - [Benchmarks](#benchmarks)
-- [Maintainers](#maintainers)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -240,10 +239,6 @@ The `workers=5` wall-clock is shaped by three things layered on the engine:
 ### Self-efficacy (gomutant on itself)
 
 gomutant kills **69.32%** of mutants in its own test suite (664 mutants across 8 packages, v0.1.0). Coverage is 97% — most lived mutants are real test gaps, not blind spots. Per-package breakdown in [`testdata/golden/self-efficacy.txt`](testdata/golden/self-efficacy.txt). The `internal/...` subset (excluding `main`) clears 88.03%, which is the gate this repo's CI enforces post-merge.
-
-## Maintainers
-
-[@szhekpisov](https://github.com/szhekpisov)
 
 ## Contributing
 
