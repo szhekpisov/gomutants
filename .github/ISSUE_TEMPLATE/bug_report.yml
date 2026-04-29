@@ -1,0 +1,124 @@
+name: Bug Report
+description: Report a bug in gomutant
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill in the details below so we can reproduce and fix it.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect to happen instead?
+      placeholder: |
+        When I run gomutant on a package with generic functions, the output shows...
+        I expected it to show...
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and flags
+      description: >-
+        The exact command you ran. Flags like --workers, --timeout-coefficient,
+        --coverpkg, --only, --disable, --dry-run, and --config trigger
+        different code paths, so include them all.
+      placeholder: gomutant -w 4 --only ARITHMETIC_BASE ./internal/...
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: source-snippet
+    attributes:
+      label: Minimal source snippet
+      description: >-
+        A small Go snippet that reproduces the issue (function under test
+        plus its test). Raw text is far more useful than screenshots.
+      render: go
+    validations:
+      required: false
+
+  - type: textarea
+    id: actual-output
+    attributes:
+      label: Actual output
+      description: Paste the terminal output and/or relevant excerpt of mutation-report.json. Use raw text, not screenshots.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-output
+    attributes:
+      label: Expected output
+      description: What you expected to see instead (e.g. "this mutant should be classified KILLED, not LIVED").
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: mutators
+    attributes:
+      label: Mutator types involved
+      description: Check any mutators that appear relevant. Skip if unsure.
+      options:
+        - label: ARITHMETIC_BASE
+        - label: CONDITIONALS_BOUNDARY
+        - label: CONDITIONALS_NEGATION
+        - label: INCREMENT_DECREMENT
+        - label: INVERT_NEGATIVES
+        - label: INVERT_ASSIGNMENTS
+        - label: INVERT_BITWISE
+        - label: INVERT_BITWISE_ASSIGNMENTS
+        - label: INVERT_LOGICAL
+        - label: INVERT_LOOP_CTRL
+        - label: REMOVE_SELF_ASSIGNMENTS
+        - label: BRANCH_IF / BRANCH_ELSE / BRANCH_CASE
+        - label: EXPRESSION_REMOVE
+        - label: STATEMENT_REMOVE
+
+  - type: checkboxes
+    id: input-characteristics
+    attributes:
+      label: Input characteristics
+      description: Check any that apply to the project under test.
+      options:
+        - label: Generic functions or type parameters
+        - label: Build tags or `//go:build` constraints
+        - label: cgo
+        - label: Code with no test coverage
+        - label: External test packages (`foo_test` package suffix)
+        - label: Multiple modules in the same repo
+        - label: Custom .gomutant.yml config in use
+        - label: Run via the `unleash` gremlins-compat subcommand
+
+  - type: input
+    id: version
+    attributes:
+      label: gomutant version
+      description: Output of `gomutant --version`
+      placeholder: "gomutant v0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: Output of `go version`
+      placeholder: "go version go1.26.1 darwin/arm64"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / Architecture
+      description: e.g. macOS 15.2 arm64, Ubuntu 24.04 amd64
+      placeholder: "macOS 15.2 arm64"
+    validations:
+      required: false

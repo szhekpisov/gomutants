@@ -1,0 +1,68 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for gomutant? Describe the problem first — the best solutions come from understanding the use case.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: >-
+        What are you trying to accomplish? What's painful or missing today?
+        Focus on the problem, not the solution.
+      placeholder: |
+        When running gomutant on a large monorepo, I need to...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: >-
+        Optional — describe what you'd like to see. The maintainer may design
+        it differently, so the problem description above is more important.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of gomutant does this relate to?
+      options:
+        - New mutator type
+        - Existing mutator behavior
+        - Mutant discovery / AST handling
+        - Coverage / per-test mapping
+        - Test execution (overlay, workers)
+        - Performance
+        - JSON report format
+        - Terminal output / progress
+        - CLI / flags / UX
+        - Configuration file
+        - Gremlins compatibility
+        - CI integration
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or other tools (gremlins, ooze, etc.) you've tried.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, screenshots, related issues, or anything else.
+    validations:
+      required: false
