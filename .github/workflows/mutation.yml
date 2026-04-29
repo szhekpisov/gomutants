@@ -65,14 +65,14 @@ jobs:
         run: ./gomutant -o mutation-report.json ./internal/...
 
       - name: Check efficacy threshold
-        # Local measurement on internal/ at PR time: 88.03% (522 killed,
-        # 71 lived, 53 not_viable, 9 timed_out, 26 not_covered). The
-        # 71 lived mutants are real test gaps; tighten this threshold
-        # as they're closed.
+        # Pinned to the local measurement on internal/ at PR time:
+        # 88.03% (522 killed, 71 lived, 53 not_viable, 9 timed_out,
+        # 26 not_covered). Threshold = current floor; any regression
+        # fails the gate. Bump alongside test improvements.
         run: |
           set -euo pipefail
           EFFICACY=$(jq '.test_efficacy' mutation-report.json)
-          THRESHOLD=85
+          THRESHOLD=88.03
           echo "Test efficacy: ${EFFICACY}% (required: ${THRESHOLD}%)"
           if [ "$(echo "${EFFICACY} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
             echo "::error::Mutation test efficacy ${EFFICACY}% is below ${THRESHOLD}% threshold"

@@ -118,7 +118,7 @@ jobs:
             printf "%.1f", (total > 0 ? covered * 100 / total : 0)
           }' coverage.out)
 
-          REQUIRED=95.0
+          REQUIRED=97.6
           echo "Total coverage: ${TOTAL_COV}% (required: ${REQUIRED}%)"
 
           if [ "$(echo "${TOTAL_COV} < ${REQUIRED}" | bc -l)" -eq 1 ]; then
