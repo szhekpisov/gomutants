@@ -8,10 +8,30 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/szhekpisov/gomutant/internal/coverage"
 	"github.com/szhekpisov/gomutant/internal/mutator"
 )
+
+// runWithDeadline runs fn in a goroutine and fails the test if it doesn't
+// return within d. Used to catch mutations that turn bounded loops into
+// infinite loops (e.g. dropping `prefix = prefix[:slash]` in
+// longestCommonPrefix, or skipping the early-return on a JSON decode error
+// so the decoder spins on the same bad token forever).
+func runWithDeadline(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("deadlocked: function exceeded %s", d)
+	}
+}
 
 func TestDiscover(t *testing.T) {
 	// Create a temp Go source file.
@@ -144,7 +164,10 @@ func TestLongestCommonPrefix(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		got := longestCommonPrefix(tc.pkgs)
+		var got string
+		runWithDeadline(t, 5*time.Second, func() {
+			got = longestCommonPrefix(tc.pkgs)
+		})
 		if got != tc.want {
 			t.Errorf("longestCommonPrefix(%v) = %q, want %q", tc.pkgs, got, tc.want)
 		}
@@ -271,7 +294,16 @@ func TestDecodeGoListJSONValid(t *testing.T) {
 
 func TestDecodeGoListJSONDecodeError(t *testing.T) {
 	input := `{invalid json`
-	_, err := decodeGoListJSON(strings.NewReader(input))
+	var err error
+	// Wrap in deadline: dropping the early-return on Decode error makes the
+	// decoder loop on the same bad token forever (dec.More() keeps reporting
+	// data is available, Decode keeps failing, we ignore — infinite loop).
+	// Tight deadline (300ms): the decoder allocates fast and the RSS-based
+	// mutant killer trips at ~3-4s; we need the timer to win that race.
+	// Healthy run takes <1ms, so 300ms has plenty of headroom.
+	runWithDeadline(t, 300*time.Millisecond, func() {
+		_, err = decodeGoListJSON(strings.NewReader(input))
+	})
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}

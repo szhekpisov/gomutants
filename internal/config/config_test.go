@@ -3,14 +3,13 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
 func TestDefault(t *testing.T) {
 	cfg := Default()
-	if cfg.Workers != runtime.NumCPU() {
-		t.Errorf("Workers=%d, want %d", cfg.Workers, runtime.NumCPU())
+	if cfg.Workers != DefaultWorkers() {
+		t.Errorf("Workers=%d, want %d", cfg.Workers, DefaultWorkers())
 	}
 	if cfg.TimeoutCoefficient != 10 {
 		t.Errorf("TimeoutCoefficient=%d, want 10", cfg.TimeoutCoefficient)
@@ -25,8 +24,8 @@ func TestLoadMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load of missing file should not error: %v", err)
 	}
-	if cfg.Workers != runtime.NumCPU() {
-		t.Errorf("Workers=%d, want default %d", cfg.Workers, runtime.NumCPU())
+	if cfg.Workers != DefaultWorkers() {
+		t.Errorf("Workers=%d, want default %d", cfg.Workers, DefaultWorkers())
 	}
 }
 
@@ -93,8 +92,8 @@ func TestLoadZeroValuesGetDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Workers != runtime.NumCPU() {
-		t.Errorf("Workers=%d, want default %d", cfg.Workers, runtime.NumCPU())
+	if cfg.Workers != DefaultWorkers() {
+		t.Errorf("Workers=%d, want default %d", cfg.Workers, DefaultWorkers())
 	}
 	if cfg.TimeoutCoefficient != 10 {
 		t.Errorf("TimeoutCoefficient=%d, want default 10", cfg.TimeoutCoefficient)

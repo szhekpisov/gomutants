@@ -1,0 +1,111 @@
+name: Mutation Testing
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+
+  mutation:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.26.1"
+
+      # Dogfood: mutation-test gomutant with the in-tree gomutant build,
+      # so any regression in the mutation engine is caught by the same
+      # gate that protects the test suite.
+      - name: Build gomutant
+        run: go build -o gomutant .
+
+      # GitHub-hosted ubuntu runners are tight on memory: NumCPU parallel
+      # `go test` workers each compile ~650 mutated overlays, which is enough
+      # to push the runner host into memory pressure. The host's OOM killer
+      # then kills the runner agent itself — earlier runs showed the mutation
+      # step succeeding while the job ended in failure with all `if: always()`
+      # steps skipped (a tell-tale sign of agent-level termination).
+      #
+      # Pin workers to 2 here even though the binary defaults to NumCPU; this
+      # is a CI capacity constraint, not a recommendation for general use.
+      #
+      # `trap '' TERM` is defense-in-depth: should the runner still send a
+      # mid-run SIGTERM, gomutant catches it gracefully (writes the partial
+      # report, exits 0) but bash would otherwise queue the signal and die
+      # with 143 the instant gomutant returns. Trapping in bash keeps the
+      # script alive long enough to run the threshold check.
+      #
+      # -verbose so each completed mutant is logged, useful for debugging.
+      - name: Run mutation testing
+        run: |
+          trap '' TERM
+          ./gomutant -workers=2 -verbose -o mutation-report.json ./internal/...
+
+      - name: Check efficacy threshold
+        # Pinned to the local measurement on internal/ at PR time:
+        # 88.03% (522 killed, 71 lived, 53 not_viable, 9 timed_out,
+        # 26 not_covered). Threshold = current floor; any regression
+        # fails the gate. Bump alongside test improvements.
+        run: |
+          set -euo pipefail
+          EFFICACY=$(jq '.test_efficacy' mutation-report.json)
+          THRESHOLD=88.03
+          echo "Test efficacy: ${EFFICACY}% (required: ${THRESHOLD}%)"
+          if [ "$(echo "${EFFICACY} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
+            echo "::error::Mutation test efficacy ${EFFICACY}% is below ${THRESHOLD}% threshold"
+            exit 1
+          fi
+
+      - name: Clean build cache
+        if: always()
+        run: go clean -cache
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-report
+          path: mutation-report.json
+          retention-days: 30

@@ -29,9 +29,9 @@ func TestIntegrationSimple(t *testing.T) {
 
 	r := loadReport(t, outPath)
 
-	// Expected: 34 total, 6 not covered, 28 tested.
-	if r.MutantsTotal != 34 {
-		t.Errorf("total=%d, want 34", r.MutantsTotal)
+	// Expected: 36 total, 6 not covered, 30 tested.
+	if r.MutantsTotal != 36 {
+		t.Errorf("total=%d, want 36", r.MutantsTotal)
 	}
 	if r.MutantsNotCovered != 6 {
 		t.Errorf("not_covered=%d, want 6", r.MutantsNotCovered)
@@ -39,8 +39,8 @@ func TestIntegrationSimple(t *testing.T) {
 
 	// All covered mutants should be either killed, lived, or not viable.
 	tested := r.MutantsKilled + r.MutantsLived + r.MutantsNotViable
-	if tested != 28 {
-		t.Errorf("tested=%d (killed=%d lived=%d not_viable=%d), want 28 total",
+	if tested != 30 {
+		t.Errorf("tested=%d (killed=%d lived=%d not_viable=%d), want 30 total",
 			tested, r.MutantsKilled, r.MutantsLived, r.MutantsNotViable)
 	}
 

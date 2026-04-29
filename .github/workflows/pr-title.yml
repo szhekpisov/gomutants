@@ -1,0 +1,30 @@
+name: PR Title
+
+permissions: read-all
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check PR title convention
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ ! "$PR_TITLE" =~ ^(feat|bug|fix|doc|chore|test):\ .+ ]]; then
+            echo "::error::PR title must start with: feat: / bug: / fix: / doc: / chore: / test:"
+            echo ""
+            echo "Examples:"
+            echo "  feat: add new mutator type"
+            echo "  bug: fix per-test coverage map for generic functions"
+            echo "  fix: handle empty package list correctly"
+            echo "  doc: update README with new flags"
+            echo "  chore: bump go.mod toolchain"
+            echo "  test: add fixture for branch_case mutator"
+            exit 1
+          fi
+          echo "PR title is valid: $PR_TITLE"

@@ -8,7 +8,27 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// runWithDeadline runs fn in a goroutine and fails the test if it doesn't
+// return within d. Mutations on close(channel) / counter-increment / range
+// feeders deadlock the production code; wrapping the call lets us catch
+// those as t.Fatal (mutant KILLED) instead of hanging until gomutant's
+// per-mutant timeout fires (mutant TIMED OUT).
+func runWithDeadline(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("deadlocked: function exceeded %s", d)
+	}
+}
 
 // setupTestProject creates a minimal Go project for integration tests.
 func setupTestProject(t *testing.T) string {
@@ -57,7 +77,13 @@ func TestBuildTestMap(t *testing.T) {
 	dir := setupTestProject(t)
 	tmpDir := t.TempDir()
 
-	tm, err := BuildTestMap(context.Background(), dir, []string{"testmod"}, "", tmpDir, 2)
+	var (
+		tm  *TestMap
+		err error
+	)
+	runWithDeadline(t, 30*time.Second, func() {
+		tm, err = BuildTestMap(context.Background(), dir, []string{"testmod"}, "", tmpDir, 2)
+	})
 	if err != nil {
 		t.Fatalf("BuildTestMap: %v", err)
 	}
@@ -214,12 +240,11 @@ func TestBuildTestMapContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Stub listTests to return many fake tests and cancel the context.
-	// The large number of tests ensures the feeder goroutine will attempt
-	// to send on a full channel and hit ctx.Done().
+	// The large number of tests guarantees feedWork's select picks the
+	// ctx.Done branch on at least one iteration (Go select randomises
+	// between ready cases — P(never picked over 1000 tries) ≈ 0).
 	origList := listTestsFunc
 	listTestsFunc = func(ctx context.Context, projectDir string, packages []string) ([]testEntry, error) {
-		// Cancel after listTests succeeds — this means workers will start
-		// but hit ctx.Err() when processing work items.
 		cancel()
 		var tests []testEntry
 		for i := range 1000 {
@@ -229,9 +254,22 @@ func TestBuildTestMapContextCancelled(t *testing.T) {
 	}
 	defer func() { listTestsFunc = origList }()
 
-	// Should not hang — cancelled context propagates to workers and feeder.
-	_, err := BuildTestMap(ctx, dir, []string{"testmod"}, "", t.TempDir(), 2)
-	_ = err
+	// Stub resolvePackages too: the real one shells out to `go list`, which
+	// fails immediately with the already-cancelled ctx and short-circuits
+	// BuildTestMap before feedWork ever runs. We need feedWork to execute
+	// so the close-on-ctx.Done path is actually exercised by this test.
+	origResolve := resolvePackagesFunc
+	resolvePackagesFunc = func(ctx context.Context, projectDir string, patterns []string) ([]resolvedPkg, error) {
+		return []resolvedPkg{{importPath: "testmod", dir: dir}}, nil
+	}
+	defer func() { resolvePackagesFunc = origResolve }()
+
+	// Should not hang — feedWork closes work on ctx.Done so workers exit
+	// the for-range, wg.Wait returns, results closes, BuildTestMap returns.
+	// Mutating that close to a no-op deadlocks here; the deadline catches it.
+	runWithDeadline(t, 30*time.Second, func() {
+		_, _ = BuildTestMap(ctx, dir, []string{"testmod"}, "", t.TempDir(), 2)
+	})
 }
 
 func TestListTests(t *testing.T) {

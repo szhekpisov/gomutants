@@ -25,9 +25,15 @@ type Config struct {
 	Mutants            map[string]*MutatorConfig `yaml:"mutants"`
 }
 
+// DefaultWorkers returns the default worker count: NumCPU. Floored at 1.
+// Use --workers / -w to override.
+func DefaultWorkers() int {
+	return max(1, runtime.NumCPU())
+}
+
 func Default() Config {
 	return Config{
-		Workers:            runtime.NumCPU(),
+		Workers:            DefaultWorkers(),
 		TimeoutCoefficient: 10,
 		Output:             "mutation-report.json",
 	}
@@ -50,7 +56,7 @@ func Load(path string) (Config, error) {
 
 	// Preserve defaults for zero-value fields.
 	if cfg.Workers == 0 {
-		cfg.Workers = runtime.NumCPU()
+		cfg.Workers = DefaultWorkers()
 	}
 	if cfg.TimeoutCoefficient == 0 {
 		cfg.TimeoutCoefficient = 10

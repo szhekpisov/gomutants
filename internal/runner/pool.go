@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -24,6 +26,18 @@ type Pool struct {
 	srcCache   map[string][]byte
 	projectDir string
 	testMap    *coverage.TestMap
+}
+
+// childGOMAXPROCSFor returns the GOMAXPROCS cap for each child `go test`
+// when running with the given outer worker count. Goal: spread NumCPU cores
+// across workers so the host doesn't oversubscribe (50 threads on a 10-core
+// machine when each worker spawns a parallel-compiling subprocess).
+// Returns 0 (= inherit) when there's only one worker — no contention to fix.
+func childGOMAXPROCSFor(workers int) int {
+	if workers <= 1 {
+		return 0
+	}
+	return max(1, runtime.NumCPU()/workers)
 }
 
 // NewPool creates a worker pool.
@@ -52,6 +66,21 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 		return mutants
 	}
 
+	// EXP4: sort pending mutants by (Pkg, File, StartOffset) so consecutive
+	// mutants on the work channel target the same package + file. The first
+	// mutant in a package pays the cold compile; subsequent ones in that
+	// package hit the build cache for deps + stdlib.
+	sort.SliceStable(pending, func(a, b int) bool {
+		ma, mb := mutants[pending[a]], mutants[pending[b]]
+		if ma.Pkg != mb.Pkg {
+			return ma.Pkg < mb.Pkg
+		}
+		if ma.File != mb.File {
+			return ma.File < mb.File
+		}
+		return ma.StartOffset < mb.StartOffset
+	})
+
 	work := make(chan int, len(pending))
 	results := make(chan mutator.Mutant, len(pending))
 
@@ -65,6 +94,7 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 			fmt.Fprintf(os.Stderr, "gomutant: NewWorker %d failed: %v\n", i, err)
 			continue
 		}
+		w.childGOMAXPROCS = childGOMAXPROCSFor(p.workers)
 		workersStarted++
 		wg.Add(1)
 		go func(w *Worker) {
