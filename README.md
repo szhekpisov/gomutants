@@ -1,5 +1,7 @@
 # gomutant
 
+[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
+
 > Mutation testing for Go: more mutators, generics support, per-test coverage routing, and PR-scoped runs as a first-class CI workflow.
 
 A drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` subcommand, same JSON report shape — built around three premises:
@@ -8,14 +10,22 @@ A drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins)
 2. **Speed comes from doing less.** Mutating only changed lines, running only the tests that cover each mutant, sharing a hot build cache across consecutive mutants in the same package.
 3. **The CI workflow is the point.** First-class `--changed-since` mode, gremlins-compatible JSON, memory-safe subprocess control — designed for `pull_request` jobs, not just local exploration.
 
-```bash
-go install github.com/szhekpisov/gomutant@latest
-gomutant ./...
-```
+## Table of Contents
 
----
+- [Background](#background)
+- [Install](#install)
+- [Usage](#usage)
+  - [CLI reference](#cli-reference)
+  - [Configuration](#configuration)
+- [Mutators](#mutators)
+- [JSON report](#json-report)
+- [How it works](#how-it-works)
+- [Benchmarks](#benchmarks)
+- [Maintainers](#maintainers)
+- [Contributing](#contributing)
+- [License](#license)
 
-## Highlights
+## Background
 
 ### Performance
 
@@ -40,14 +50,11 @@ Net effect on the diffyml benchmark: 1030 mutants discovered, 94% efficacy.
 
 ### Run only the tests that matter
 
-For each mutant, gomutant runs **only the tests whose coverage touches the mutated line** — not the entire test suite. This is built from a per-test coverage map computed once per run by compiling each test binary one time and replaying it with `-test.run=<one>` per test.
-
-When the change is on a line covered by 3 of your 400 tests, you run those 3 — not all 400.
+For each mutant, gomutant runs **only the tests whose coverage touches the mutated line** — not the entire test suite. This is built from a per-test coverage map computed once per run by compiling each test binary one time and replaying it with `-test.run=<one>` per test. When the change is on a line covered by 3 of your 400 tests, you run those 3 — not all 400.
 
 ### PR-scoped mutation testing as a first-class mode
 
 ```bash
-# Only test mutants on lines this PR touches vs main:
 gomutant --changed-since main ./...
 gomutant --changed-since HEAD~1 ./...
 ```
@@ -73,9 +80,15 @@ Beyond the standard token-level set, gomutant ships five block-level mutators th
 - **2 GiB per-subprocess RSS cap.** A mutation that flips a loop bound or allocation size can balloon the test binary to tens of gigabytes within seconds. gomutant monitors process-group RSS and `SIGKILL`s the entire tree on cap breach — classified as `TIMED_OUT`, not as a runaway that takes the whole job down.
 - **Output capped at 1 MiB per stream.** A panic-loop mutant can't fill the runner disk.
 
----
+## Install
 
-## Quick start
+```bash
+go install github.com/szhekpisov/gomutant@latest
+```
+
+Requires Go 1.26 or later.
+
+## Usage
 
 ```bash
 # Default: run on all packages with NumCPU workers.
@@ -107,26 +120,7 @@ gomutant -o report.json --coverpkg ./pkg/mypackage/... \
 
 `gomutant unleash ./...` is accepted unchanged for gremlins-compat scripts.
 
----
-
-## Configuration
-
-`.gomutant.yml` in the project root:
-
-```yaml
-workers: 10
-test-cpu: 0           # 0 = let go test use GOMAXPROCS
-timeout-coefficient: 10
-coverpkg: "./pkg/mypackage/..."
-output: mutation-report.json
-changed-since: ""     # set to e.g. "main" to scope runs by default
-disable: []
-only: []
-```
-
-Priority: built-in defaults < config file < CLI flags.
-
-## CLI reference
+### CLI reference
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
@@ -143,7 +137,22 @@ Priority: built-in defaults < config file < CLI flags.
 | `--verbose` | `-v` | false | Stream each mutant as tested |
 | `--version` | | | Print version and exit |
 
----
+### Configuration
+
+`.gomutant.yml` in the project root:
+
+```yaml
+workers: 10
+test-cpu: 0           # 0 = let go test use GOMAXPROCS
+timeout-coefficient: 10
+coverpkg: "./pkg/mypackage/..."
+output: mutation-report.json
+changed-since: ""     # set to e.g. "main" to scope runs by default
+disable: []
+only: []
+```
+
+Priority: built-in defaults < config file < CLI flags.
 
 ## Mutators
 
@@ -183,8 +192,6 @@ Priority: built-in defaults < config file < CLI flags.
 | NOT VIABLE | Mutation causes a compile error (filtered, not counted as a kill) |
 | TIMED OUT | Test execution exceeded the per-mutant timeout |
 
----
-
 ## JSON report
 
 Compatible with the gremlins JSON format:
@@ -206,8 +213,6 @@ Compatible with the gremlins JSON format:
 
 `test_efficacy = killed / (killed + lived)` — excludes `not_viable`, `not_covered`, and `timed_out`.
 
----
-
 ## How it works
 
 1. **Resolve packages** via `go list -json`.
@@ -226,11 +231,9 @@ Two performance optimizations layered on top:
 - **`GOMAXPROCS=NumCPU/workers` per child.** Without this, `--workers=10` on a 10-core box would have each child also assume 10 cores, oversubscribing 100×. With it, each child compiles + tests within its share.
 - **Sort pending mutants by `(Pkg, File, Offset)` before dispatch.** The first mutant in a package pays the cold compile; subsequent ones reuse the build cache for deps and stdlib. This sort alone was a 17% wall-clock reduction.
 
----
-
 ## Benchmarks
 
-Headline numbers were given above. Reproduce with `bash benchmarks/run.sh`. Per-scenario detail in [`benchmarks/results.md`](benchmarks/results.md).
+Headline numbers are in [Background](#background). Reproduce with `bash benchmarks/run.sh`. Per-scenario detail in [`benchmarks/results.md`](benchmarks/results.md).
 
 The `workers=5` wall-clock is shaped by three things layered on the engine:
 
@@ -244,8 +247,16 @@ The `workers=5` wall-clock is shaped by three things layered on the engine:
 
 gomutant kills **69.32%** of mutants in its own test suite (664 mutants across 8 packages, v0.1.0). Coverage is 97% — most lived mutants are real test gaps, not blind spots. Per-package breakdown in [`testdata/golden/self-efficacy.txt`](testdata/golden/self-efficacy.txt). The `internal/...` subset (excluding `main`) clears 88.03%, which is the gate this repo's CI enforces post-merge.
 
----
+## Maintainers
+
+[@szhekpisov](https://github.com/szhekpisov)
+
+## Contributing
+
+PRs accepted. Feel free to [open an issue](https://github.com/szhekpisov/gomutant/issues/new) or submit a pull request.
+
+This README follows the [Standard Readme](https://github.com/RichardLitt/standard-readme) specification.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © Sergei Zhekpisov
