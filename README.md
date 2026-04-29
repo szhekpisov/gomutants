@@ -157,12 +157,12 @@ Each worker owns a stable temp file. Mutations are applied as byte-level patches
 
 Latest measurement on [diffyml](https://github.com/szhekpisov/diffyml) (~1003 real mutants, matched 11-mutator set, M1 Pro 10-core):
 
-| Workers | gomutant per-mutant | gremlins per-mutant |
+| Workers | gomutant wall-clock | gremlins wall-clock |
 |---|---:|---:|
-| 1  | **1.19 s** | 1.63 s |
-| 5  | 2.01 s | **1.89 s** |
+| 1 | 1134 s | 1848 s |
+| 5 (`NumCPU/2`, gomutant default) | **341 s** | 392-429 s |
 
-At the typical user's worker count (`NumCPU/2`, the new default) the two tools are essentially **tied on wall-clock**. Sequentially gomutant wins by 1.37×; under heavy parallelism gremlins edges out by ~6%.
+At the typical user's worker count, **gomutant is ~15% faster wall-clock** than gremlins on this workload, and 1.6× faster sequentially. The win at workers=5 comes from sorting pending mutants by package before dispatch so the per-package build cache stays hot for consecutive mutants — a discovery we made via an autoresearch loop after several plausible flag-tuning ideas (per-worker `GOTMPDIR`, `-trimpath`, capped `-p`) turned out not to help.
 
 What gomutant adds beyond raw speed:
 
