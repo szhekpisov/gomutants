@@ -9,9 +9,8 @@ concurrency:
 
 on:
   push:
-    branches: [main]
+    branches: [main, worktree-init]
   pull_request:
-    branches: [main]
 
 jobs:
   changes:
