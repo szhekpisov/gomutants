@@ -55,6 +55,7 @@ func run(ctx context.Context, args []string) error {
 		configPath         string
 		disable            string
 		only               string
+		changedSince       string
 		dryRun             bool
 		verbose            bool
 		showVersion        bool
@@ -69,6 +70,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&configPath, "config", ".gomutant.yml", "config file path")
 	fs.StringVar(&disable, "disable", "", "comma-separated mutator types to disable")
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
+	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
 	fs.BoolVar(&dryRun, "dry-run", false, "list mutants without testing")
 	fs.BoolVar(&verbose, "verbose", false, "show each mutant as tested")
 	fs.BoolVar(&verbose, "v", false, "verbose (shorthand)")
@@ -87,7 +89,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, timeoutCoefficient, coverPkg, output, disable, only, dryRun, verbose)
+	cfg.ApplyFlags(workers, timeoutCoefficient, coverPkg, output, disable, only, changedSince, dryRun, verbose)
 
 	packages := fs.Args()
 	if len(packages) == 0 {
@@ -154,6 +156,17 @@ func run(ctx context.Context, args []string) error {
 	term.Phase("Discovering mutants...")
 	fset := token.NewFileSet()
 	mutants := discover.Discover(fset, pkgs, enabledMutators, projectDir, goModule)
+	if cfg.ChangedSince != "" {
+		gitRoot, err := discover.GitRoot(ctx, projectDir)
+		if err != nil {
+			return fmt.Errorf("--changed-since requires a git repository: %w", err)
+		}
+		ranges, err := discover.RunGitDiff(ctx, projectDir, cfg.ChangedSince)
+		if err != nil {
+			return err
+		}
+		mutants = discover.FilterByDiff(mutants, ranges, gitRoot)
+	}
 	discover.FilterByCoverage(mutants, profile, pkgs, goModule)
 
 	pendingCount := 0
