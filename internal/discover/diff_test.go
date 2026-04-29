@@ -461,6 +461,28 @@ func TestRunGitDiffBadRef(t *testing.T) {
 	if !strings.Contains(err.Error(), "definitely-not-a-real-ref") {
 		t.Errorf("error should mention the bad ref, got: %v", err)
 	}
+	// Friendlier-hint path: stderr contains "unknown revision" or
+	// "bad revision" → we suggest `git fetch`.
+	if !strings.Contains(err.Error(), "git fetch") {
+		t.Errorf("error should hint at `git fetch` for unknown ref, got: %v", err)
+	}
+}
+
+// TestRunGitDiffNonRepoErrorNoHint: when git fails for a reason other
+// than a bad ref (e.g. not a git repo), we don't append the fetch hint.
+func TestRunGitDiffNonRepoErrorNoHint(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
+	_, err := RunGitDiff(context.Background(), dir, "HEAD")
+	if err == nil {
+		t.Fatal("expected error outside a git repo")
+	}
+	if strings.Contains(err.Error(), "git fetch") {
+		t.Errorf("non-repo error should not carry the fetch hint, got: %v", err)
+	}
 }
 
 func TestGitRootNotARepo(t *testing.T) {

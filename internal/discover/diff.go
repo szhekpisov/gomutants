@@ -49,7 +49,14 @@ func RunGitDiff(ctx context.Context, dir, ref string) (map[string][]LineRange, e
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git diff %s: %w\n%s", ref, err, stderr.String())
+		stderrStr := stderr.String()
+		// Common confusion: ref names a remote branch the user hasn't
+		// fetched yet. Git's "unknown revision or path" / "bad revision"
+		// stderr is generic — point to the likely fix.
+		if strings.Contains(stderrStr, "unknown revision") || strings.Contains(stderrStr, "bad revision") {
+			return nil, fmt.Errorf("git diff %s: %w\n%s\nhint: %q is not a valid revision in this repo. If it's a remote branch, run `git fetch` first.", ref, err, stderrStr, ref)
+		}
+		return nil, fmt.Errorf("git diff %s: %w\n%s", ref, err, stderrStr)
 	}
 	return ParseUnifiedDiff(&stdout)
 }
@@ -100,7 +107,9 @@ func ParseUnifiedDiff(r io.Reader) (map[string][]LineRange, error) {
 }
 
 // stripDiffPrefix removes the standard "a/" or "b/" prefix that git adds
-// to diff paths. If diff.noprefix is set the path is already plain.
+// to diff paths. If diff.noprefix is set the path is already plain — and
+// in that pathological case a literal top-level "a/" or "b/" directory
+// would be misinterpreted; not worth handling unless someone hits it.
 func stripDiffPrefix(p string) string {
 	if strings.HasPrefix(p, "a/") || strings.HasPrefix(p, "b/") {
 		return p[2:]
