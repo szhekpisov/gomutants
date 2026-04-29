@@ -24,6 +24,7 @@ type Config struct {
 	Disable            []string                  `yaml:"disable"`
 	Only               []string                  `yaml:"only"`
 	ChangedSince       string                    `yaml:"changed-since"`
+	NoTestSelection    bool                      `yaml:"no-test-selection"`
 	Mutants            map[string]*MutatorConfig `yaml:"mutants"`
 }
 
@@ -70,7 +71,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, output, disable, only, changedSince string, dryRun, verbose bool) {
+func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, output, disable, only, changedSince string, dryRun, verbose, noTestSelection bool) {
 	if workers > 0 {
 		c.Workers = workers
 	}
@@ -100,6 +101,9 @@ func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, 
 	}
 	if verbose {
 		c.Verbose = true
+	}
+	if noTestSelection {
+		c.NoTestSelection = true
 	}
 }
 

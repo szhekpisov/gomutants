@@ -40,6 +40,7 @@ coverpkg: "./pkg/..."
 output: report.json
 dry-run: true
 verbose: true
+no-test-selection: true
 disable:
   - BRANCH_IF
 only:
@@ -74,6 +75,9 @@ only:
 	}
 	if !cfg.Verbose {
 		t.Error("Verbose should be true")
+	}
+	if !cfg.NoTestSelection {
+		t.Error("NoTestSelection should be true")
 	}
 	if len(cfg.Disable) != 1 || cfg.Disable[0] != "BRANCH_IF" {
 		t.Errorf("Disable=%v, want [BRANCH_IF]", cfg.Disable)
@@ -132,7 +136,7 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
-	cfg.ApplyFlags(8, 4, 15, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", true, true)
+	cfg.ApplyFlags(8, 4, 15, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", true, true, true)
 
 	if cfg.Workers != 8 {
 		t.Errorf("Workers=%d, want 8", cfg.Workers)
@@ -164,15 +168,19 @@ func TestApplyFlags(t *testing.T) {
 	if !cfg.Verbose {
 		t.Error("Verbose should be true")
 	}
+	if !cfg.NoTestSelection {
+		t.Error("NoTestSelection should be true")
+	}
 }
 
 func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	cfg := Default()
 	cfg.TestCPU = 7
+	cfg.NoTestSelection = true
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
-	cfg.ApplyFlags(0, 0, 0, "", "", "", "", "", false, false)
+	cfg.ApplyFlags(0, 0, 0, "", "", "", "", "", false, false, false)
 
 	if cfg.Workers != orig.Workers {
 		t.Errorf("Workers changed from %d to %d", orig.Workers, cfg.Workers)
@@ -185,6 +193,9 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	}
 	if cfg.Output != orig.Output {
 		t.Errorf("Output changed")
+	}
+	if cfg.NoTestSelection != orig.NoTestSelection {
+		t.Errorf("NoTestSelection changed from %v to %v", orig.NoTestSelection, cfg.NoTestSelection)
 	}
 }
 

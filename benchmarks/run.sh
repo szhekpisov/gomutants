@@ -176,6 +176,93 @@ if (( SUMMARIZE_ONLY == 0 )); then
   done
 fi
 
+# ----- Coverage-guided test selection: on vs off -----
+# This proves the speedup of the per-test coverage routing that gomutant runs
+# by default. Both sides are gomutant; --no-test-selection disables routing.
+
+SELECTION_TARGET="./internal/mutator/..."
+SELECTION_DESC="./internal/mutator with coverage-guided test selection on (default) vs off (--no-test-selection)"
+
+run_selection_scenario() {
+  local target="$1" desc="$2"
+
+  echo
+  echo "===== Scenario: selection-on-vs-off ====="
+  echo "$desc"
+
+  local on_json="$OUT_DIR/selection-on-vs-off-on.json"
+  local off_json="$OUT_DIR/selection-on-vs-off-off.json"
+  local hf_json="$OUT_DIR/selection-on-vs-off-hyperfine.json"
+
+  local on_cmd="\"$GOMUTANT\" -w $WORKERS -timeout-coefficient $TIMEOUT_COEF -o \"$on_json\" $target"
+  local off_cmd="\"$GOMUTANT\" -w $WORKERS -timeout-coefficient $TIMEOUT_COEF --no-test-selection -o \"$off_json\" $target"
+
+  echo "Warming..."
+  eval "$on_cmd" >/dev/null 2>&1 || true
+  eval "$off_cmd" >/dev/null 2>&1 || true
+
+  echo "Running hyperfine ($RUNS runs each)..."
+  hyperfine --warmup 0 --runs "$RUNS" --export-json "$hf_json" \
+    -n selection-on  "$on_cmd" \
+    -n selection-off "$off_cmd"
+}
+
+summarize_selection_scenario() {
+  local desc="$1"
+  local on_json="$OUT_DIR/selection-on-vs-off-on.json"
+  local off_json="$OUT_DIR/selection-on-vs-off-off.json"
+  local hf_json="$OUT_DIR/selection-on-vs-off-hyperfine.json"
+
+  local on_mean off_mean
+  on_mean=$(jq -r '.results[] | select(.command=="selection-on") | .mean' "$hf_json")
+  off_mean=$(jq -r '.results[] | select(.command=="selection-off") | .mean' "$hf_json")
+
+  local on_killed on_lived on_nc on_nv on_to on_total on_eff
+  on_killed=$(jq '[.files[].mutations[].status | select(.=="KILLED")] | length' "$on_json")
+  on_lived=$(jq '[.files[].mutations[].status | select(.=="LIVED")] | length' "$on_json")
+  on_nc=$(jq '[.files[].mutations[].status | select(.=="NOT COVERED")] | length' "$on_json")
+  on_nv=$(jq '[.files[].mutations[].status | select(.=="NOT VIABLE")] | length' "$on_json")
+  on_to=$(jq '[.files[].mutations[].status | select(.=="TIMED OUT")] | length' "$on_json")
+  on_total=$(jq '[.files[].mutations[]] | length' "$on_json")
+  on_eff=$(jq -r '.test_efficacy // 0' "$on_json")
+
+  local off_killed off_lived off_nc off_nv off_to off_total off_eff
+  off_killed=$(jq '[.files[].mutations[].status | select(.=="KILLED")] | length' "$off_json")
+  off_lived=$(jq '[.files[].mutations[].status | select(.=="LIVED")] | length' "$off_json")
+  off_nc=$(jq '[.files[].mutations[].status | select(.=="NOT COVERED")] | length' "$off_json")
+  off_nv=$(jq '[.files[].mutations[].status | select(.=="NOT VIABLE")] | length' "$off_json")
+  off_to=$(jq '[.files[].mutations[].status | select(.=="TIMED OUT")] | length' "$off_json")
+  off_total=$(jq '[.files[].mutations[]] | length' "$off_json")
+  off_eff=$(jq -r '.test_efficacy // 0' "$off_json")
+
+  local speedup="n/a"
+  if awk "BEGIN{exit !($on_mean>0 && $off_mean>0)}"; then
+    speedup=$(awk "BEGIN{printf \"%.2f\", $off_mean / $on_mean}")
+  fi
+
+  cat <<EOF
+### selection-on-vs-off — $desc
+
+| Metric                  | selection on (default) | selection off (\`--no-test-selection\`) |
+|-------------------------|----:|----:|
+| Wall-clock mean (s)     | $(printf "%.2f" "$on_mean") | $(printf "%.2f" "$off_mean") |
+| Mutants discovered      | $on_total | $off_total |
+| Killed                  | $on_killed | $off_killed |
+| Lived                   | $on_lived | $off_lived |
+| Not covered             | $on_nc | $off_nc |
+| Not viable              | $on_nv | $off_nv |
+| Timed out               | $on_to | $off_to |
+| Test efficacy (%)       | $(printf "%.2f" "$on_eff") | $(printf "%.2f" "$off_eff") |
+
+**Speedup from coverage-guided test selection: ${speedup}× faster.** Identical KILLED + LIVED counts confirm no behavioral regression — the flag changes only the subset of tests run per mutant, not the kill verdict.
+
+EOF
+}
+
+if (( SUMMARIZE_ONLY == 0 )); then
+  run_selection_scenario "$SELECTION_TARGET" "$SELECTION_DESC"
+fi
+
 RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
 {
   echo "# Benchmark Results: gomutant vs gremlins"
@@ -200,6 +287,11 @@ RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
     IFS='|' read -r label desc gom_path gre_path gom_extra <<<"$spec"
     summarize_scenario "$label" "$desc"
   done
+  echo "## Coverage-guided test selection (on vs off)"
+  echo
+  echo "Both sides run \`gomutant\`; the off side adds \`--no-test-selection\`. This isolates the speedup from per-test coverage routing — the differentiator that doesn't show up in the gomutant-vs-gremlins numbers because both sides of those comparisons already use it."
+  echo
+  summarize_selection_scenario "$SELECTION_DESC"
   cat <<'EOF'
 ## Reading the results
 

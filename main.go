@@ -59,6 +59,7 @@ func run(ctx context.Context, args []string) error {
 		changedSince       string
 		dryRun             bool
 		verbose            bool
+		noTestSelection    bool
 		showVersion        bool
 	)
 
@@ -76,6 +77,7 @@ func run(ctx context.Context, args []string) error {
 	fs.BoolVar(&dryRun, "dry-run", false, "list mutants without testing")
 	fs.BoolVar(&verbose, "verbose", false, "show each mutant as tested")
 	fs.BoolVar(&verbose, "v", false, "verbose (shorthand)")
+	fs.BoolVar(&noTestSelection, "no-test-selection", false, "disable per-test coverage routing; run the full package's tests for every mutant")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -95,7 +97,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, coverPkg, output, disable, only, changedSince, dryRun, verbose)
+	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, coverPkg, output, disable, only, changedSince, dryRun, verbose, noTestSelection)
 
 	packages := fs.Args()
 	if len(packages) == 0 {
@@ -204,14 +206,19 @@ func run(ctx context.Context, args []string) error {
 
 	// 7. Build per-test coverage map.
 	term.Phase("Building per-test coverage map...")
-	testMap, err := coverage.BuildTestMap(ctx, projectDir, packages, cfg.CoverPkg, tmpDir, cfg.Workers)
-	if err != nil {
-		// Non-fatal: fall back to running all tests per mutant.
-		fmt.Fprintf(stderr, "warning: per-test coverage map failed: %v\n", err)
-		testMap = nil
-		term.PhaseDone("skipped (will run all tests per mutant)")
+	var testMap *coverage.TestMap
+	if cfg.NoTestSelection {
+		term.PhaseDone("disabled (--no-test-selection: running all tests per mutant)")
 	} else {
-		term.PhaseDone("done")
+		testMap, err = coverage.BuildTestMap(ctx, projectDir, packages, cfg.CoverPkg, tmpDir, cfg.Workers)
+		if err != nil {
+			// Non-fatal: fall back to running all tests per mutant.
+			fmt.Fprintf(stderr, "warning: per-test coverage map failed: %v\n", err)
+			testMap = nil
+			term.PhaseDone("skipped (will run all tests per mutant)")
+		} else {
+			term.PhaseDone("done")
+		}
 	}
 
 	// 8. Run mutation testing.

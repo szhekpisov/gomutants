@@ -30,6 +30,7 @@ skew results. It then runs three scenarios with hyperfine (5 runs each):
 | `small-defaults` | `./testdata/simple/` | Each tool with its own default mutators. Shows fixed-overhead cost on tiny inputs. |
 | `mutator-defaults` | `./internal/mutator` | Each tool with its own default mutators. Real-world out-of-the-box comparison. |
 | `mutator-matched` | `./internal/mutator` | gomutant restricted to gremlins' five default mutators (`--only`). Engine-speed comparison on an identical workload. |
+| `selection-on-vs-off` | `./internal/mutator` | gomutant against itself with and without `--no-test-selection`. Isolates the speedup from per-test coverage routing — the differentiator that doesn't show up in the head-to-head runs because both sides already use it. |
 
 Results are written to `benchmarks/results.md`; raw hyperfine JSON and per-tool reports land in `benchmarks/out/` (gitignored).
 
@@ -44,4 +45,5 @@ Running on the whole `./internal/...` tree takes ~9 minutes per tool per run bec
 
 - gomutant ships 10 mutator types; gremlins has 5 enabled by default. `mutator-defaults` compares out-of-the-box behaviour (different workloads); `mutator-matched` compares engine speed on the same mutant set.
 - gremlins' `mutants_total` excludes `NOT COVERED` and `TIMED OUT`; the summary uses `sum(mutator_statistics)` to recover a pre-filter discovered-count.
+- The `selection-on-vs-off` scenario must report identical KILLED + LIVED counts. A mismatch is a bug — the flag changes which subset of tests runs per mutant, never the kill verdict.
 - Wall-clock results are sensitive to background load and thermal state. Rerun under quiet conditions before publishing numbers.

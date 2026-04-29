@@ -423,6 +423,48 @@ func TestRunFullPipeline(t *testing.T) {
 	}
 }
 
+// TestRunNoTestSelection verifies that --no-test-selection is wired through
+// to the test-map build step, replacing it with the disabled phase line.
+// Uses the full pipeline so the gate is actually executed (dry-run returns
+// before reaching the test-map step).
+func TestRunNoTestSelection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	outPath := filepath.Join(dir, "report.json")
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"--no-test-selection",
+			"-w", "1",
+			"-o", outPath,
+			"testmod",
+		})
+	})
+	if err != nil {
+		t.Fatalf("run --no-test-selection: %v", err)
+	}
+	if !strings.Contains(out, "disabled (--no-test-selection") {
+		t.Errorf("expected disabled phase line; got:\n%s", out)
+	}
+}
+
 // TestRunDryRunOutput asserts the exact dry-run line format, which kills
 // STATEMENT_REMOVE on the dry-run Printf.
 func TestRunDryRunOutput(t *testing.T) {

@@ -56,6 +56,8 @@ Net effect on the diffyml benchmark: 1030 mutants discovered, 94% efficacy.
 
 For each mutant, gomutant runs **only the tests whose coverage touches the mutated line** — not the entire test suite. This is built from a per-test coverage map computed once per run by compiling each test binary one time and replaying it with `-test.run=<one>` per test. When the change is on a line covered by 3 of your 400 tests, you run those 3 — not all 400.
 
+The `selection-on-vs-off` benchmark scenario quantifies the win on this repo's own `./internal/mutator` package; reproduce with `bash benchmarks/run.sh`. To turn the routing off (debugging, comparison, or a suite where the upfront map cost outweighs the savings) pass `--no-test-selection`.
+
 ### PR-scoped mutation testing as a first-class mode
 
 ```bash
@@ -133,6 +135,7 @@ gomutant -o report.json --coverpkg ./pkg/mypackage/... \
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
 | `--dry-run` | | false | List mutants without testing |
 | `--verbose` | `-v` | false | Stream each mutant as tested |
+| `--no-test-selection` | | false | Disable per-test coverage routing; run the full package's tests for every mutant |
 | `--version` | | | Print version and exit |
 
 ### Configuration
@@ -141,11 +144,12 @@ gomutant -o report.json --coverpkg ./pkg/mypackage/... \
 
 ```yaml
 workers: 10
-test-cpu: 0           # 0 = let go test use GOMAXPROCS
+test-cpu: 0                # 0 = let go test use GOMAXPROCS
 timeout-coefficient: 10
 coverpkg: "./pkg/mypackage/..."
 output: mutation-report.json
-changed-since: ""     # set to e.g. "main" to scope runs by default
+changed-since: ""          # set to e.g. "main" to scope runs by default
+no-test-selection: false   # set true to disable per-test coverage routing
 disable: []
 only: []
 ```
