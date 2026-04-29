@@ -2,6 +2,7 @@ package discover
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -186,6 +187,51 @@ diff --git a/b.go b/b.go
 	}
 }
 
+// errReader returns the canned bytes once, then a hard error. Used to
+// exercise ParseUnifiedDiff's bufio.Scanner.Err() path.
+type errReader struct {
+	data []byte
+	used bool
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if r.used {
+		return 0, fmt.Errorf("injected read error")
+	}
+	r.used = true
+	n := copy(p, r.data)
+	return n, nil
+}
+
+func TestParseUnifiedDiffScannerError(t *testing.T) {
+	// Bytes without a trailing newline + an error on the next read makes
+	// bufio.Scanner stop with sc.Err() non-nil.
+	r := &errReader{data: []byte("diff --git a/x.go b/x.go")}
+	_, err := ParseUnifiedDiff(r)
+	if err == nil {
+		t.Fatal("expected error from scanner")
+	}
+	if !strings.Contains(err.Error(), "reading diff") {
+		t.Errorf("error should mention 'reading diff', got: %v", err)
+	}
+}
+
+func TestFilterByDiffRelErrors(t *testing.T) {
+	// filepath.Rel returns an error when one path is absolute and the
+	// other is relative — exercises the relCache poison-and-skip path.
+	ranges := map[string][]LineRange{
+		"a.go": {{Start: 1, End: 1}},
+	}
+	mutants := []mutator.Mutant{
+		{ID: 1, File: "/abs/a.go", Line: 1},
+		{ID: 2, File: "/abs/a.go", Line: 1}, // second hit on same file → cached "" branch
+	}
+	got := FilterByDiff(mutants, ranges, "relative-root")
+	if len(got) != 0 {
+		t.Errorf("expected 0 mutants when Rel fails, got %d", len(got))
+	}
+}
+
 func TestParseUnifiedDiffEmpty(t *testing.T) {
 	got, err := ParseUnifiedDiff(strings.NewReader(""))
 	if err != nil {
@@ -199,14 +245,38 @@ func TestParseUnifiedDiffEmpty(t *testing.T) {
 func TestParseHunkHeaderMalformed(t *testing.T) {
 	cases := []string{
 		"@@ no plus marker @@",
-		"@@ -1,2 +abc,def @@",   // non-numeric start
-		"@@ -1,2 +1,abc @@",     // non-numeric count
-		"@@ -1,2 +0,1 @@",       // start <= 0
+		"@@+10",               // "+" present but no space after the range token
+		"@@ -1,2 +abc,def @@", // non-numeric start
+		"@@ -1,2 +1,abc @@",   // non-numeric count
+		"@@ -1,2 +0,1 @@",     // start <= 0
 	}
 	for _, c := range cases {
 		if _, ok := parseHunkHeader(c); ok {
 			t.Errorf("parseHunkHeader(%q) should have returned ok=false", c)
 		}
+	}
+}
+
+// TestParseUnifiedDiffTimestampStripped covers the tab-stripping path in
+// the "+++" handler. Some diff producers append "\t<timestamp>" to file
+// headers; the parser must trim that before comparing to "/dev/null" or
+// using the path as a map key.
+func TestParseUnifiedDiffTimestampStripped(t *testing.T) {
+	in := "diff --git a/x.go b/x.go\n" +
+		"--- a/x.go\t2024-01-01 00:00:00\n" +
+		"+++ b/x.go\t2024-01-02 00:00:00\n" +
+		"@@ -1 +1 @@\n" +
+		"-old\n" +
+		"+new\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]LineRange{
+		"x.go": {{Start: 1, End: 1}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
@@ -352,6 +422,44 @@ func TestRunGitDiffIntegration(t *testing.T) {
 	}
 	if !strings.HasSuffix(root, filepath.Base(dir)) {
 		t.Errorf("GitRoot=%q, expected suffix %q", root, filepath.Base(dir))
+	}
+}
+
+// TestRunGitDiffBadRef exercises the cmd.Run() error path: passing a ref
+// that doesn't exist makes git exit non-zero, and the error must wrap
+// stderr.
+func TestRunGitDiffBadRef(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	ctx := context.Background()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "f.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-q", "-m", "init")
+
+	_, err := RunGitDiff(ctx, dir, "definitely-not-a-real-ref")
+	if err == nil {
+		t.Fatal("expected error for nonexistent ref")
+	}
+	if !strings.Contains(err.Error(), "definitely-not-a-real-ref") {
+		t.Errorf("error should mention the bad ref, got: %v", err)
 	}
 }
 
