@@ -155,14 +155,16 @@ Each worker owns a stable temp file. Mutations are applied as byte-level patches
 
 ## Benchmarks
 
-Latest measurement on [diffyml](https://github.com/szhekpisov/diffyml) (~1003 real mutants, matched 11-mutator set, M1 Pro 10-core):
+Latest measurement on [diffyml](https://github.com/szhekpisov/diffyml) (matched 11-mutator set, M1 Pro 10-core, fresh full-pipeline run):
 
-| Workers | gomutant wall-clock | gremlins wall-clock |
+| Workers | gomutant | gremlins |
 |---|---:|---:|
 | 1 | 1134 s | 1848 s |
-| 5 (`NumCPU/2`, gomutant default) | **341 s** | 392-429 s |
+| 5 (`NumCPU/2`, gomutant default) | **342 s** | 410 s |
 
-At the typical user's worker count, **gomutant is ~15% faster wall-clock** than gremlins on this workload, and 1.6× faster sequentially. The win at workers=5 comes from sorting pending mutants by package before dispatch so the per-package build cache stays hot for consecutive mutants — a discovery we made via an autoresearch loop after several plausible flag-tuning ideas (per-worker `GOTMPDIR`, `-trimpath`, capped `-p`) turned out not to help.
+At the typical worker count, **gomutant is ~1.20× faster wall-clock** than gremlins on this workload, and ~1.6× faster sequentially. Per-mutant time is essentially identical (1.79s vs 1.81s) — gomutant's wall-clock win comes from doing strictly less work: it discovers 1030 real mutants while gremlins reports 1168, and the 138-mutant gap is bogus mutations on address-of `&` (mutated as bitwise AND) and unary `-` (double-counted as both `InvertNegatives` and `ArithmeticBase`) that gremlins silently classifies as `KILLED`.
+
+The workers=5 number reflects three optimizations layered on the original engine: capping each child `go test`'s `GOMAXPROCS` to avoid CPU oversubscription, defaulting workers to `NumCPU/2`, and sorting pending mutants by `(Pkg, File, Offset)` before dispatch so the per-package build cache stays hot across consecutive mutants. The sort alone was a 17% wall-clock reduction — found via an autoresearch loop after several flag-tuning hypotheses (`-p` cap, per-worker `GOTMPDIR`, `-trimpath`, `GOMAXPROCS=1`, separate cache pre-warm) turned out not to help.
 
 What gomutant adds beyond raw speed:
 
