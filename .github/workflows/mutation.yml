@@ -50,6 +50,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
+          # --changed-since needs the merge-base with the PR base ref
+          # available locally; the default shallow clone hides it.
+          fetch-depth: 0
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
@@ -77,24 +80,29 @@ jobs:
       # with 143 the instant gomutant returns. Trapping in bash keeps the
       # script alive long enough to run the threshold check.
       #
+      # --changed-since limits mutation testing to lines this PR touched
+      # vs the base branch. Massively faster than full-tree runs, and the
+      # gate (no LIVED mutants) only flags survivors introduced by the PR.
       # -verbose so each completed mutant is logged, useful for debugging.
       - name: Run mutation testing
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           trap '' TERM
-          ./gomutant -workers=2 -verbose -o mutation-report.json ./internal/...
+          ./gomutant -workers=2 -verbose --changed-since "origin/${BASE_REF}" -o mutation-report.json ./internal/...
 
-      - name: Check efficacy threshold
-        # Pinned to the local measurement on internal/ at PR time:
-        # 88.03% (522 killed, 71 lived, 53 not_viable, 9 timed_out,
-        # 26 not_covered). Threshold = current floor; any regression
-        # fails the gate. Bump alongside test improvements.
+      # On --changed-since runs the absolute test_efficacy floor is no
+      # longer meaningful (subset varies per PR). Gate instead on "no
+      # LIVED mutant on changed lines": every mutation introduced by the
+      # PR must be killed by some test.
+      - name: Gate on lived mutants
         run: |
           set -euo pipefail
-          EFFICACY=$(jq '.test_efficacy' mutation-report.json)
-          THRESHOLD=88.03
-          echo "Test efficacy: ${EFFICACY}% (required: ${THRESHOLD}%)"
-          if [ "$(echo "${EFFICACY} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
-            echo "::error::Mutation test efficacy ${EFFICACY}% is below ${THRESHOLD}% threshold"
+          LIVED=$(jq '.mutants_lived' mutation-report.json)
+          TOTAL=$(jq '.mutants_total' mutation-report.json)
+          echo "Mutants on changed lines: ${TOTAL} (lived: ${LIVED})"
+          if [ "${LIVED}" -gt 0 ]; then
+            echo "::error::${LIVED} mutant(s) on changed lines survived — strengthen tests or revert"
             exit 1
           fi
 
