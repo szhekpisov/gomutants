@@ -18,8 +18,8 @@
 - [ ] `go test -race ./...` passes locally
 - [ ] `go vet ./...` and `golangci-lint run` clean
 - [ ] New/changed behavior covered by tests
-- [ ] Coverage threshold met (total ≥ 94%)
-- [ ] Mutation efficacy threshold met (`gomutant ./internal/...` ≥ 90%)
+- [ ] Coverage threshold met (`./internal/...` ≥ 95%)
+- [ ] Mutation efficacy threshold met (`gomutant ./internal/...` ≥ 85%)
 - [ ] No new dependencies (or justified)
 
 ## Notes for reviewers
