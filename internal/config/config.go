@@ -22,6 +22,7 @@ type Config struct {
 	Verbose            bool                      `yaml:"verbose"`
 	Disable            []string                  `yaml:"disable"`
 	Only               []string                  `yaml:"only"`
+	ChangedSince       string                    `yaml:"changed-since"`
 	Mutants            map[string]*MutatorConfig `yaml:"mutants"`
 }
 
@@ -68,7 +69,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) ApplyFlags(workers int, timeoutCoefficient int, coverPkg, output, disable, only string, dryRun, verbose bool) {
+func (c *Config) ApplyFlags(workers int, timeoutCoefficient int, coverPkg, output, disable, only, changedSince string, dryRun, verbose bool) {
 	if workers > 0 {
 		c.Workers = workers
 	}
@@ -86,6 +87,9 @@ func (c *Config) ApplyFlags(workers int, timeoutCoefficient int, coverPkg, outpu
 	}
 	if only != "" {
 		c.Only = splitAndTrim(only)
+	}
+	if changedSince != "" {
+		c.ChangedSince = changedSince
 	}
 	if dryRun {
 		c.DryRun = true

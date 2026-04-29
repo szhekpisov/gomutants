@@ -39,6 +39,10 @@ gomutant --only ARITHMETIC_BASE,CONDITIONALS_NEGATION ./...
 # Disable specific mutator types
 gomutant --disable BRANCH_IF,BRANCH_ELSE ./...
 
+# Only test mutants on lines changed vs a git ref (working tree included)
+gomutant --changed-since main ./...
+gomutant --changed-since HEAD~1 ./...
+
 # Custom worker count and timeout
 gomutant -w 8 --timeout-coefficient 15 ./...
 
@@ -68,6 +72,7 @@ gomutant unleash ./...
 | `--config` | | `.gomutant.yml` | Config file path |
 | `--disable` | | | Comma-separated mutator types to disable |
 | `--only` | | | Comma-separated mutator types to run (disables all others) |
+| `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
 | `--dry-run` | | false | List mutants without testing |
 | `--verbose` | `-v` | false | Show each mutant as tested |
 | `--version` | | | Print version and exit |
@@ -81,6 +86,7 @@ workers: 10
 timeout-coefficient: 10
 coverpkg: "./pkg/mypackage/..."
 output: mutation-report.json
+changed-since: main
 ```
 
 Priority: defaults < config file < CLI flags.
