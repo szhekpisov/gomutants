@@ -61,7 +61,7 @@ gomutant unleash ./...
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--workers` | `-w` | NumCPU/2 | Parallel workers |
+| `--workers` | `-w` | NumCPU | Parallel workers |
 | `--timeout-coefficient` | | 10 | Multiply baseline test time for per-mutant timeout |
 | `--coverpkg` | | | Coverage package pattern (passed to `go test -coverpkg`) |
 | `--output` | `-o` | `mutation-report.json` | JSON report path |
@@ -160,11 +160,11 @@ Latest measurement on [diffyml](https://github.com/szhekpisov/diffyml) (matched 
 | Workers | gomutant | gremlins |
 |---|---:|---:|
 | 1 | 1134 s | 1848 s |
-| 5 (`NumCPU/2`, gomutant default) | **342 s** | 410 s |
+| 5 (`NumCPU/2`) | **342 s** | 410 s |
 
-At the typical worker count, **gomutant is ~1.20× faster wall-clock** than gremlins on this workload, and ~1.6× faster sequentially. Per-mutant time is essentially identical (1.79s vs 1.81s) — gomutant's wall-clock win comes from doing strictly less work: it discovers 1030 real mutants while gremlins reports 1168, and the 138-mutant gap is bogus mutations on address-of `&` (mutated as bitwise AND) and unary `-` (double-counted as both `InvertNegatives` and `ArithmeticBase`) that gremlins silently classifies as `KILLED`.
+At workers=5, **gomutant is ~1.20× faster wall-clock** than gremlins on this workload, and ~1.6× faster sequentially. Per-mutant time is essentially identical (1.79s vs 1.81s) — gomutant's wall-clock win comes from doing strictly less work: it discovers 1030 real mutants while gremlins reports 1168, and the 138-mutant gap is bogus mutations on address-of `&` (mutated as bitwise AND) and unary `-` (double-counted as both `InvertNegatives` and `ArithmeticBase`) that gremlins silently classifies as `KILLED`.
 
-The workers=5 number reflects three optimizations layered on the original engine: capping each child `go test`'s `GOMAXPROCS` to avoid CPU oversubscription, defaulting workers to `NumCPU/2`, and sorting pending mutants by `(Pkg, File, Offset)` before dispatch so the per-package build cache stays hot across consecutive mutants. The sort alone was a 17% wall-clock reduction — found via an autoresearch loop after several flag-tuning hypotheses (`-p` cap, per-worker `GOTMPDIR`, `-trimpath`, `GOMAXPROCS=1`, separate cache pre-warm) turned out not to help.
+The workers=5 number reflects two optimizations layered on the original engine: capping each child `go test`'s `GOMAXPROCS` to avoid CPU oversubscription, and sorting pending mutants by `(Pkg, File, Offset)` before dispatch so the per-package build cache stays hot across consecutive mutants. The sort alone was a 17% wall-clock reduction — found via an autoresearch loop after several flag-tuning hypotheses (`-p` cap, per-worker `GOTMPDIR`, `-trimpath`, `GOMAXPROCS=1`, separate cache pre-warm) turned out not to help. NumCPU/2 was the historical default before this benchmark — gomutant now defaults to NumCPU.
 
 What gomutant adds beyond raw speed:
 

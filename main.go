@@ -60,7 +60,7 @@ func run(ctx context.Context, args []string) error {
 		showVersion        bool
 	)
 
-	fs.IntVar(&workers, "workers", 0, "parallel workers (default: NumCPU/2)")
+	fs.IntVar(&workers, "workers", 0, "parallel workers (default: NumCPU)")
 	fs.IntVar(&workers, "w", 0, "parallel workers (shorthand)")
 	fs.IntVar(&timeoutCoefficient, "timeout-coefficient", 0, "multiply baseline test time (default: 10)")
 	fs.StringVar(&coverPkg, "coverpkg", "", "coverage package pattern")
