@@ -61,23 +61,27 @@ jobs:
       - name: Build gomutant
         run: go build -o gomutant .
 
-      # The runner sends SIGTERM to the step's process group partway through
-      # the run (cause unidentified — possibly memory pressure from 2 parallel
-      # `go test` workers compiling 600+ mutated overlays). gomutant's signal
-      # handler catches it cleanly: workers stop, partial results are written
-      # to the report, and gomutant exits 0. But bash (non-interactive) queues
-      # the same SIGTERM and dies with 143 the moment its foreground command
-      # returns — failing the step even though the report is valid.
+      # GitHub-hosted ubuntu runners are tight on memory: NumCPU parallel
+      # `go test` workers each compile ~650 mutated overlays, which is enough
+      # to push the runner host into memory pressure. The host's OOM killer
+      # then kills the runner agent itself — earlier runs showed the mutation
+      # step succeeding while the job ended in failure with all `if: always()`
+      # steps skipped (a tell-tale sign of agent-level termination).
       #
-      # `trap '' TERM` makes bash ignore SIGTERM. gomutant still receives it
-      # per-process and shuts down gracefully; bash stays alive long enough
-      # to run the threshold check below.
+      # Pin workers to 2 here even though the binary defaults to NumCPU; this
+      # is a CI capacity constraint, not a recommendation for general use.
+      #
+      # `trap '' TERM` is defense-in-depth: should the runner still send a
+      # mid-run SIGTERM, gomutant catches it gracefully (writes the partial
+      # report, exits 0) but bash would otherwise queue the signal and die
+      # with 143 the instant gomutant returns. Trapping in bash keeps the
+      # script alive long enough to run the threshold check.
       #
       # -verbose so each completed mutant is logged, useful for debugging.
       - name: Run mutation testing
         run: |
           trap '' TERM
-          ./gomutant -verbose -o mutation-report.json ./internal/...
+          ./gomutant -workers=2 -verbose -o mutation-report.json ./internal/...
 
       - name: Check efficacy threshold
         # Pinned to the local measurement on internal/ at PR time:
