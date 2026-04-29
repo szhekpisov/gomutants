@@ -177,8 +177,6 @@ if (( SUMMARIZE_ONLY == 0 )); then
 fi
 
 # ----- Coverage-guided test selection: on vs off -----
-# This proves the speedup of the per-test coverage routing that gomutant runs
-# by default. Both sides are gomutant; --no-test-selection disables routing.
 
 SELECTION_TARGET="./internal/mutator/..."
 SELECTION_DESC="./internal/mutator with coverage-guided test selection on (default) vs off (--no-test-selection)"

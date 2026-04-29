@@ -423,10 +423,6 @@ func TestRunFullPipeline(t *testing.T) {
 	}
 }
 
-// TestRunNoTestSelection verifies that --no-test-selection is wired through
-// to the test-map build step, replacing it with the disabled phase line.
-// Uses the full pipeline so the gate is actually executed (dry-run returns
-// before reaching the test-map step).
 func TestRunNoTestSelection(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")

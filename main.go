@@ -209,16 +209,13 @@ func run(ctx context.Context, args []string) error {
 	var testMap *coverage.TestMap
 	if cfg.NoTestSelection {
 		term.PhaseDone("disabled (--no-test-selection: running all tests per mutant)")
+	} else if testMap, err = coverage.BuildTestMap(ctx, projectDir, packages, cfg.CoverPkg, tmpDir, cfg.Workers); err != nil {
+		// Non-fatal: fall back to running all tests per mutant.
+		fmt.Fprintf(stderr, "warning: per-test coverage map failed: %v\n", err)
+		testMap = nil
+		term.PhaseDone("skipped (will run all tests per mutant)")
 	} else {
-		testMap, err = coverage.BuildTestMap(ctx, projectDir, packages, cfg.CoverPkg, tmpDir, cfg.Workers)
-		if err != nil {
-			// Non-fatal: fall back to running all tests per mutant.
-			fmt.Fprintf(stderr, "warning: per-test coverage map failed: %v\n", err)
-			testMap = nil
-			term.PhaseDone("skipped (will run all tests per mutant)")
-		} else {
-			term.PhaseDone("done")
-		}
+		term.PhaseDone("done")
 	}
 
 	// 8. Run mutation testing.
