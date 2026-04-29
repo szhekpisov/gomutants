@@ -9,7 +9,7 @@ concurrency:
 
 on:
   push:
-    branches: [main, worktree-init]
+    branches: [main]
   pull_request:
   schedule:
     - cron: "0 6 * * 3" # every Wednesday at 06:00 UTC

@@ -4,7 +4,7 @@ permissions: read-all
 
 on:
   push:
-    branches: [main, worktree-init]
+    branches: [main]
   schedule:
     - cron: '30 1 * * 6'
 
