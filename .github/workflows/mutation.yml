@@ -61,29 +61,20 @@ jobs:
       - name: Build gomutant
         run: go build -o gomutant .
 
-      # The written report is the source of truth, not gomutant's exit code:
-      # the binary occasionally trails with SIGTERM (exit 143) during cleanup
-      # of leaked test subprocesses on CI, after the report has already been
-      # written. Threshold = current measured floor on internal/; bump
-      # alongside test improvements.
-      - name: Run mutation testing & check efficacy
+      # -verbose: gomutant's TTY-only progress bar prints nothing on CI, and
+      # several minutes of silence trips a runner-side watchdog that SIGTERMs
+      # the step. Verbose emits one line per completed mutant, which keeps
+      # output flowing.
+      - name: Run mutation testing
+        run: ./gomutant -verbose -o mutation-report.json ./internal/...
+
+      - name: Check efficacy threshold
+        # Pinned to the local measurement on internal/ at PR time:
+        # 88.03% (522 killed, 71 lived, 53 not_viable, 9 timed_out,
+        # 26 not_covered). Threshold = current floor; any regression
+        # fails the gate. Bump alongside test improvements.
         run: |
-          # Disable -e so we can keep going on a non-zero exit and inspect
-          # the report file ourselves (see comment above the step).
-          set +e
-          set -uo pipefail
-          ./gomutant -o mutation-report.json ./internal/...
-          GOMUTANT_EXIT=$?
-
-          if [ ! -s mutation-report.json ]; then
-            echo "::error::mutation-report.json missing or empty (gomutant exit ${GOMUTANT_EXIT})"
-            exit 1
-          fi
-          if [ "${GOMUTANT_EXIT}" -ne 0 ] && [ "${GOMUTANT_EXIT}" -ne 143 ]; then
-            echo "::error::gomutant exited ${GOMUTANT_EXIT} (only 0 or 143 tolerated)"
-            exit "${GOMUTANT_EXIT}"
-          fi
-
+          set -euo pipefail
           EFFICACY=$(jq '.test_efficacy' mutation-report.json)
           THRESHOLD=88.03
           echo "Test efficacy: ${EFFICACY}% (required: ${THRESHOLD}%)"
