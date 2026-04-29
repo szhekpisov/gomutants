@@ -7,13 +7,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security & Static Analysis](https://github.com/szhekpisov/gomutant/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutant/actions/workflows/security.yml)
 
-> Mutation testing for Go: more mutators, generics support, per-test coverage routing, and PR-scoped runs as a first-class CI workflow.
+> Mutation testing for Go: more mutators, generics support, per-test coverage routing, and branch-scoped runs as a first-class CI workflow.
 
 A drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` subcommand, same JSON report shape — built around three premises:
 
 1. **Discovery is conservative.** Compile failures are reported as `NOT_VIABLE`, separate from kills. Address-of `&` is distinguished from bitwise AND, and unary `-` is emitted by exactly one mutator.
 2. **Speed comes from doing less.** Mutating only changed lines, running only the tests that cover each mutant, sharing a hot build cache across consecutive mutants in the same package.
-3. **The CI workflow is the point.** First-class `--changed-since` mode, gremlins-compatible JSON, memory-safe subprocess control — designed for `pull_request` jobs, not just local exploration.
+3. **The CI workflow is the point.** First-class `--changed-since` mode, gremlins-compatible JSON, memory-safe subprocess control — designed for CI gates, not just local exploration.
 
 ## Table of Contents
 
@@ -56,16 +56,16 @@ Net effect on the diffyml benchmark: 1030 mutants discovered, 94% efficacy.
 
 For each mutant, gomutant runs **only the tests whose coverage touches the mutated line** — not the entire test suite. This is built from a per-test coverage map computed once per run by compiling each test binary one time and replaying it with `-test.run=<one>` per test. When the change is on a line covered by 3 of your 400 tests, you run those 3 — not all 400.
 
-### PR-scoped mutation testing as a first-class mode
+### Branch-scoped mutation testing as a first-class mode
 
 ```bash
 gomutant --changed-since main ./...
 gomutant --changed-since HEAD~1 ./...
 ```
 
-`--changed-since` runs `git diff --unified=0 <ref>` and keeps only mutants whose line falls inside an added/modified range. Combined with the per-test coverage map, **a typical PR's mutation job drops from minutes to under a minute** — fast enough to gate every pull request. (This very repo's PR job takes ~1 min on a hosted runner.)
+`--changed-since` runs `git diff --unified=0 <ref>` and keeps only mutants whose line falls inside an added/modified range. Combined with the per-test coverage map, **a typical branch's mutation job drops from minutes to under a minute** — fast enough to gate every change. (This very repo's branch CI job takes ~1 min on a hosted runner.)
 
-This repo's own CI does exactly this: PR job uses `--changed-since` and gates on "no LIVED mutant on changed lines"; post-merge job runs the full tree against an absolute efficacy floor. See [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml).
+This repo's own CI does exactly this: the branch job uses `--changed-since` and gates on "no LIVED mutant on changed lines"; post-merge job runs the full tree against an absolute efficacy floor. See [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml).
 
 ### Block-level mutators
 
@@ -92,7 +92,7 @@ Requires Go 1.26 or later.
 # Default: run on all packages with NumCPU workers.
 gomutant ./...
 
-# Faster CI: only mutants on lines this PR changes.
+# Faster CI: only mutants on lines changed vs main.
 gomutant --changed-since origin/main ./...
 
 # Local exploration: see what would be tested without running.
@@ -247,7 +247,7 @@ gomutant kills **69.32%** of mutants in its own test suite (664 mutants across 8
 
 ## Contributing
 
-PRs accepted. Feel free to [open an issue](https://github.com/szhekpisov/gomutant/issues/new) or submit a pull request.
+Found a bug or have a feature request? [Open an issue](https://github.com/szhekpisov/gomutant/issues/new).
 
 ## License
 
