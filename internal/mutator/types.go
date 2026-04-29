@@ -35,16 +35,22 @@ func (s MutantStatus) String() string {
 type MutationType string
 
 const (
-	ArithmeticBase       MutationType = "ARITHMETIC_BASE"
-	ConditionalsBoundary MutationType = "CONDITIONALS_BOUNDARY"
-	ConditionalsNegation MutationType = "CONDITIONALS_NEGATION"
-	IncrementDecrement   MutationType = "INCREMENT_DECREMENT"
-	InvertNegatives      MutationType = "INVERT_NEGATIVES"
-	BranchIf             MutationType = "BRANCH_IF"
-	BranchElse           MutationType = "BRANCH_ELSE"
-	BranchCase           MutationType = "BRANCH_CASE"
-	ExpressionRemove     MutationType = "EXPRESSION_REMOVE"
-	StatementRemove      MutationType = "STATEMENT_REMOVE"
+	ArithmeticBase           MutationType = "ARITHMETIC_BASE"
+	ConditionalsBoundary     MutationType = "CONDITIONALS_BOUNDARY"
+	ConditionalsNegation     MutationType = "CONDITIONALS_NEGATION"
+	IncrementDecrement       MutationType = "INCREMENT_DECREMENT"
+	InvertNegatives          MutationType = "INVERT_NEGATIVES"
+	InvertAssignments        MutationType = "INVERT_ASSIGNMENTS"
+	InvertBitwise            MutationType = "INVERT_BITWISE"
+	InvertBitwiseAssignments MutationType = "INVERT_BITWISE_ASSIGNMENTS"
+	InvertLogical            MutationType = "INVERT_LOGICAL"
+	InvertLoopCtrl           MutationType = "INVERT_LOOP_CTRL"
+	RemoveSelfAssignments    MutationType = "REMOVE_SELF_ASSIGNMENTS"
+	BranchIf                 MutationType = "BRANCH_IF"
+	BranchElse               MutationType = "BRANCH_ELSE"
+	BranchCase               MutationType = "BRANCH_CASE"
+	ExpressionRemove         MutationType = "EXPRESSION_REMOVE"
+	StatementRemove          MutationType = "STATEMENT_REMOVE"
 )
 
 type MutantCandidate struct {

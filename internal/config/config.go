@@ -25,9 +25,18 @@ type Config struct {
 	Mutants            map[string]*MutatorConfig `yaml:"mutants"`
 }
 
+// DefaultWorkers returns the default worker count: half of NumCPU. Each child
+// `go test` is GOMAXPROCS-capped, but the OS- and toolchain-level contention
+// (compiler/link, build cache, fork+exec) we can't tune scales past
+// NumCPU/2 on the diffyml workload — beyond that, total CPU work grows
+// faster than wall-clock shrinks. Floored at 1.
+func DefaultWorkers() int {
+	return max(1, runtime.NumCPU()/2)
+}
+
 func Default() Config {
 	return Config{
-		Workers:            runtime.NumCPU(),
+		Workers:            DefaultWorkers(),
 		TimeoutCoefficient: 10,
 		Output:             "mutation-report.json",
 	}
@@ -50,7 +59,7 @@ func Load(path string) (Config, error) {
 
 	// Preserve defaults for zero-value fields.
 	if cfg.Workers == 0 {
-		cfg.Workers = runtime.NumCPU()
+		cfg.Workers = DefaultWorkers()
 	}
 	if cfg.TimeoutCoefficient == 0 {
 		cfg.TimeoutCoefficient = 10

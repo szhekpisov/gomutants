@@ -1,14 +1,15 @@
 # gomutant
 
-A mutation testing tool for Go. Drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins) with more mutators, generics support, and faster per-mutant execution thanks to cached test binaries and `go test -overlay`.
+A mutation testing tool for Go. Drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins) with more mutators, generics support, more accurate mutant discovery, and competitive speed via `go test -overlay` + per-test coverage mapping.
 
 ## Features
 
-- **10 mutation types** — token-level and block-level mutations (see below)
-- **Fast** — parallel workers with `go test -overlay` (no source tree copies)
+- **16 mutation types** — token-level and block-level (see below); 5 of them (`BRANCH_IF/ELSE/CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE`) catch test gaps gremlins doesn't surface
+- **Accurate discovery** — distinguishes address-of `&` from bitwise AND, doesn't double-count unary `-`, classifies compile-failure mutations as `NOT_VIABLE` instead of inflating the kill count
 - **Generics support** — byte-level patching preserves all Go syntax
-- **Gremlins-compatible** — JSON report format for easy migration
-- **Per-test coverage mapping** — compiles test binaries once, runs only relevant tests per mutant
+- **Per-test coverage mapping** — compiles test binaries once, runs only the tests that cover each mutant
+- **Parallel** — worker pool with `go test -overlay` (no source tree copies); each child capped at `GOMAXPROCS=NumCPU/workers` to avoid CPU oversubscription
+- **Gremlins-compatible** — accepts the `unleash` subcommand; JSON report shape matches
 - **Configurable** — YAML config file + CLI flags
 
 ## Installation
@@ -60,7 +61,7 @@ gomutant unleash ./...
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--workers` | `-w` | NumCPU | Parallel workers |
+| `--workers` | `-w` | NumCPU/2 | Parallel workers |
 | `--timeout-coefficient` | | 10 | Multiply baseline test time for per-mutant timeout |
 | `--coverpkg` | | | Coverage package pattern (passed to `go test -coverpkg`) |
 | `--output` | `-o` | `mutation-report.json` | JSON report path |
@@ -95,6 +96,12 @@ Priority: defaults < config file < CLI flags.
 | `CONDITIONALS_NEGATION` | Negate comparisons | `==` <-> `!=`, `<` <-> `>=`, `>` <-> `<=` |
 | `INCREMENT_DECREMENT` | Swap increment/decrement | `++` <-> `--` |
 | `INVERT_NEGATIVES` | Invert negation | `-x` -> `+x`, `a - b` -> `a + b` |
+| `INVERT_ASSIGNMENTS` | Swap arithmetic compound assignments | `+=` <-> `-=`, `*=` <-> `/=`, `%=` -> `*=` |
+| `INVERT_BITWISE` | Swap bitwise binary operators | `&` <-> `\|`, `^` -> `&`, `<<` <-> `>>` |
+| `INVERT_BITWISE_ASSIGNMENTS` | Swap bitwise compound assignments | `&=` <-> `\|=`, `^=` -> `&=`, `<<=` <-> `>>=` |
+| `INVERT_LOGICAL` | Swap logical operators | `&&` <-> `\|\|` |
+| `INVERT_LOOP_CTRL` | Swap loop control | `break` <-> `continue` |
+| `REMOVE_SELF_ASSIGNMENTS` | Drop op from compound assignment | `x += y` -> `x = y` |
 
 ### Block-level
 
@@ -148,14 +155,24 @@ Each worker owns a stable temp file. Mutations are applied as byte-level patches
 
 ## Benchmarks
 
-Tested on [diffyml](https://github.com/szhekpisov/diffyml) (792 mutants, 10 workers, darwin/arm64):
+Latest measurement on [diffyml](https://github.com/szhekpisov/diffyml) (matched 11-mutator set, M1 Pro 10-core, fresh full-pipeline run):
 
-| Tool | Time | Mutants |
-|------|------|---------|
-| gremlins | ~276s | 779 |
-| gomutant | ~160s | 792 |
+| Workers | gomutant | gremlins |
+|---|---:|---:|
+| 1 | 1134 s | 1848 s |
+| 5 (`NumCPU/2`, gomutant default) | **342 s** | 410 s |
 
-~42% faster on this workload with more mutations discovered. The headline number is workload-specific — gomutant trades a fixed setup cost (coverage + per-test map build) for per-mutant savings via cached test binaries, so it pulls ahead on larger codebases. On tiny targets gremlins can still finish first; the matched-mutator-set engine comparison is in [`benchmarks/results.md`](benchmarks/results.md). Reproduce with `bash benchmarks/run.sh`.
+At the typical worker count, **gomutant is ~1.20× faster wall-clock** than gremlins on this workload, and ~1.6× faster sequentially. Per-mutant time is essentially identical (1.79s vs 1.81s) — gomutant's wall-clock win comes from doing strictly less work: it discovers 1030 real mutants while gremlins reports 1168, and the 138-mutant gap is bogus mutations on address-of `&` (mutated as bitwise AND) and unary `-` (double-counted as both `InvertNegatives` and `ArithmeticBase`) that gremlins silently classifies as `KILLED`.
+
+The workers=5 number reflects three optimizations layered on the original engine: capping each child `go test`'s `GOMAXPROCS` to avoid CPU oversubscription, defaulting workers to `NumCPU/2`, and sorting pending mutants by `(Pkg, File, Offset)` before dispatch so the per-package build cache stays hot across consecutive mutants. The sort alone was a 17% wall-clock reduction — found via an autoresearch loop after several flag-tuning hypotheses (`-p` cap, per-worker `GOTMPDIR`, `-trimpath`, `GOMAXPROCS=1`, separate cache pre-warm) turned out not to help.
+
+What gomutant adds beyond raw speed:
+
+- **Discovers a tighter, more accurate mutant set.** On the same diffyml run, gremlins reports 1168 mutants but ~138 are bogus mutations on address-of `&` and unary `-` that always fail to compile and get silently counted as `KILLED`, inflating its 95% efficacy. gomutant correctly skips those, reports 1030 real mutants and an honest 94% efficacy.
+- **Real `NOT_VIABLE` classification.** Mutations that cause compile failure (e.g. `%` → `*` on a float) are reported separately, not folded into kills.
+- **More mutator coverage on test-gap-finding constructs.** The block-level mutators (`BRANCH_IF/ELSE/CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE`) flag a class of weak tests that token-only tools miss.
+
+Reproduce with `bash benchmarks/run.sh`. Per-scenario detail in [`benchmarks/results.md`](benchmarks/results.md).
 
 ### Self-efficacy
 
