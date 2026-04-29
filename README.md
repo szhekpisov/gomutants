@@ -253,4 +253,4 @@ This README follows the [Standard Readme](https://github.com/RichardLitt/standar
 
 ## License
 
-[MIT](LICENSE) © Sergei Zhekpisov
+[MIT](LICENSE)
