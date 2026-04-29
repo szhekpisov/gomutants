@@ -108,6 +108,10 @@ type Worker struct {
 	// Limits compile + test runtime parallelism per child so N parallel workers
 	// don't oversubscribe a NumCPU-core host. Zero means inherit from parent.
 	childGOMAXPROCS int
+
+	// testCPU, if > 0, is forwarded to the inner `go test` as `-cpu=N`.
+	// Zero omits the flag so go test defaults to GOMAXPROCS.
+	testCPU int
 }
 
 // NewWorker creates a worker with stable temp file paths.
@@ -265,6 +269,9 @@ func (w *Worker) buildTestArgs(m mutator.Mutant, short bool) []string {
 	args := []string{"test", "-count=1", "-failfast",
 		fmt.Sprintf("-timeout=%s", w.timeout),
 		fmt.Sprintf("-overlay=%s", w.overlayPath),
+	}
+	if w.testCPU > 0 {
+		args = append(args, fmt.Sprintf("-cpu=%d", w.testCPU))
 	}
 	// GOMUTANT_TEST_SHORT=1 propagates -short to inner go test, letting the
 	// target suite skip heavy integration tests. Used for gomutant self-testing

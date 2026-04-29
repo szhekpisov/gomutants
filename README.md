@@ -66,6 +66,7 @@ gomutant unleash ./...
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--workers` | `-w` | NumCPU | Parallel workers |
+| `--test-cpu` | | 0 (omit) | Value for inner `go test -cpu` per mutant; 0 lets `go test` default to `GOMAXPROCS` |
 | `--timeout-coefficient` | | 10 | Multiply baseline test time for per-mutant timeout |
 | `--coverpkg` | | | Coverage package pattern (passed to `go test -coverpkg`) |
 | `--output` | `-o` | `mutation-report.json` | JSON report path |
@@ -83,6 +84,7 @@ Create a `.gomutant.yml` in your project root:
 
 ```yaml
 workers: 10
+test-cpu: 0
 timeout-coefficient: 10
 coverpkg: "./pkg/mypackage/..."
 output: mutation-report.json

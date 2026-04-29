@@ -556,6 +556,26 @@ func TestBuildTestArgsShortFlag(t *testing.T) {
 	}
 }
 
+// TestBuildTestArgsTestCPU kills BRANCH_IF / CONDITIONALS_BOUNDARY on the
+// `if w.testCPU > 0` gate. With testCPU=2 the args must include `-cpu=2`;
+// with testCPU=0 the `-cpu=` arg must be absent (let go test default to
+// GOMAXPROCS, matching gremlins).
+func TestBuildTestArgsTestCPU(t *testing.T) {
+	m := mutator.Mutant{Pkg: "mymod"}
+
+	wOn := &Worker{testCPU: 2, timeout: time.Second, overlayPath: "/tmp/o.json"}
+	argsOn := wOn.buildTestArgs(m, false)
+	if !containsStr(argsOn, "-cpu=2") {
+		t.Errorf("testCPU=2: args %v missing -cpu=2", argsOn)
+	}
+
+	wOff := &Worker{testCPU: 0, timeout: time.Second, overlayPath: "/tmp/o.json"}
+	argsOff := wOff.buildTestArgs(m, false)
+	if anyHasPrefix(argsOff, "-cpu=") {
+		t.Errorf("testCPU=0: args %v should not contain -cpu=", argsOff)
+	}
+}
+
 // TestBuildTestArgsPackageArgLast kills STATEMENT_REMOVE on
 // `args = append(args, m.Pkg)`: removing that line leaves the command
 // without a package target. Asserting that the package shows up as the

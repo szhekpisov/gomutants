@@ -49,6 +49,7 @@ func run(ctx context.Context, args []string) error {
 
 	var (
 		workers            int
+		testCPU            int
 		timeoutCoefficient int
 		coverPkg           string
 		output             string
@@ -63,6 +64,7 @@ func run(ctx context.Context, args []string) error {
 
 	fs.IntVar(&workers, "workers", 0, "parallel workers (default: NumCPU)")
 	fs.IntVar(&workers, "w", 0, "parallel workers (shorthand)")
+	fs.IntVar(&testCPU, "test-cpu", 0, "value for inner `go test -cpu` per mutant (default: omit, go test uses GOMAXPROCS)")
 	fs.IntVar(&timeoutCoefficient, "timeout-coefficient", 0, "multiply baseline test time (default: 10)")
 	fs.StringVar(&coverPkg, "coverpkg", "", "coverage package pattern")
 	fs.StringVar(&output, "output", "", "JSON report path")
@@ -89,7 +91,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, timeoutCoefficient, coverPkg, output, disable, only, changedSince, dryRun, verbose)
+	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, coverPkg, output, disable, only, changedSince, dryRun, verbose)
 
 	packages := fs.Args()
 	if len(packages) == 0 {
@@ -210,7 +212,7 @@ func run(ctx context.Context, args []string) error {
 
 	// 8. Run mutation testing.
 	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose)
-	pool := runner.NewPool(cfg.Workers, testTimeout, tmpDir, srcCache, projectDir, testMap)
+	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, testTimeout, tmpDir, srcCache, projectDir, testMap)
 	mutants = pool.Run(ctx, mutants, term2.OnResult)
 
 	// 9. Generate report.

@@ -15,6 +15,7 @@ type MutatorConfig struct {
 
 type Config struct {
 	Workers            int                       `yaml:"workers"`
+	TestCPU            int                       `yaml:"test-cpu"`
 	TimeoutCoefficient int                       `yaml:"timeout-coefficient"`
 	CoverPkg           string                    `yaml:"coverpkg"`
 	Output             string                    `yaml:"output"`
@@ -69,9 +70,12 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) ApplyFlags(workers int, timeoutCoefficient int, coverPkg, output, disable, only, changedSince string, dryRun, verbose bool) {
+func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, output, disable, only, changedSince string, dryRun, verbose bool) {
 	if workers > 0 {
 		c.Workers = workers
+	}
+	if testCPU > 0 {
+		c.TestCPU = testCPU
 	}
 	if timeoutCoefficient > 0 {
 		c.TimeoutCoefficient = timeoutCoefficient

@@ -21,6 +21,7 @@ type ResultCallback func(m mutator.Mutant)
 // Pool coordinates parallel mutation testing.
 type Pool struct {
 	workers    int
+	testCPU    int
 	timeout    time.Duration
 	tmpDir     string
 	srcCache   map[string][]byte
@@ -40,10 +41,12 @@ func childGOMAXPROCSFor(workers int) int {
 	return max(1, runtime.NumCPU()/workers)
 }
 
-// NewPool creates a worker pool.
-func NewPool(workers int, timeout time.Duration, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
+// NewPool creates a worker pool. testCPU == 0 means "don't pass -cpu to the
+// inner go test" (let go test default to GOMAXPROCS).
+func NewPool(workers, testCPU int, timeout time.Duration, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
 	return &Pool{
 		workers:    workers,
+		testCPU:    testCPU,
 		timeout:    timeout,
 		tmpDir:     tmpDir,
 		srcCache:   srcCache,
@@ -95,6 +98,7 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 			continue
 		}
 		w.childGOMAXPROCS = childGOMAXPROCSFor(p.workers)
+		w.testCPU = p.testCPU
 		workersStarted++
 		wg.Add(1)
 		go func(w *Worker) {
