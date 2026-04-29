@@ -253,17 +253,24 @@ func TestFilterByDiffKeepsInRange(t *testing.T) {
 		{ID: 5, File: "/repo/pkg/a.go", Line: 20}, // second range
 		{ID: 6, File: "/repo/pkg/b.go", Line: 10}, // file not in diff
 	}
+	// Snapshot the input header so we can verify the function did not
+	// truncate the caller's slice.
+	inputLen := len(mutants)
 	got := FilterByDiff(mutants, ranges, gitRoot)
+	if len(mutants) != inputLen {
+		t.Errorf("input slice was truncated: len=%d, want %d", len(mutants), inputLen)
+	}
 	if len(got) != 3 {
 		t.Fatalf("expected 3 mutants kept, got %d: %+v", len(got), got)
 	}
 	wantLines := []int{10, 12, 20}
+	wantIDs := []int{2, 3, 5}
 	for i, m := range got {
 		if m.Line != wantLines[i] {
 			t.Errorf("mutant[%d].Line = %d, want %d", i, m.Line, wantLines[i])
 		}
-		if m.ID != i+1 {
-			t.Errorf("mutant[%d].ID = %d, want %d (renumbered)", i, m.ID, i+1)
+		if m.ID != wantIDs[i] {
+			t.Errorf("mutant[%d].ID = %d, want %d (original IDs preserved)", i, m.ID, wantIDs[i])
 		}
 	}
 }
@@ -353,16 +360,11 @@ func TestGitRootNotARepo(t *testing.T) {
 		t.Skip("git not available")
 	}
 	dir := t.TempDir()
-	// Walk up could land in a real repo; create a sentinel `.git` *file*
-	// (not dir) to make git fail decisively. Actually simpler: run from
-	// a path that has an empty parent. Use a temp dir with no .git.
-	// On most CI temp dirs aren't inside a git repo, but locally the
-	// developer's home might be — guard accordingly.
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = dir
-	if err := cmd.Run(); err == nil {
-		t.Skip("temp dir is inside a git repo (developer machine); skipping negative case")
-	}
+	// GIT_CEILING_DIRECTORIES stops git's upward .git search at dir, so
+	// the test is deterministic even when run from inside a developer's
+	// repo. Without it, git would walk up to the enclosing repo and
+	// "succeed" with the wrong toplevel.
+	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
 	if _, err := GitRoot(context.Background(), dir); err == nil {
 		t.Error("expected error when not in a git repo")
 	}

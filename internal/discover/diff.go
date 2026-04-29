@@ -64,7 +64,10 @@ func ParseUnifiedDiff(r io.Reader) (map[string][]LineRange, error) {
 	var current string
 
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	// Per-line cap of 16MB: a single source line in the diff can exceed
+	// 1MB for vendored/generated files; 16MB is well past anything a
+	// human would read while still bounding pathological input.
+	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
@@ -137,19 +140,31 @@ func parseHunkHeader(line string) (LineRange, bool) {
 
 // FilterByDiff returns the subset of mutants whose (file, line) falls
 // inside one of the changed ranges. Paths in ranges are relative to
-// gitRoot; mutant File paths are absolute.
+// gitRoot; mutant File paths are absolute. The input slice is not
+// modified; the returned slice is a fresh allocation.
 func FilterByDiff(mutants []mutator.Mutant, ranges map[string][]LineRange, gitRoot string) []mutator.Mutant {
 	if len(ranges) == 0 {
 		return nil
 	}
-	out := mutants[:0]
+	// Mutants cluster by file (often hundreds per file), so cache the
+	// per-file path normalization.
+	relCache := make(map[string]string)
+	out := make([]mutator.Mutant, 0, len(mutants))
 	for _, m := range mutants {
-		rel, err := filepath.Rel(gitRoot, m.File)
-		if err != nil {
+		rel, ok := relCache[m.File]
+		if !ok {
+			r, err := filepath.Rel(gitRoot, m.File)
+			if err != nil {
+				relCache[m.File] = ""
+				continue
+			}
+			// filepath.Rel uses backslashes on Windows; git always uses forward slashes.
+			rel = filepath.ToSlash(r)
+			relCache[m.File] = rel
+		}
+		if rel == "" {
 			continue
 		}
-		// On Windows, filepath.Rel uses backslashes; git always uses forward slashes.
-		rel = filepath.ToSlash(rel)
 		hunks, ok := ranges[rel]
 		if !ok {
 			continue
@@ -160,10 +175,6 @@ func FilterByDiff(mutants []mutator.Mutant, ranges map[string][]LineRange, gitRo
 				break
 			}
 		}
-	}
-	// Renumber IDs so downstream output stays compact.
-	for i := range out {
-		out[i].ID = i + 1
 	}
 	return out
 }
