@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -64,6 +65,21 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 	if len(pending) == 0 {
 		return mutants
 	}
+
+	// EXP4: sort pending mutants by (Pkg, File, StartOffset) so consecutive
+	// mutants on the work channel target the same package + file. The first
+	// mutant in a package pays the cold compile; subsequent ones in that
+	// package hit the build cache for deps + stdlib.
+	sort.SliceStable(pending, func(a, b int) bool {
+		ma, mb := mutants[pending[a]], mutants[pending[b]]
+		if ma.Pkg != mb.Pkg {
+			return ma.Pkg < mb.Pkg
+		}
+		if ma.File != mb.File {
+			return ma.File < mb.File
+		}
+		return ma.StartOffset < mb.StartOffset
+	})
 
 	work := make(chan int, len(pending))
 	results := make(chan mutator.Mutant, len(pending))
