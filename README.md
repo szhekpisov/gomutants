@@ -1,10 +1,10 @@
 # gomutant
 
-> Mutation testing for Go that's faster than the alternatives, more accurate, and doesn't lie about its kill rate.
+> Mutation testing for Go: more mutators, generics support, per-test coverage routing, and PR-scoped runs as a first-class CI workflow.
 
 A drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` subcommand, same JSON report shape — built around three premises:
 
-1. **The numbers should be true.** Mutations that fail to compile aren't kills. Address-of `&` isn't bitwise AND. Unary `-` isn't both `InvertNegatives` and `ArithmeticBase` at the same time.
+1. **Discovery is conservative.** Compile failures are reported as `NOT_VIABLE`, separate from kills. Address-of `&` is distinguished from bitwise AND, and unary `-` is emitted by exactly one mutator.
 2. **Speed comes from doing less.** Mutating only changed lines, running only the tests that cover each mutant, sharing a hot build cache across consecutive mutants in the same package.
 3. **The CI workflow is the point.** First-class `--changed-since` mode, gremlins-compatible JSON, memory-safe subprocess control — designed for `pull_request` jobs, not just local exploration.
 
@@ -15,29 +15,28 @@ gomutant ./...
 
 ---
 
-## Why gomutant
+## Highlights
 
-### 1.20× faster than gremlins, doing strictly less work
+### Performance
 
 Measured on [diffyml](https://github.com/szhekpisov/diffyml), matched 11-mutator set, M1 Pro 10-core, fresh full-pipeline run:
 
-| Workers | gomutant | gremlins | speedup |
-|---|---:|---:|---:|
-| 1 | 1134 s | 1848 s | **1.63×** |
-| 5 (`NumCPU/2`) | **342 s** | 410 s | **1.20×** |
+| Workers | gomutant | gremlins |
+|---|---:|---:|
+| 1 | 1134 s | 1848 s |
+| 5 (`NumCPU/2`) | **342 s** | 410 s |
 
-Per-mutant time is essentially identical (1.79s vs 1.81s) — the speedup is entirely from a tighter mutant set and cache-locality engineering, not faster compilation.
+Per-mutant time is essentially identical (1.79s vs 1.81s); the wall-clock difference comes from cache-locality engineering and a tighter mutant set (see "Accurate discovery" below). Reproduce with `bash benchmarks/run.sh`.
 
-### Honest counts, not inflated ones
+### Accurate discovery
 
-On the same diffyml run, **gremlins reports 1168 mutants and 95% efficacy. gomutant reports 1030 mutants and an honest 94%.**
+A few mutation patterns the AST walker handles deliberately:
 
-The 138-mutant gap isn't gomutant missing things — it's gremlins counting:
+- **Address-of `&`** is recognised and skipped — mutating it as bitwise AND would always fail to compile, so it's not emitted at all.
+- **Unary `-`** is emitted by `InvertNegatives` only, not also by `ArithmeticBase` — no duplicates on the same byte.
+- **Compile-failing mutants** are classified as `NOT_VIABLE` and excluded from the kill count; `test_efficacy` is `killed / (killed + lived)`.
 
-- Mutations on **address-of `&`** as if it were bitwise AND. They never compile. Gremlins counts them as `KILLED`.
-- **Double-counted unary `-`** (emitted by both `InvertNegatives` and `ArithmeticBase`). The duplicate fires once, also fails to compile, also `KILLED`.
-
-gomutant rejects the bogus mutations at discovery and labels real compile failures as `NOT_VIABLE` — separate from kills. **Compile errors are not test passes.**
+Net effect on the diffyml benchmark: 1030 mutants discovered, 94% efficacy.
 
 ### Run only the tests that matter
 
@@ -57,17 +56,15 @@ gomutant --changed-since HEAD~1 ./...
 
 This repo's own CI does exactly this: PR job uses `--changed-since` and gates on "no LIVED mutant on changed lines"; post-merge job runs the full tree against an absolute efficacy floor. See [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml).
 
-### Mutators that find bugs the others miss
+### Block-level mutators
 
-Five mutators unique to gomutant (vs. token-only tools) target real test-gap classes:
+Beyond the standard token-level set, gomutant ships five block-level mutators that target a class of weak-assertion gaps:
 
 | Mutator | What it catches |
 |---|---|
 | `BRANCH_IF` / `BRANCH_ELSE` / `BRANCH_CASE` | Tests that exercise the branch but never assert on its effect |
 | `EXPRESSION_REMOVE` | Tests that pass when one side of an `&&` / `\|\|` is hard-coded `true` / `false` |
 | `STATEMENT_REMOVE` | Tests that don't notice when a statement's side effect disappears |
-
-These find weak assertions that operator-only mutators (the gremlins set) silently approve.
 
 ### Generics, no source-tree copies, OOM-safe
 
@@ -166,7 +163,7 @@ Priority: built-in defaults < config file < CLI flags.
 | `INVERT_LOOP_CTRL` | Swap loop control | `break` <-> `continue` |
 | `REMOVE_SELF_ASSIGNMENTS` | Drop op from compound assignment | `x += y` -> `x = y` |
 
-### Block-level (gomutant-only — finds gaps token mutators miss)
+### Block-level
 
 | Type | Description | Example |
 |------|-------------|---------|
@@ -207,7 +204,7 @@ Compatible with the gremlins JSON format:
 }
 ```
 
-`test_efficacy = killed / (killed + lived)` — **excludes** `not_viable`, `not_covered`, and `timed_out`. Compile errors and timeouts don't masquerade as test successes. That's why the number is honest.
+`test_efficacy = killed / (killed + lived)` — excludes `not_viable`, `not_covered`, and `timed_out`.
 
 ---
 
@@ -216,7 +213,7 @@ Compatible with the gremlins JSON format:
 1. **Resolve packages** via `go list -json`.
 2. **Collect coverage** with `go test -coverprofile`. Mutants on uncovered lines are filtered upfront as `NOT_COVERED`.
 3. **Measure baseline test time** to set a sane per-mutant timeout (multiplied by `--timeout-coefficient`).
-4. **Discover mutants** by walking the AST and emitting byte-level patches. Address-of `&` and unary `-` are detected and skipped at this step (no double-counting, no bogus compile failures).
+4. **Discover mutants** by walking the AST and emitting byte-level patches. Address-of `&` is recognised and skipped; unary `-` is emitted by exactly one mutator.
 5. **Build per-test coverage map.** Test binaries are compiled once; each test runs in isolation with `-test.run=<one>` to record the lines it covers.
 6. **Test mutants** in parallel:
    - Each worker owns a stable temp source file + overlay JSON.
@@ -235,11 +232,11 @@ Two performance optimizations layered on top:
 
 Headline numbers were given above. Reproduce with `bash benchmarks/run.sh`. Per-scenario detail in [`benchmarks/results.md`](benchmarks/results.md).
 
-The `workers=5` win is composed of:
+The `workers=5` wall-clock is shaped by three things layered on the engine:
 
-- A correct mutant set (1030 vs gremlins' 1168 — 138 of theirs never compile).
+- The conservative discovery rules described above (1030 mutants on the diffyml workload).
 - `GOMAXPROCS` capping per child to avoid CPU oversubscription.
-- `(Pkg, File, Offset)` dispatch order to keep the build cache hot.
+- `(Pkg, File, Offset)` dispatch order to keep the build cache hot across consecutive mutants in the same package.
 
 `NumCPU/2` was the historical default before this benchmark; gomutant now defaults to `NumCPU` because the per-child `GOMAXPROCS` cap eliminates the oversubscription failure mode.
 
