@@ -54,7 +54,7 @@ func RunGitDiff(ctx context.Context, dir, ref string) (map[string][]LineRange, e
 		// fetched yet. Git's "unknown revision or path" / "bad revision"
 		// stderr is generic — point to the likely fix.
 		if strings.Contains(stderrStr, "unknown revision") || strings.Contains(stderrStr, "bad revision") {
-			return nil, fmt.Errorf("git diff %s: %w\n%s\nhint: %q is not a valid revision in this repo. If it's a remote branch, run `git fetch` first.", ref, err, stderrStr, ref)
+			return nil, fmt.Errorf("git diff %s: %w\n%s\nhint: %q is not a valid revision in this repo — if it's a remote branch, try `git fetch`", ref, err, stderrStr, ref)
 		}
 		return nil, fmt.Errorf("git diff %s: %w\n%s", ref, err, stderrStr)
 	}
