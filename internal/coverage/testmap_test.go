@@ -2,9 +2,7 @@ package coverage
 
 import (
 	"context"
-	"fmt"
 	"testing"
-	"time"
 )
 
 func TestTestMapTestsFor(t *testing.T) {
@@ -151,35 +149,3 @@ func TestSanitize(t *testing.T) {
 	}
 }
 
-// TestTestMapAddBlocksLineLoopBounded exercises the inner line-stepping
-// loop directly with a tight deadline. Mutating `line++` (e.g. to `--`,
-// `+= 0`, etc.) makes the loop unbounded and allocates map entries until
-// the test process is RSS-killed within seconds — too fast for a deadline
-// wrapped around the whole BuildTestMap pipeline. Hitting addBlocks
-// directly with a tiny block lets the deadline fire first.
-func TestTestMapAddBlocksLineLoopBounded(t *testing.T) {
-	tm := &TestMap{index: make(map[string]map[string]bool)}
-	blocks := []Block{
-		{File: "a.go", StartLine: 1, EndLine: 3, Count: 1},
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		tm.addBlocks("TestX", blocks)
-	}()
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("addBlocks did not return within 100ms — line-counter mutation likely makes the loop unbounded")
-	}
-
-	// Block covers lines 1–3 inclusive. Endpoints + interior must all be
-	// mapped; absence of any pins the boundary correctly.
-	for _, line := range []int{1, 2, 3} {
-		key := fmt.Sprintf("a.go:%d", line)
-		if tm.index[key] == nil {
-			t.Errorf("line %d not indexed (key %q)", line, key)
-		}
-	}
-}

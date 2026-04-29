@@ -298,9 +298,10 @@ func TestDecodeGoListJSONDecodeError(t *testing.T) {
 	// Wrap in deadline: dropping the early-return on Decode error makes the
 	// decoder loop on the same bad token forever (dec.More() keeps reporting
 	// data is available, Decode keeps failing, we ignore — infinite loop).
-	// 2s is short enough to fire before the RSS-based mutant killer (which
-	// trips at ~3-4s when the loop allocates).
-	runWithDeadline(t, 2*time.Second, func() {
+	// Tight deadline (300ms): the decoder allocates fast and the RSS-based
+	// mutant killer trips at ~3-4s; we need the timer to win that race.
+	// Healthy run takes <1ms, so 300ms has plenty of headroom.
+	runWithDeadline(t, 300*time.Millisecond, func() {
 		_, err = decodeGoListJSON(strings.NewReader(input))
 	})
 	if err == nil {
