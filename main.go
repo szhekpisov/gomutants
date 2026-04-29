@@ -64,7 +64,7 @@ func run(ctx context.Context, args []string) error {
 
 	fs.IntVar(&workers, "workers", 0, "parallel workers (default: NumCPU)")
 	fs.IntVar(&workers, "w", 0, "parallel workers (shorthand)")
-	fs.IntVar(&testCPU, "test-cpu", 0, "value for inner `go test -cpu` per mutant (default: omit, go test uses GOMAXPROCS)")
+	fs.IntVar(&testCPU, "test-cpu", 0, "value passed to inner go test -cpu per mutant (0 omits the flag; go test then uses GOMAXPROCS)")
 	fs.IntVar(&timeoutCoefficient, "timeout-coefficient", 0, "multiply baseline test time (default: 10)")
 	fs.StringVar(&coverPkg, "coverpkg", "", "coverage package pattern")
 	fs.StringVar(&output, "output", "", "JSON report path")
@@ -80,6 +80,10 @@ func run(ctx context.Context, args []string) error {
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	if testCPU < 0 {
+		return fmt.Errorf("--test-cpu must be >= 0, got %d", testCPU)
 	}
 
 	if showVersion {

@@ -110,7 +110,10 @@ type Worker struct {
 	childGOMAXPROCS int
 
 	// testCPU, if > 0, is forwarded to the inner `go test` as `-cpu=N`.
-	// Zero omits the flag so go test defaults to GOMAXPROCS.
+	// Zero omits the flag so go test defaults to GOMAXPROCS. Note: when
+	// childGOMAXPROCS > 0, go test silently caps -cpu at that value, so
+	// the intended pairing is --workers=1 --test-cpu=N (or any combo
+	// where --test-cpu <= NumCPU/--workers).
 	testCPU int
 }
 
