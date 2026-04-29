@@ -63,15 +63,28 @@ gomutant --changed-since HEAD~1 ./...
 
 This repo's own CI does exactly this: PR job uses `--changed-since` and gates on "no LIVED mutant on changed lines"; post-merge job runs the full tree against an absolute efficacy floor. See [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml).
 
-### Block-level mutators
+### Mutators at a glance
 
-Beyond the standard token-level set, gomutant ships five block-level mutators that target a class of weak-assertion gaps:
+Sixteen mutators in two categories. Token-level mutators rewrite single operators; block-level mutators reshape statements and branches to surface weak-assertion test gaps. Per-mutator semantics are listed in [Mutators](#mutators).
 
-| Mutator | What it catches |
+| Mutator | Type |
 |---|---|
-| `BRANCH_IF` / `BRANCH_ELSE` / `BRANCH_CASE` | Tests that exercise the branch but never assert on its effect |
-| `EXPRESSION_REMOVE` | Tests that pass when one side of an `&&` / `\|\|` is hard-coded `true` / `false` |
-| `STATEMENT_REMOVE` | Tests that don't notice when a statement's side effect disappears |
+| `ARITHMETIC_BASE` | Token |
+| `CONDITIONALS_BOUNDARY` | Token |
+| `CONDITIONALS_NEGATION` | Token |
+| `INCREMENT_DECREMENT` | Token |
+| `INVERT_NEGATIVES` | Token |
+| `INVERT_ASSIGNMENTS` | Token |
+| `INVERT_BITWISE` | Token |
+| `INVERT_BITWISE_ASSIGNMENTS` | Token |
+| `INVERT_LOGICAL` | Token |
+| `INVERT_LOOP_CTRL` | Token |
+| `REMOVE_SELF_ASSIGNMENTS` | Token |
+| `BRANCH_IF` | Block |
+| `BRANCH_ELSE` | Block |
+| `BRANCH_CASE` | Block |
+| `EXPRESSION_REMOVE` | Block |
+| `STATEMENT_REMOVE` | Block |
 
 ### Generics, no source-tree copies, OOM-safe
 
