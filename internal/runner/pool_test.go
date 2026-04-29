@@ -11,6 +11,24 @@ import (
 	"github.com/szhekpisov/gomutant/internal/mutator"
 )
 
+// runWithDeadline runs fn in a goroutine and fails the test if it doesn't
+// return within d. Catches mutations that turn the result-collection loop
+// into a hang (e.g. dropping `close(results)`), classifying them as KILLED
+// instead of letting them ride out the per-mutant TIMED OUT timeout.
+func runWithDeadline(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("deadlocked: function exceeded %s", d)
+	}
+}
+
 // setupTestProject creates a minimal Go project in a temp directory.
 func setupTestProject(t *testing.T) string {
 	t.Helper()
@@ -101,9 +119,14 @@ func TestPoolRunWithPending(t *testing.T) {
 		},
 	}
 
-	var callbackCount int
-	result := p.Run(context.Background(), mutants, func(m mutator.Mutant) {
-		callbackCount++
+	var (
+		callbackCount int
+		result        []mutator.Mutant
+	)
+	runWithDeadline(t, 60*time.Second, func() {
+		result = p.Run(context.Background(), mutants, func(m mutator.Mutant) {
+			callbackCount++
+		})
 	})
 
 	if len(result) != 3 {

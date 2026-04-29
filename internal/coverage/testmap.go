@@ -114,21 +114,31 @@ func BuildTestMap(ctx context.Context, projectDir string, packages []string, cov
 	// 4. Collect and index results.
 	tm := &TestMap{index: make(map[string]map[string]bool)}
 	for tc := range results {
-		for _, b := range tc.blocks {
-			if b.Count == 0 {
-				continue
-			}
-			for line := b.StartLine; line <= b.EndLine; line++ {
-				key := b.File + ":" + fmt.Sprint(line)
-				if tm.index[key] == nil {
-					tm.index[key] = make(map[string]bool)
-				}
-				tm.index[key][tc.testName] = true
-			}
-		}
+		tm.addBlocks(tc.testName, tc.blocks)
 	}
 
 	return tm, nil
+}
+
+// addBlocks indexes a test's coverage blocks into the map.
+//
+// Extracted so the inner line-stepping loop can be unit-tested directly
+// with tiny inputs and a tight deadline — calling BuildTestMap to exercise
+// it would let mutations like `line++ → line--` allocate gigabytes of
+// map entries before any test-side timer can fire.
+func (tm *TestMap) addBlocks(testName string, blocks []Block) {
+	for _, b := range blocks {
+		if b.Count == 0 {
+			continue
+		}
+		for line := b.StartLine; line <= b.EndLine; line++ {
+			key := b.File + ":" + fmt.Sprint(line)
+			if tm.index[key] == nil {
+				tm.index[key] = make(map[string]bool)
+			}
+			tm.index[key][testName] = true
+		}
+	}
 }
 
 // processWork processes test entries from the work channel.
