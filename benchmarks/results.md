@@ -18,7 +18,7 @@ Raw hyperfine output and per-run JSON reports are in `benchmarks/out/`.
 ### small-defaults — ./testdata/simple/ with each tool's default mutators
 
 | Metric                  | gomutants | gremlins |
-|-------------------------|---------:|---------:|
+|-------------------------|----------:|---------:|
 | Wall-clock mean (s)     | 6.13 | 4.69 |
 | Mutants discovered      | 34 | 20 |
 | Killed                  | 21 | 11 |
@@ -35,7 +35,7 @@ Raw hyperfine output and per-run JSON reports are in `benchmarks/out/`.
 ### mutator-defaults — ./internal/mutator with each tool's default mutators
 
 | Metric                  | gomutants | gremlins |
-|-------------------------|---------:|---------:|
+|-------------------------|----------:|---------:|
 | Wall-clock mean (s)     | 14.65 | 6.03 |
 | Mutants discovered      | 90 | 19 |
 | Killed                  | 79 | 19 |
@@ -52,7 +52,7 @@ Raw hyperfine output and per-run JSON reports are in `benchmarks/out/`.
 ### mutator-matched — ./internal/mutator with matched 5-mutator set (apples-to-apples)
 
 | Metric                  | gomutants | gremlins |
-|-------------------------|---------:|---------:|
+|-------------------------|----------:|---------:|
 | Wall-clock mean (s)     | 4.64 | 5.98 |
 | Mutants discovered      | 19 | 19 |
 | Killed                  | 19 | 19 |

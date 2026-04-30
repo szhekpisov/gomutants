@@ -152,7 +152,7 @@ summarize_scenario() {
 ### $label — $desc
 
 | Metric                  | gomutants | gremlins |
-|-------------------------|---------:|---------:|
+|-------------------------|----------:|---------:|
 | Wall-clock mean (s)     | $(printf "%.2f" "$gom_mean") | $(printf "%.2f" "$gre_mean") |
 | Mutants discovered      | $gom_total | $gre_total |
 | Killed                  | $gom_killed | $gre_killed |
