@@ -1,0 +1,69 @@
+name: gomutants
+description: Mutation testing for Go with PR-scoped runs and inline annotations.
+branding:
+  icon: alert-triangle
+  color: yellow
+
+inputs:
+  args:
+    description: |
+      Arguments passed to gomutants (e.g. "--changed-since origin/main ./...").
+      The action automatically appends --annotations=github so surviving mutants
+      show up as inline annotations on the PR diff.
+    required: true
+  version:
+    description: gomutants version to install (git tag, branch, or "latest").
+    required: false
+    default: latest
+  fail-on-lived:
+    description: Fail the step if any LIVED mutant is reported.
+    required: false
+    default: "true"
+  working-directory:
+    description: Directory to run gomutants from. Must contain go.mod.
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.working-directory }}/go.mod
+
+    - name: Fetch base ref (PR events)
+      if: github.event_name == 'pull_request'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: git fetch --no-tags origin "${{ github.base_ref }}"
+
+    - name: Install gomutants
+      shell: bash
+      run: |
+        if command -v gomutants >/dev/null 2>&1; then
+          echo "gomutants already on PATH ($(gomutants --version)); skipping install"
+        else
+          go install github.com/szhekpisov/gomutants@${{ inputs.version }}
+        fi
+
+    - name: Run gomutants
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: gomutants ${{ inputs.args }} --annotations=github
+
+    - name: Gate on LIVED mutants
+      if: inputs.fail-on-lived == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ ! -f mutation-report.json ]; then
+          echo "::error::mutation-report.json not found — did the run finish?"
+          exit 1
+        fi
+        lived=$(jq -r '.mutants_lived' mutation-report.json)
+        echo "LIVED mutants: $lived"
+        if [ "$lived" != "0" ]; then
+          echo "::error::$lived surviving mutant(s) on changed lines — see annotations on the PR diff."
+          exit 1
+        fi

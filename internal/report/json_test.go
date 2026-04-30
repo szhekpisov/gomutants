@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,51 @@ func TestGenerateEmpty(t *testing.T) {
 	}
 	if r.MutationsCoverage != 0 {
 		t.Errorf("Coverage=%f, want 0 (no mutants)", r.MutationsCoverage)
+	}
+}
+
+func TestGenerateCarriesOriginalAndReplacement(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{
+			ID: 1, Type: mutator.ConditionalsNegation, RelFile: "a.go",
+			Line: 10, Col: 5, Original: "==", Replacement: "!=",
+			Status: mutator.StatusLived,
+		},
+	}
+	r := Generate(mutants, "mod", time.Second)
+	if len(r.Files) != 1 || len(r.Files[0].Mutations) != 1 {
+		t.Fatalf("expected 1 mutation, got files=%v", r.Files)
+	}
+	got := r.Files[0].Mutations[0]
+	if got.Original != "==" || got.Replacement != "!=" {
+		t.Errorf("Original/Replacement = %q/%q, want ==/!=", got.Original, got.Replacement)
+	}
+
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var loaded Report
+	if err := json.Unmarshal(data, &loaded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	got2 := loaded.Files[0].Mutations[0]
+	if got2.Original != "==" || got2.Replacement != "!=" {
+		t.Errorf("after round-trip: Original/Replacement = %q/%q", got2.Original, got2.Replacement)
+	}
+}
+
+func TestGenerateOmitsEmptyOriginalAndReplacement(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
+	}
+	r := Generate(mutants, "mod", time.Second)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), `"original"`) || strings.Contains(string(data), `"replacement"`) {
+		t.Errorf("expected omitempty for empty original/replacement, got: %s", data)
 	}
 }
 

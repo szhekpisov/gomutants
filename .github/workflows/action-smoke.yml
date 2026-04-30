@@ -1,0 +1,32 @@
+name: Action smoke test
+on:
+  pull_request:
+  push:
+    branches: [main, worktree-init]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Build the binary from this PR's source so the action exercises the
+      # code under review, not the published `latest`.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install gomutants from source
+        run: go install ./...
+
+      - name: Run action against this repo
+        uses: ./
+        with:
+          # --dry-run skips test execution so the smoke job stays fast
+          # (<30s) and produces a deterministic report.
+          args: --dry-run ./internal/report/...
+          fail-on-lived: "false"

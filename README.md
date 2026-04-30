@@ -20,6 +20,8 @@ A drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins)
 - [Background](#background)
 - [Install](#install)
 - [Usage](#usage)
+  - [GitHub Action](#github-action)
+  - [Stryker-format reports](#stryker-format-reports)
   - [CLI reference](#cli-reference)
   - [Configuration](#configuration)
 - [Mutators](#mutators)
@@ -118,6 +120,53 @@ gomutants -o report.json --coverpkg ./pkg/mypackage/... \
 
 `gomutants unleash ./...` is accepted unchanged for gremlins-compat scripts.
 
+### GitHub Action
+
+Surface surviving mutants as inline annotations on the PR diff:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0  # required so --changed-since can reach the base ref
+- uses: szhekpisov/gomutants@main
+  with:
+    args: --changed-since origin/${{ github.base_ref }} ./...
+```
+
+Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...::` workflow command, which GitHub renders inline on the "Files changed" view. The action fails if any LIVED is reported (override with `fail-on-lived: false`).
+
+| Input | Default | Description |
+|---|---|---|
+| `args` | _required_ | Arguments forwarded to `gomutants`. The action appends `--annotations=github` automatically. |
+| `version` | `latest` | gomutants version to install. Skipped if `gomutants` is already on PATH. |
+| `fail-on-lived` | `true` | Fail the step if any LIVED mutant is reported. |
+| `working-directory` | `.` | Directory containing `go.mod`. |
+
+**Security:** the `args` input is splatted into a shell command, and `version` is interpolated into `go install …@<version>`. Don't pipe untrusted strings (PR titles, branch names) into either. For supply-chain hardening, pin `version` to a specific commit SHA rather than `latest`.
+
+See [`action.yml`](action.yml) for the full composite definition.
+
+### Stryker-format reports
+
+```bash
+gomutants --stryker-output stryker-report.json ./...
+```
+
+Writes a [mutation-testing-elements v2](https://github.com/stryker-mutator/mutation-testing-elements) report alongside the gremlins-format JSON. The same file feeds:
+
+- the [`<mutation-test-report-app>`](https://www.npmjs.com/package/mutation-testing-elements) web component, which renders an interactive HTML view when embedded in a page with `src="stryker-report.json"`.
+- the [Stryker Dashboard](https://stryker-mutator.io/docs/General/dashboard/), which hosts the report and serves a mutation-score badge:
+
+```bash
+curl -X PUT \
+  -H "X-Api-Key: $STRYKER_DASHBOARD_KEY" \
+  -H "Content-Type: application/json" \
+  --data @stryker-report.json \
+  "https://dashboard.stryker-mutator.io/api/reports/github.com/<org>/<repo>/<branch-or-sha>"
+```
+
+Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutationScoreBadge` URL you can drop in this README — the same surface PIT, Stryker (JS/.NET/Scala), and Infection PHP plug into.
+
 ### CLI reference
 
 | Flag | Short | Default | Description |
@@ -131,6 +180,8 @@ gomutants -o report.json --coverpkg ./pkg/mypackage/... \
 | `--disable` | | | Comma-separated mutator types to disable |
 | `--only` | | | Comma-separated mutator types to run (disables all others) |
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
+| `--annotations` | | | Emit annotations for LIVED mutants. Supported: `github` (workflow-command warnings on stdout). |
+| `--stryker-output` | | | Also write a [Stryker mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) report at this path (for the HTML viewer and Stryker Dashboard). |
 | `--dry-run` | | false | List mutants without testing |
 | `--verbose` | `-v` | false | Stream each mutant as tested |
 | `--version` | | | Print version and exit |
@@ -252,3 +303,7 @@ Found a bug or have a feature request? [Open an issue](https://github.com/szhekp
 ## License
 
 [MIT](LICENSE)
+
+---
+
+If you find this project useful, please consider giving it a ⭐ on [GitHub](https://github.com/szhekpisov/gomutants) — it helps others discover it.

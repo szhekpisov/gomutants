@@ -57,6 +57,8 @@ func run(ctx context.Context, args []string) error {
 		disable            string
 		only               string
 		changedSince       string
+		annotations        string
+		strykerOutput      string
 		dryRun             bool
 		verbose            bool
 		showVersion        bool
@@ -73,6 +75,8 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&disable, "disable", "", "comma-separated mutator types to disable")
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
+	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
+	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
 	fs.BoolVar(&dryRun, "dry-run", false, "list mutants without testing")
 	fs.BoolVar(&verbose, "verbose", false, "show each mutant as tested")
 	fs.BoolVar(&verbose, "v", false, "verbose (shorthand)")
@@ -84,6 +88,12 @@ func run(ctx context.Context, args []string) error {
 
 	if testCPU < 0 {
 		return fmt.Errorf("--test-cpu must be >= 0, got %d", testCPU)
+	}
+
+	switch annotations {
+	case "", "github":
+	default:
+		return fmt.Errorf("--annotations=%q not recognized (supported: github)", annotations)
 	}
 
 	if showVersion {
@@ -228,6 +238,19 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("writing report: %w", err)
 	}
 	fmt.Fprintf(stdout, "Report: %s\n", cfg.Output)
+
+	if strykerOutput != "" {
+		if err := report.WriteStryker(strykerOutput, mutants, projectDir, version); err != nil {
+			return fmt.Errorf("writing Stryker report: %w", err)
+		}
+		fmt.Fprintf(stdout, "Stryker report: %s\n", strykerOutput)
+	}
+
+	if annotations == "github" {
+		if err := report.WriteGitHubAnnotations(stdout, r); err != nil {
+			return fmt.Errorf("writing annotations: %w", err)
+		}
+	}
 	return nil
 }
 
