@@ -56,7 +56,7 @@ Net effect on the diffyml benchmark: 1030 mutants discovered, 94% efficacy.
 
 For each mutant, gomutant runs **only the tests whose coverage touches the mutated line** — not the entire test suite. This is built from a per-test coverage map computed once per run by compiling each test binary one time and replaying it with `-test.run=<one>` per test. When the change is on a line covered by 3 of your 400 tests, you run those 3 — not all 400.
 
-The `selection-on-vs-off` benchmark scenario quantifies the win on this repo's own `./internal/mutator` package; reproduce with `bash benchmarks/run.sh`. To turn the routing off (debugging, comparison, or a suite where the upfront map cost outweighs the savings) pass `--no-test-selection`.
+**This is on by default.** The `selection-on-vs-off` benchmark scenario quantifies the win on this repo's own `./internal/mutator` package; reproduce with `bash benchmarks/run.sh`. To turn the routing off (debugging, comparison, or a suite where the upfront map cost outweighs the savings) pass `--no-test-selection`.
 
 ### PR-scoped mutation testing as a first-class mode
 
