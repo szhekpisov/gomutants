@@ -58,6 +58,8 @@ For each mutant, gomutant runs **only the tests whose coverage touches the mutat
 
 **This is on by default.** The `selection-on-vs-off` benchmark scenario quantifies the win on this repo's own `./internal/mutator` package; reproduce with `bash benchmarks/run.sh`. To turn the routing off (debugging, comparison, or a suite where the upfront map cost outweighs the savings) pass `--no-test-selection`.
 
+**When selection hurts.** The upfront map costs one binary invocation per test. If your suite is roughly 1-to-1 with lines of code — each test covers a single line and individual tests are fast — that overhead can exceed the savings, since the full suite was already cheap. Disable selection there.
+
 ### PR-scoped mutation testing as a first-class mode
 
 ```bash
