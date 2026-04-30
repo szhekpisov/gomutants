@@ -14,14 +14,14 @@ if [[ "${1:-}" == "--summarize-only" ]]; then
   SUMMARIZE_ONLY=1
 fi
 
-GOMUTANT="$REPO_ROOT/bin/gomutants"
+GOMUTANTS="$REPO_ROOT/bin/gomutants"
 GREMLINS="${GREMLINS:-$(command -v gremlins || true)}"
 
 if (( SUMMARIZE_ONLY == 0 )); then
   # Always rebuild so a stale binary from an old branch can't silently mislead
   # the report.
   echo "Building gomutants..."
-  go build -o "$GOMUTANT" .
+  go build -o "$GOMUTANTS" .
 fi
 
 [[ -n "$GREMLINS" ]] || { echo "gremlins not on PATH" >&2; exit 1; }
@@ -70,7 +70,7 @@ run_scenario() {
   local gre_json="$OUT_DIR/${label}-gremlins.json"
   local hf_json="$OUT_DIR/${label}-hyperfine.json"
 
-  local gom_cmd="\"$GOMUTANT\" -w $WORKERS -timeout-coefficient $TIMEOUT_COEF $gom_extra -o \"$gom_json\" $gom_path"
+  local gom_cmd="\"$GOMUTANTS\" -w $WORKERS -timeout-coefficient $TIMEOUT_COEF $gom_extra -o \"$gom_json\" $gom_path"
   local gre_cmd="\"$GREMLINS\" unleash --silent --workers $WORKERS --timeout-coefficient $TIMEOUT_COEF -o \"$gre_json\" $gre_path"
 
   # Warm-up: populate go build cache, produce a fresh JSON for counting.
@@ -188,7 +188,7 @@ RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
   echo "| Host | $(uname -sm) |"
   echo "| CPU | $(cpu_info) |"
   echo "| Go | $(go version | awk '{print $3, $4}') |"
-  echo "| gomutants | $("$GOMUTANT" --version 2>&1 | head -1) |"
+  echo "| gomutants | $("$GOMUTANTS" --version 2>&1 | head -1) |"
   echo "| gremlins | $("$GREMLINS" --version 2>&1 | head -1) |"
   echo "| workers | $WORKERS |"
   echo "| timeout-coefficient | $TIMEOUT_COEF |"

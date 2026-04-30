@@ -181,7 +181,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	testCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 
-	args := w.buildTestArgs(m, os.Getenv("GOMUTANT_TEST_SHORT") == "1")
+	args := w.buildTestArgs(m, os.Getenv("GOMUTANTS_TEST_SHORT") == "1")
 	cmd := exec.CommandContext(testCtx, "go", args...)
 	cmd.Dir = w.projectDir
 	// Put go test + its compiler + test-binary descendants in their own
@@ -276,7 +276,7 @@ func (w *Worker) buildTestArgs(m mutator.Mutant, short bool) []string {
 	if w.testCPU > 0 {
 		args = append(args, fmt.Sprintf("-cpu=%d", w.testCPU))
 	}
-	// GOMUTANT_TEST_SHORT=1 propagates -short to inner go test, letting the
+	// GOMUTANTS_TEST_SHORT=1 propagates -short to inner go test, letting the
 	// target suite skip heavy integration tests. Used for gomutants self-testing
 	// to avoid recursive worker-pool fanout.
 	if short {

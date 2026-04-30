@@ -1,5 +1,5 @@
 gomutants self-efficacy (v0.1.0)
-===============================
+================================
 
 Mutation testing result when gomutants is run on its own test suite.
 Measured per-package (baselines stay small) with 10 workers, darwin/arm64.
