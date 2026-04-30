@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/coverage"
-	"github.com/szhekpisov/gomutant/internal/mutator"
-	"github.com/szhekpisov/gomutant/internal/patch"
+	"github.com/szhekpisov/gomutants/internal/coverage"
+	"github.com/szhekpisov/gomutants/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/patch"
 )
 
 // maxSubprocRSSBytes caps per-mutant subprocess group memory. A mutation that
@@ -181,7 +181,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	testCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 
-	args := w.buildTestArgs(m, os.Getenv("GOMUTANT_TEST_SHORT") == "1")
+	args := w.buildTestArgs(m, os.Getenv("GOMUTANTS_TEST_SHORT") == "1")
 	cmd := exec.CommandContext(testCtx, "go", args...)
 	cmd.Dir = w.projectDir
 	// Put go test + its compiler + test-binary descendants in their own
@@ -206,7 +206,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 		// cmd.Start failure is an infrastructure problem (exec/fork failure,
 		// PATH misconfig, rlimit), not a mutant-viability signal. Log loudly
 		// so it doesn't silently inflate NotViable counts and mislead efficacy.
-		fmt.Fprintf(os.Stderr, "gomutant: worker %d: cmd.Start failed, treating as NotViable: %v\n", w.id, err)
+		fmt.Fprintf(os.Stderr, "gomutants: worker %d: cmd.Start failed, treating as NotViable: %v\n", w.id, err)
 		m.Status = mutator.StatusNotViable
 		m.Duration = nonZeroSince(start)
 		return m
@@ -276,8 +276,8 @@ func (w *Worker) buildTestArgs(m mutator.Mutant, short bool) []string {
 	if w.testCPU > 0 {
 		args = append(args, fmt.Sprintf("-cpu=%d", w.testCPU))
 	}
-	// GOMUTANT_TEST_SHORT=1 propagates -short to inner go test, letting the
-	// target suite skip heavy integration tests. Used for gomutant self-testing
+	// GOMUTANTS_TEST_SHORT=1 propagates -short to inner go test, letting the
+	// target suite skip heavy integration tests. Used for gomutants self-testing
 	// to avoid recursive worker-pool fanout.
 	if short {
 		args = append(args, "-short")

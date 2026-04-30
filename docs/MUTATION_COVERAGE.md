@@ -1,6 +1,6 @@
 # Mutation Coverage
 
-Status of gomutant's self-mutation test. "Efficacy" = `killed / (killed + lived)`;
+Status of gomutants's self-mutation test. "Efficacy" = `killed / (killed + lived)`;
 `not_viable`, `not_covered`, and `timed_out` are excluded from the denominator.
 
 ## Summary (excluding `main`)
@@ -17,7 +17,7 @@ Status of gomutant's self-mutation test. "Efficacy" = `killed / (killed + lived)
 | **total**| **471**| **33**| **93.45%** |
 
 Run the no-main self-test with `scripts/` (external) or replicate with
-`gomutant -w 8 -o <pkg>.json ./internal/<pkg>/` per package.
+`gomutants -w 8 -o <pkg>.json ./internal/<pkg>/` per package.
 
 ## Why these mutants survive
 
@@ -163,7 +163,7 @@ When the mutation changes behavior but the downstream caller *also*
 validates and produces an equivalent error, the final observed status
 doesn't change.
 
-- `runner/worker.go:180` (`GOMUTANT_TEST_SHORT == "1"` condition): adding
+- `runner/worker.go:180` (`GOMUTANTS_TEST_SHORT == "1"` condition): adding
   or dropping `-short` changes which inner tests run. In the tests
   exercising `Worker.Test`, the target test passes under both modes.
 - `runner/worker.go:185`: `if w.testMap != nil` — the test-filter is a
@@ -196,7 +196,7 @@ distinguish "no data" from "data I couldn't parse." Same-state classes.
    and unit-test with hand-built slices. Kills ~5 mutants cleanly.
 2. **Inject `exec.Command` indirection** in `runner/pool.go` and
    `coverage/testmap.go` to simulate partial failures. Kills ~10 mutants.
-3. **Drop the GOMUTANT_TEST_SHORT branch** if no longer needed —
+3. **Drop the GOMUTANTS_TEST_SHORT branch** if no longer needed —
    removing code removes its mutants. (Confirm it's still load-bearing
    for self-testing first.)
 

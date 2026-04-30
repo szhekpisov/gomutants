@@ -1,5 +1,5 @@
-# gomutant configuration
-# Copy this file to .gomutant.yml in your project root.
+# gomutants configuration
+# Copy this file to .gomutants.yml in your project root.
 # All fields are optional — defaults are shown below.
 
 # Number of parallel workers (default: number of CPUs).

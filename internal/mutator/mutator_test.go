@@ -6,7 +6,7 @@ import (
 	"go/token"
 	"testing"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 func parse(t *testing.T, src string) (*token.FileSet, *ast.File, []byte) {

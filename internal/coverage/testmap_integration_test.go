@@ -14,7 +14,7 @@ import (
 // runWithDeadline runs fn in a goroutine and fails the test if it doesn't
 // return within d. Mutations on close(channel) / counter-increment / range
 // feeders deadlock the production code; wrapping the call lets us catch
-// those as t.Fatal (mutant KILLED) instead of hanging until gomutant's
+// those as t.Fatal (mutant KILLED) instead of hanging until gomutants's
 // per-mutant timeout fires (mutant TIMED OUT).
 func runWithDeadline(t *testing.T, d time.Duration, fn func()) {
 	t.Helper()

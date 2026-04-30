@@ -13,7 +13,7 @@ func (a *arithmeticBase) Type() MutationType { return ArithmeticBase }
 // Asymmetric by design: REM → MUL catches divisor/remainder confusion,
 // but MUL → REM isn't a useful mutation because Go's `%` operator is
 // undefined on float operands — the mutant would be a compile error on
-// any code that multiplies floats, and gomutant already classifies those
+// any code that multiplies floats, and gomutants already classifies those
 // as NotViable (no signal for the test suite to catch). Keep only one side.
 var arithmeticSwaps = map[token.Token]token.Token{
 	token.ADD: token.SUB,

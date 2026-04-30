@@ -28,7 +28,7 @@ func TestRunVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run --version: %v", err)
 	}
-	want := "gomutant v0.1.0\n"
+	want := "gomutants v0.1.0\n"
 	if out != want {
 		t.Errorf("version output: got %q, want %q", out, want)
 	}
@@ -42,7 +42,7 @@ func TestRunUnleash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run unleash --version: %v", err)
 	}
-	if !strings.Contains(out, "gomutant v0.1.0") {
+	if !strings.Contains(out, "gomutants v0.1.0") {
 		t.Errorf("unleash: expected version output, got %q", out)
 	}
 }
@@ -128,7 +128,7 @@ func TestRunAllLongFlags(t *testing.T) {
 		"--timeout-coefficient", "5",
 		"--coverpkg", "testmod",
 		"--output", outPath,
-		"--config", ".gomutant.yml",
+		"--config", ".gomutants.yml",
 		"--disable", "BRANCH_IF",
 		"--dry-run",
 		"--verbose",
@@ -141,7 +141,7 @@ func TestRunAllLongFlags(t *testing.T) {
 		t.Fatalf("run with all long flags: %v", err)
 	}
 	// Dry-run prints "[PENDING]" or "[NOT COVERED]" markers per mutant.
-	if !strings.Contains(out, "gomutant v0.1.0") {
+	if !strings.Contains(out, "gomutants v0.1.0") {
 		t.Errorf("missing header: %q", out)
 	}
 	if !strings.Contains(out, "Target: [testmod]") {
@@ -397,7 +397,7 @@ func TestRunFullPipeline(t *testing.T) {
 
 	// Verify every phase-banner line and the final report line.
 	mustContain := []string{
-		"gomutant v0.1.0",
+		"gomutants v0.1.0",
 		"Target: [testmod]",
 		"Workers: 1 | Mutations: 1 types enabled",
 		"Resolving packages...",

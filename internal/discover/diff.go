@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // LineRange is a closed interval [Start, End] of 1-indexed line numbers.

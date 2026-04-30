@@ -15,13 +15,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // Package holds resolved package info from go list.
 type Package struct {
 	Dir        string   // Absolute directory path.
-	ImportPath string   // e.g. "github.com/szhekpisov/gomutant/internal/discover"
+	ImportPath string   // e.g. "github.com/szhekpisov/gomutants/internal/discover"
 	GoFiles    []string // .go source files (base names).
 	TestGoFiles []string // _test.go files (base names).
 }
@@ -90,7 +90,7 @@ func Discover(fset *token.FileSet, pkgs []Package, mutators []mutator.Mutator, m
 			if err != nil {
 				// Soft failure: skip unparseable files. Log so silent
 				// skips don't hide classifier-blindspots in reports.
-				fmt.Fprintf(os.Stderr, "gomutant: skipping unparseable %s: %v\n", absPath, err)
+				fmt.Fprintf(os.Stderr, "gomutants: skipping unparseable %s: %v\n", absPath, err)
 				continue
 			}
 			for _, m := range mutators {

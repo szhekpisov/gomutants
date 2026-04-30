@@ -1,7 +1,7 @@
-gomutant self-efficacy (v0.1.0)
-===============================
+gomutants self-efficacy (v0.1.0)
+================================
 
-Mutation testing result when gomutant is run on its own test suite.
+Mutation testing result when gomutants is run on its own test suite.
 Measured per-package (baselines stay small) with 10 workers, darwin/arm64.
 
 Package              Total  Killed  Lived  NotCov  NotViable  TimedOut  Efficacy
@@ -34,7 +34,7 @@ coverage and killed mutants relative to a true full-repo run.
 Observations
 ------------
 - main (39.56%) drags the total down. Integration tests in main_test.go
-  and integration_test.go invoke the full gomutant pipeline, so many
+  and integration_test.go invoke the full gomutants pipeline, so many
   mutations (especially in output formatting and error wrapping) survive
   because the integration tests don't assert on those signals.
 - patch (61.11%) and report (61.70%) have many lived mutants in formatting

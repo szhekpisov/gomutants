@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 func TestGenerate(t *testing.T) {

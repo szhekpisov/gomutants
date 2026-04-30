@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/coverage"
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/coverage"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 func TestNewWorker(t *testing.T) {
@@ -540,7 +540,7 @@ func TestWorkerTestParentCtxCancel(t *testing.T) {
 }
 
 // TestBuildTestArgsShortFlag kills CONDITIONALS_NEGATION / BRANCH_IF on
-// the GOMUTANT_TEST_SHORT gate: passing short=true must add "-short" to
+// the GOMUTANTS_TEST_SHORT gate: passing short=true must add "-short" to
 // the command line; short=false must omit it. We assert both directions.
 func TestBuildTestArgsShortFlag(t *testing.T) {
 	w := &Worker{timeout: time.Second, overlayPath: "/tmp/o.json"}

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/coverage"
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/coverage"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // runWithDeadline runs fn in a goroutine and fails the test if it doesn't

@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug in gomutant
+description: Report a bug in gomutants
 labels: ["bug"]
 body:
   - type: markdown
@@ -13,7 +13,7 @@ body:
       label: Description
       description: What happened? What did you expect to happen instead?
       placeholder: |
-        When I run gomutant on a package with generic functions, the output shows...
+        When I run gomutants on a package with generic functions, the output shows...
         I expected it to show...
     validations:
       required: true
@@ -26,7 +26,7 @@ body:
         The exact command you ran. Flags like --workers, --timeout-coefficient,
         --coverpkg, --only, --disable, --dry-run, and --config trigger
         different code paths, so include them all.
-      placeholder: gomutant -w 4 --only ARITHMETIC_BASE ./internal/...
+      placeholder: gomutants -w 4 --only ARITHMETIC_BASE ./internal/...
       render: bash
     validations:
       required: true
@@ -93,15 +93,15 @@ body:
         - label: Code with no test coverage
         - label: External test packages (`foo_test` package suffix)
         - label: Multiple modules in the same repo
-        - label: Custom .gomutant.yml config in use
+        - label: Custom .gomutants.yml config in use
         - label: Run via the `unleash` gremlins-compat subcommand
 
   - type: input
     id: version
     attributes:
-      label: gomutant version
-      description: Output of `gomutant --version`
-      placeholder: "gomutant v0.1.0"
+      label: gomutants version
+      description: Output of `gomutants --version`
+      placeholder: "gomutants v0.1.0"
     validations:
       required: true
 

@@ -20,7 +20,7 @@ func TestDefault(t *testing.T) {
 }
 
 func TestLoadMissing(t *testing.T) {
-	cfg, err := Load("/nonexistent/.gomutant.yml")
+	cfg, err := Load("/nonexistent/.gomutants.yml")
 	if err != nil {
 		t.Fatalf("Load of missing file should not error: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestLoadMissing(t *testing.T) {
 
 func TestLoadValid(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".gomutant.yml")
+	path := filepath.Join(dir, ".gomutants.yml")
 
 	yaml := `workers: 4
 test-cpu: 2
@@ -85,7 +85,7 @@ only:
 
 func TestLoadZeroValuesGetDefaults(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".gomutant.yml")
+	path := filepath.Join(dir, ".gomutants.yml")
 	// Explicitly set fields to zero — should fall back to defaults.
 	yaml := "workers: 0\ntimeout-coefficient: 0\noutput: \"\"\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
@@ -118,7 +118,7 @@ func TestLoadReadError(t *testing.T) {
 
 func TestLoadInvalidYAML(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, ".gomutant.yml")
+	path := filepath.Join(dir, ".gomutants.yml")
 	if err := os.WriteFile(path, []byte("{{invalid"), 0o644); err != nil {
 		t.Fatal(err)
 	}

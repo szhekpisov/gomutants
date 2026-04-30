@@ -1,4 +1,4 @@
-Baseline benchmark: gomutant on diffyml (5 gremlins-equivalent mutators)
+Baseline benchmark: gomutants on diffyml (5 gremlins-equivalent mutators)
 Date: 2026-04-04
 Machine: darwin/arm64
 Go: 1.26.1
@@ -21,7 +21,7 @@ Net effect: neutral to slightly negative on small projects.
 
 === Comparison ===
 Gremlins:  275.5s (single run, from golden report)
-Gomutant:  ~160s  (median, without test map)
+Gomutants: ~160s  (median, without test map)
 Speedup:   ~42% faster than gremlins
 
 === Notes ===

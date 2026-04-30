@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // TestHeaderExact asserts the exact bytes produced by Header.
@@ -19,7 +19,7 @@ func TestHeaderExact(t *testing.T) {
 	term := NewTerminal(&buf, 0, false)
 	term.Header("0.1.0", "[./...]", 10, 5)
 
-	want := "gomutant v0.1.0\n\nTarget: [./...]\nWorkers: 10 | Mutations: 5 types enabled\n\n"
+	want := "gomutants v0.1.0\n\nTarget: [./...]\nWorkers: 10 | Mutations: 5 types enabled\n\n"
 	if got := buf.String(); got != want {
 		t.Errorf("Header output mismatch:\n got: %q\nwant: %q", got, want)
 	}

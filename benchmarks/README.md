@@ -1,6 +1,6 @@
 # Benchmarks
 
-Compares gomutant against [go-gremlins/gremlins](https://github.com/go-gremlins/gremlins) on shared Go targets.
+Compares gomutants against [go-gremlins/gremlins](https://github.com/go-gremlins/gremlins) on shared Go targets.
 
 ## Prerequisites
 
@@ -22,14 +22,14 @@ bash benchmarks/run.sh
 bash benchmarks/run.sh --summarize-only
 ```
 
-The script always rebuilds `bin/gomutant` first so a stale binary can't silently
+The script always rebuilds `bin/gomutants` first so a stale binary can't silently
 skew results. It then runs three scenarios with hyperfine (5 runs each):
 
 | Scenario | Target | Notes |
 |---|---|---|
 | `small-defaults` | `./testdata/simple/` | Each tool with its own default mutators. Shows fixed-overhead cost on tiny inputs. |
 | `mutator-defaults` | `./internal/mutator` | Each tool with its own default mutators. Real-world out-of-the-box comparison. |
-| `mutator-matched` | `./internal/mutator` | gomutant restricted to gremlins' five default mutators (`--only`). Engine-speed comparison on an identical workload. |
+| `mutator-matched` | `./internal/mutator` | gomutants restricted to gremlins' five default mutators (`--only`). Engine-speed comparison on an identical workload. |
 
 Results are written to `benchmarks/results.md`; raw hyperfine JSON and per-tool reports land in `benchmarks/out/` (gitignored).
 
@@ -42,6 +42,6 @@ Running on the whole `./internal/...` tree takes ~9 minutes per tool per run bec
 
 ## Caveats
 
-- gomutant ships 10 mutator types; gremlins has 5 enabled by default. `mutator-defaults` compares out-of-the-box behaviour (different workloads); `mutator-matched` compares engine speed on the same mutant set.
+- gomutants ships 10 mutator types; gremlins has 5 enabled by default. `mutator-defaults` compares out-of-the-box behaviour (different workloads); `mutator-matched` compares engine speed on the same mutant set.
 - gremlins' `mutants_total` excludes `NOT COVERED` and `TIMED OUT`; the summary uses `sum(mutator_statistics)` to recover a pre-filter discovered-count.
 - Wall-clock results are sensitive to background load and thermal state. Rerun under quiet conditions before publishing numbers.
