@@ -60,11 +60,11 @@ jobs:
         with:
           go-version: "1.26.1"
 
-      # Dogfood: mutation-test gomutant with the in-tree gomutant build,
+      # Dogfood: mutation-test gomutants with the in-tree gomutants build,
       # so any regression in the mutation engine is caught by the same
       # gate that protects the test suite.
-      - name: Build gomutant
-        run: go build -o gomutant .
+      - name: Build gomutants
+        run: go build -o gomutants .
 
       # GitHub-hosted ubuntu runners are tight on memory: NumCPU parallel
       # `go test` workers each compile ~650 mutated overlays, which is enough
@@ -77,9 +77,9 @@ jobs:
       # is a CI capacity constraint, not a recommendation for general use.
       #
       # `trap '' TERM` is defense-in-depth: should the runner still send a
-      # mid-run SIGTERM, gomutant catches it gracefully (writes the partial
+      # mid-run SIGTERM, gomutants catches it gracefully (writes the partial
       # report, exits 0) but bash would otherwise queue the signal and die
-      # with 143 the instant gomutant returns. Trapping in bash keeps the
+      # with 143 the instant gomutants returns. Trapping in bash keeps the
       # script alive long enough to run the post-run gate step.
       #
       # Two modes:
@@ -94,13 +94,13 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           trap '' TERM
-          ./gomutant -workers=2 -verbose --changed-since "origin/${BASE_REF}" -o mutation-report.json ./internal/...
+          ./gomutants -workers=2 -verbose --changed-since "origin/${BASE_REF}" -o mutation-report.json ./internal/...
 
       - name: Run mutation testing (full tree, post-merge)
         if: github.event_name == 'push'
         run: |
           trap '' TERM
-          ./gomutant -workers=2 -verbose -o mutation-report.json ./internal/...
+          ./gomutants -workers=2 -verbose -o mutation-report.json ./internal/...
 
       # On --changed-since runs the absolute test_efficacy floor is no
       # longer meaningful (subset varies per PR). Gate instead on "no

@@ -1,4 +1,4 @@
-Baseline benchmark: gomutant on diffyml (5 gremlins-equivalent mutators)
+Baseline benchmark: gomutants on diffyml (5 gremlins-equivalent mutators)
 Date: 2026-04-04
 Machine: darwin/arm64
 Go: 1.26.1

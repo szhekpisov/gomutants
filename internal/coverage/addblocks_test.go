@@ -10,7 +10,7 @@ import (
 // File deliberately named so it sorts before testmap_integration_test.go
 // in alphabetical filename order. Go's test runner registers tests in
 // that order, so this fast deadline test runs first; with -failfast (which
-// gomutant always passes), a runaway-loop mutation on addBlocks's inner
+// gomutants always passes), a runaway-loop mutation on addBlocks's inner
 // line counter trips here in milliseconds — before the slower BuildTestMap
 // integration tests can run them long enough to be RSS-killed and
 // classified as TIMED OUT instead of KILLED.

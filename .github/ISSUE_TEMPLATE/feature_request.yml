@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Have an idea for gomutant? Describe the problem first — the best solutions come from understanding the use case.
+        Have an idea for gomutants? Describe the problem first — the best solutions come from understanding the use case.
 
   - type: textarea
     id: problem
@@ -15,7 +15,7 @@ body:
         What are you trying to accomplish? What's painful or missing today?
         Focus on the problem, not the solution.
       placeholder: |
-        When running gomutant on a large monorepo, I need to...
+        When running gomutants on a large monorepo, I need to...
     validations:
       required: true
 
@@ -33,7 +33,7 @@ body:
     id: area
     attributes:
       label: Area
-      description: Which part of gomutant does this relate to?
+      description: Which part of gomutants does this relate to?
       options:
         - New mutator type
         - Existing mutator behavior

@@ -1,6 +1,6 @@
 # Mutation Coverage
 
-Status of gomutant's self-mutation test. "Efficacy" = `killed / (killed + lived)`;
+Status of gomutants's self-mutation test. "Efficacy" = `killed / (killed + lived)`;
 `not_viable`, `not_covered`, and `timed_out` are excluded from the denominator.
 
 ## Summary (excluding `main`)
@@ -17,7 +17,7 @@ Status of gomutant's self-mutation test. "Efficacy" = `killed / (killed + lived)
 | **total**| **471**| **33**| **93.45%** |
 
 Run the no-main self-test with `scripts/` (external) or replicate with
-`gomutant -w 8 -o <pkg>.json ./internal/<pkg>/` per package.
+`gomutants -w 8 -o <pkg>.json ./internal/<pkg>/` per package.
 
 ## Why these mutants survive
 

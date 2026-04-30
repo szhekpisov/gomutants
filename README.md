@@ -1,11 +1,11 @@
-# gomutant
+# gomutants
 
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutant/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutant)
-[![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutant)](https://goreportcard.com/report/github.com/szhekpisov/gomutant)
-[![Go Reference](https://pkg.go.dev/badge/github.com/szhekpisov/gomutant.svg)](https://pkg.go.dev/github.com/szhekpisov/gomutant)
-[![codecov](https://codecov.io/gh/szhekpisov/gomutant/branch/main/graph/badge.svg)](https://codecov.io/gh/szhekpisov/gomutant)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutants/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutants)
+[![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutants)](https://goreportcard.com/report/github.com/szhekpisov/gomutants)
+[![Go Reference](https://pkg.go.dev/badge/github.com/szhekpisov/gomutants.svg)](https://pkg.go.dev/github.com/szhekpisov/gomutants)
+[![codecov](https://codecov.io/gh/szhekpisov/gomutants/branch/main/graph/badge.svg)](https://codecov.io/gh/szhekpisov/gomutants)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Security & Static Analysis](https://github.com/szhekpisov/gomutant/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutant/actions/workflows/security.yml)
+[![Security & Static Analysis](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml)
 
 > Mutation testing for Go: more mutators, generics support, per-test coverage routing, and PR-scoped runs as a first-class CI workflow.
 
@@ -35,7 +35,7 @@ A drop-in replacement for [go-gremlins](https://github.com/go-gremlins/gremlins)
 
 Measured on [diffyml](https://github.com/szhekpisov/diffyml), matched 11-mutator set, M1 Pro 10-core, fresh full-pipeline run:
 
-| Workers | gomutant | gremlins |
+| Workers | gomutants | gremlins |
 |---|---:|---:|
 | 1 | 1134 s | 1848 s |
 | 5 (`NumCPU/2`) | **342 s** | 410 s |
@@ -54,13 +54,13 @@ Net effect on the diffyml benchmark: 1030 mutants discovered, 94% efficacy.
 
 ### Run only the tests that matter
 
-For each mutant, gomutant runs **only the tests whose coverage touches the mutated line** — not the entire test suite. This is built from a per-test coverage map computed once per run by compiling each test binary one time and replaying it with `-test.run=<one>` per test. When the change is on a line covered by 3 of your 400 tests, you run those 3 — not all 400.
+For each mutant, gomutants runs **only the tests whose coverage touches the mutated line** — not the entire test suite. This is built from a per-test coverage map computed once per run by compiling each test binary one time and replaying it with `-test.run=<one>` per test. When the change is on a line covered by 3 of your 400 tests, you run those 3 — not all 400.
 
 ### PR-scoped mutation testing as a first-class mode
 
 ```bash
-gomutant --changed-since main ./...
-gomutant --changed-since HEAD~1 ./...
+gomutants --changed-since main ./...
+gomutants --changed-since HEAD~1 ./...
 ```
 
 `--changed-since` runs `git diff --unified=0 <ref>` and keeps only mutants whose line falls inside an added/modified range. Combined with the per-test coverage map, **a typical PR's mutation job drops from minutes to under a minute** — fast enough to gate every pull request. (This very repo's PR job takes ~1 min on a hosted runner.)
@@ -69,19 +69,19 @@ This repo's own CI does exactly this: PR job uses `--changed-since` and gates on
 
 ### Block-level mutators
 
-Beyond the standard token-level operators, gomutant ships block-level mutators (`BRANCH_IF` / `BRANCH_ELSE` / `BRANCH_CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE`) that reshape statements and branches to surface weak-assertion test gaps. See [Mutators](#mutators) for the full 16-mutator catalog.
+Beyond the standard token-level operators, gomutants ships block-level mutators (`BRANCH_IF` / `BRANCH_ELSE` / `BRANCH_CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE`) that reshape statements and branches to surface weak-assertion test gaps. See [Mutators](#mutators) for the full 16-mutator catalog.
 
 ### Generics, no source-tree copies, OOM-safe
 
 - **Generics support.** Byte-level patching, not AST-rewriting — preserves type parameters, instantiations, all of Go's syntax surface.
 - **`go test -overlay`** for every mutant. Each worker owns one stable temp file and one stable overlay JSON. The original source tree is never modified.
-- **2 GiB per-subprocess RSS cap.** A mutation that flips a loop bound or allocation size can balloon the test binary to tens of gigabytes within seconds. gomutant monitors process-group RSS and `SIGKILL`s the entire tree on cap breach — classified as `TIMED_OUT`, not as a runaway that takes the whole job down.
+- **2 GiB per-subprocess RSS cap.** A mutation that flips a loop bound or allocation size can balloon the test binary to tens of gigabytes within seconds. gomutants monitors process-group RSS and `SIGKILL`s the entire tree on cap breach — classified as `TIMED_OUT`, not as a runaway that takes the whole job down.
 - **Output capped at 1 MiB per stream.** A panic-loop mutant can't fill the runner disk.
 
 ## Install
 
 ```bash
-go install github.com/szhekpisov/gomutant@latest
+go install github.com/szhekpisov/gomutants@latest
 ```
 
 Requires Go 1.26 or later.
@@ -90,33 +90,33 @@ Requires Go 1.26 or later.
 
 ```bash
 # Default: run on all packages with NumCPU workers.
-gomutant ./...
+gomutants ./...
 
 # Faster CI: only mutants on lines this PR changes.
-gomutant --changed-since origin/main ./...
+gomutants --changed-since origin/main ./...
 
 # Local exploration: see what would be tested without running.
-gomutant --dry-run ./...
+gomutants --dry-run ./...
 
 # Verbose stream of every mutant as it completes.
-gomutant -v ./...
+gomutants -v ./...
 
 # Limit to specific mutators (or exclude some).
-gomutant --only ARITHMETIC_BASE,CONDITIONALS_NEGATION ./...
-gomutant --disable BRANCH_IF,BRANCH_ELSE ./...
+gomutants --only ARITHMETIC_BASE,CONDITIONALS_NEGATION ./...
+gomutants --disable BRANCH_IF,BRANCH_ELSE ./...
 
 # Tune for memory-tight runners.
-gomutant --workers=2 ./...
+gomutants --workers=2 ./...
 
 # Give each go test more CPU lanes (paired with low --workers).
-gomutant --workers=1 --test-cpu=8 ./...
+gomutants --workers=1 --test-cpu=8 ./...
 
 # Custom output path; coverage scope; raised timeout.
-gomutant -o report.json --coverpkg ./pkg/mypackage/... \
+gomutants -o report.json --coverpkg ./pkg/mypackage/... \
          --timeout-coefficient 15 ./...
 ```
 
-`gomutant unleash ./...` is accepted unchanged for gremlins-compat scripts.
+`gomutants unleash ./...` is accepted unchanged for gremlins-compat scripts.
 
 ### CLI reference
 
@@ -127,7 +127,7 @@ gomutant -o report.json --coverpkg ./pkg/mypackage/... \
 | `--timeout-coefficient` | | 10 | Multiplier applied to baseline test time for the per-mutant timeout |
 | `--coverpkg` | | | Coverage package pattern (forwarded to `go test -coverpkg`) |
 | `--output` | `-o` | `mutation-report.json` | JSON report path |
-| `--config` | | `.gomutant.yml` | Config file path |
+| `--config` | | `.gomutants.yml` | Config file path |
 | `--disable` | | | Comma-separated mutator types to disable |
 | `--only` | | | Comma-separated mutator types to run (disables all others) |
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
@@ -137,7 +137,7 @@ gomutant -o report.json --coverpkg ./pkg/mypackage/... \
 
 ### Configuration
 
-`.gomutant.yml` in the project root:
+`.gomutants.yml` in the project root:
 
 ```yaml
 workers: 10
@@ -239,15 +239,15 @@ The `workers=5` wall-clock is shaped by three things layered on the engine:
 - `GOMAXPROCS` capping per child to avoid CPU oversubscription.
 - `(Pkg, File, Offset)` dispatch order to keep the build cache hot across consecutive mutants in the same package.
 
-`NumCPU/2` was the historical default before this benchmark; gomutant now defaults to `NumCPU` because the per-child `GOMAXPROCS` cap eliminates the oversubscription failure mode.
+`NumCPU/2` was the historical default before this benchmark; gomutants now defaults to `NumCPU` because the per-child `GOMAXPROCS` cap eliminates the oversubscription failure mode.
 
-### Self-efficacy (gomutant on itself)
+### Self-efficacy (gomutants on itself)
 
-gomutant kills **69.32%** of mutants in its own test suite (664 mutants across 8 packages, v0.1.0). Coverage is 97% — most lived mutants are real test gaps, not blind spots. Per-package breakdown in [`testdata/golden/self-efficacy.txt`](testdata/golden/self-efficacy.txt). The `internal/...` subset (excluding `main`) clears 88.03%, which is the gate this repo's CI enforces post-merge.
+gomutants kills **69.32%** of mutants in its own test suite (664 mutants across 8 packages, v0.1.0). Coverage is 97% — most lived mutants are real test gaps, not blind spots. Per-package breakdown in [`testdata/golden/self-efficacy.txt`](testdata/golden/self-efficacy.txt). The `internal/...` subset (excluding `main`) clears 88.03%, which is the gate this repo's CI enforces post-merge.
 
 ## Contributing
 
-Found a bug or have a feature request? [Open an issue](https://github.com/szhekpisov/gomutant/issues/new).
+Found a bug or have a feature request? [Open an issue](https://github.com/szhekpisov/gomutants/issues/new).
 
 ## License
 

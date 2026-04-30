@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Benchmark harness: compares gomutant vs gremlins on shared targets.
+# Benchmark harness: compares gomutants vs gremlins on shared targets.
 #
-# Requires: hyperfine, jq, gremlins on PATH, and a built ./bin/gomutant.
+# Requires: hyperfine, jq, gremlins on PATH, and a built ./bin/gomutants.
 # Run from the repo root:  bash benchmarks/run.sh
 
 set -euo pipefail
@@ -14,13 +14,13 @@ if [[ "${1:-}" == "--summarize-only" ]]; then
   SUMMARIZE_ONLY=1
 fi
 
-GOMUTANT="$REPO_ROOT/bin/gomutant"
+GOMUTANT="$REPO_ROOT/bin/gomutants"
 GREMLINS="${GREMLINS:-$(command -v gremlins || true)}"
 
 if (( SUMMARIZE_ONLY == 0 )); then
   # Always rebuild so a stale binary from an old branch can't silently mislead
   # the report.
-  echo "Building gomutant..."
+  echo "Building gomutants..."
   go build -o "$GOMUTANT" .
 fi
 
@@ -36,14 +36,14 @@ mkdir -p "$OUT_DIR"
 WORKERS=10
 RUNS=5
 # Set high enough that gremlins (which fork-execs `go test` per mutant on macOS)
-# actually completes its mutant tests instead of silently timing out. gomutant
+# actually completes its mutant tests instead of silently timing out. gomutants
 # is unaffected — it pre-builds and reuses test binaries.
 TIMEOUT_COEF=50
 
 # Gremlins' five default mutators; used for the "matched" run.
 MATCHED_MUTATORS="ARITHMETIC_BASE,CONDITIONALS_BOUNDARY,CONDITIONALS_NEGATION,INCREMENT_DECREMENT,INVERT_NEGATIVES"
 
-# gremlins auto-appends /... and accepts one path; gomutant takes explicit /...
+# gremlins auto-appends /... and accepts one path; gomutants takes explicit /...
 # Spec format: "label|description|gom_path|gre_path|gom_extra_flags"
 SCENARIOS=(
   "small-defaults|./testdata/simple/ with each tool's default mutators|./testdata/simple/|./testdata/simple|"
@@ -66,7 +66,7 @@ run_scenario() {
   echo "===== Scenario: $label ====="
   echo "$desc"
 
-  local gom_json="$OUT_DIR/${label}-gomutant.json"
+  local gom_json="$OUT_DIR/${label}-gomutants.json"
   local gre_json="$OUT_DIR/${label}-gremlins.json"
   local hf_json="$OUT_DIR/${label}-hyperfine.json"
 
@@ -80,18 +80,18 @@ run_scenario() {
 
   echo "Running hyperfine ($RUNS runs each)..."
   hyperfine --warmup 0 --runs "$RUNS" --export-json "$hf_json" \
-    -n gomutant "$gom_cmd" \
+    -n gomutants "$gom_cmd" \
     -n gremlins "$gre_cmd"
 }
 
 summarize_scenario() {
   local label="$1" desc="$2"
-  local gom_json="$OUT_DIR/${label}-gomutant.json"
+  local gom_json="$OUT_DIR/${label}-gomutants.json"
   local gre_json="$OUT_DIR/${label}-gremlins.json"
   local hf_json="$OUT_DIR/${label}-hyperfine.json"
 
   local gom_mean gre_mean
-  gom_mean=$(jq -r '.results[] | select(.command=="gomutant") | .mean' "$hf_json")
+  gom_mean=$(jq -r '.results[] | select(.command=="gomutants") | .mean' "$hf_json")
   gre_mean=$(jq -r '.results[] | select(.command=="gremlins") | .mean' "$hf_json")
 
   # Counts derived from the per-mutant array, so TIMED OUT shows up reliably
@@ -138,7 +138,7 @@ summarize_scenario() {
     if awk "BEGIN{exit !($gom_mean<$gre_mean)}"; then
       local r
       r=$(awk "BEGIN{printf \"%.2f\", $gre_mean / $gom_mean}")
-      winner_line="**Winner (wall-clock): gomutant — ${r}× faster**"
+      winner_line="**Winner (wall-clock): gomutants — ${r}× faster**"
     else
       local r
       r=$(awk "BEGIN{printf \"%.2f\", $gom_mean / $gre_mean}")
@@ -151,7 +151,7 @@ summarize_scenario() {
   cat <<EOF
 ### $label — $desc
 
-| Metric                  | gomutant | gremlins |
+| Metric                  | gomutants | gremlins |
 |-------------------------|---------:|---------:|
 | Wall-clock mean (s)     | $(printf "%.2f" "$gom_mean") | $(printf "%.2f" "$gre_mean") |
 | Mutants discovered      | $gom_total | $gre_total |
@@ -178,7 +178,7 @@ fi
 
 RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
 {
-  echo "# Benchmark Results: gomutant vs gremlins"
+  echo "# Benchmark Results: gomutants vs gremlins"
   echo
   # Date-only so reruns within the same day produce a stable diff.
   echo "_Generated: $(date -u +'%Y-%m-%d')_"
@@ -188,7 +188,7 @@ RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
   echo "| Host | $(uname -sm) |"
   echo "| CPU | $(cpu_info) |"
   echo "| Go | $(go version | awk '{print $3, $4}') |"
-  echo "| gomutant | $("$GOMUTANT" --version 2>&1 | head -1) |"
+  echo "| gomutants | $("$GOMUTANT" --version 2>&1 | head -1) |"
   echo "| gremlins | $("$GREMLINS" --version 2>&1 | head -1) |"
   echo "| workers | $WORKERS |"
   echo "| timeout-coefficient | $TIMEOUT_COEF |"
@@ -203,14 +203,14 @@ RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
   cat <<'EOF'
 ## Reading the results
 
-- **Wall-clock** is what the user waits for. On out-of-the-box defaults gomutant runs more mutators (10 vs 5), so it does more total work and finishes later despite per-mutant being faster.
-- **Time per tested mutant** normalizes for that — it's the metric that isolates engine speed from the size of the workload. gomutant wins this consistently because it pre-builds and reuses test binaries; gremlins shells out a fresh `go test` per mutant.
+- **Wall-clock** is what the user waits for. On out-of-the-box defaults gomutants runs more mutators (10 vs 5), so it does more total work and finishes later despite per-mutant being faster.
+- **Time per tested mutant** normalizes for that — it's the metric that isolates engine speed from the size of the workload. gomutants wins this consistently because it pre-builds and reuses test binaries; gremlins shells out a fresh `go test` per mutant.
 - The `mutator-matched` scenario removes the workload difference entirely. It's the cleanest engine-only comparison.
 
 ## Caveats
 
-- gomutant implements 10 mutator types vs gremlins' 5 default mutators, so "defaults" scenarios compare different workloads. The `mutator-matched` scenario restricts gomutant to gremlins' five default mutators for an apples-to-apples engine comparison.
-- gomutant's one-time setup (coverage collection, baseline measurement, per-test coverage map build) adds fixed overhead that only pays off when many mutants share that cost.
+- gomutants implements 10 mutator types vs gremlins' 5 default mutators, so "defaults" scenarios compare different workloads. The `mutator-matched` scenario restricts gomutants to gremlins' five default mutators for an apples-to-apples engine comparison.
+- gomutants's one-time setup (coverage collection, baseline measurement, per-test coverage map build) adds fixed overhead that only pays off when many mutants share that cost.
 - The harness uses `--timeout-coefficient 50`. With gremlins' default of 10, gremlins silently TIMED OUT on 18/19 mutants on this machine because each mutant run shells out a fresh `go test` (no cached test binary). The lower coefficient makes gremlins look fast but the kills are missing.
 - Results are sensitive to CPU load and thermal state. Re-run under quiet conditions for publishable numbers.
 EOF

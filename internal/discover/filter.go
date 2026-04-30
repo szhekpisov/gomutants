@@ -3,8 +3,8 @@ package discover
 import (
 	"path/filepath"
 
-	"github.com/szhekpisov/gomutant/internal/coverage"
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/coverage"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // FilterByCoverage marks mutants whose positions are not covered as StatusNotCovered.

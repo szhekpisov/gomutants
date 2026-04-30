@@ -3,7 +3,7 @@ package patch_test
 import (
 	"testing"
 
-	"github.com/szhekpisov/gomutant/internal/patch"
+	"github.com/szhekpisov/gomutants/internal/patch"
 )
 
 func TestApplySameLength(t *testing.T) {

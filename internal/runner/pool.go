@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/coverage"
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/coverage"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // ResultCallback is called for each completed mutant.
@@ -94,7 +94,7 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 	for i := range p.workers {
 		w, err := NewWorker(i, p.tmpDir, p.timeout, p.srcCache, p.projectDir, p.testMap)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "gomutant: NewWorker %d failed: %v\n", i, err)
+			fmt.Fprintf(os.Stderr, "gomutants: NewWorker %d failed: %v\n", i, err)
 			continue
 		}
 		w.childGOMAXPROCS = childGOMAXPROCSFor(p.workers)
@@ -116,7 +116,7 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 	// If no worker could be created, abort cleanly rather than deadlocking
 	// on a feeder blocked forever sending into `work` with no readers.
 	if workersStarted == 0 {
-		fmt.Fprintln(os.Stderr, "gomutant: no workers could be started; skipping mutation run")
+		fmt.Fprintln(os.Stderr, "gomutants: no workers could be started; skipping mutation run")
 		return mutants
 	}
 

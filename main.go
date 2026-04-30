@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/config"
-	"github.com/szhekpisov/gomutant/internal/coverage"
-	"github.com/szhekpisov/gomutant/internal/discover"
-	"github.com/szhekpisov/gomutant/internal/mutator"
-	"github.com/szhekpisov/gomutant/internal/report"
-	"github.com/szhekpisov/gomutant/internal/runner"
+	"github.com/szhekpisov/gomutants/internal/config"
+	"github.com/szhekpisov/gomutants/internal/coverage"
+	"github.com/szhekpisov/gomutants/internal/discover"
+	"github.com/szhekpisov/gomutants/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/report"
+	"github.com/szhekpisov/gomutants/internal/runner"
 )
 
 const version = "0.1.0"
@@ -28,7 +28,7 @@ func main() {
 	defer stop()
 
 	if err := run(ctx, os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "gomutant: %v\n", err)
+		fmt.Fprintf(os.Stderr, "gomutants: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -45,7 +45,7 @@ func run(ctx context.Context, args []string) error {
 		args = args[1:]
 	}
 
-	fs := flag.NewFlagSet("gomutant", flag.ContinueOnError)
+	fs := flag.NewFlagSet("gomutants", flag.ContinueOnError)
 
 	var (
 		workers            int
@@ -69,7 +69,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&coverPkg, "coverpkg", "", "coverage package pattern")
 	fs.StringVar(&output, "output", "", "JSON report path")
 	fs.StringVar(&output, "o", "", "JSON report path (shorthand)")
-	fs.StringVar(&configPath, "config", ".gomutant.yml", "config file path")
+	fs.StringVar(&configPath, "config", ".gomutants.yml", "config file path")
 	fs.StringVar(&disable, "disable", "", "comma-separated mutator types to disable")
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
@@ -87,7 +87,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if showVersion {
-		fmt.Fprintf(stdout, "gomutant v%s\n", version)
+		fmt.Fprintf(stdout, "gomutants v%s\n", version)
 		return nil
 	}
 
@@ -130,7 +130,7 @@ func run(ctx context.Context, args []string) error {
 	term.PhaseDone(fmt.Sprintf("done (%d packages)", len(pkgs)))
 
 	// 2. Create temp directory.
-	tmpDir, err := os.MkdirTemp("", "gomutant-*")
+	tmpDir, err := os.MkdirTemp("", "gomutants-*")
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
 	}

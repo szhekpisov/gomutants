@@ -19,7 +19,7 @@
 - [ ] `go vet ./...` and `golangci-lint run` clean
 - [ ] New/changed behavior covered by tests
 - [ ] Coverage threshold met (`./internal/...` ≥ 97.6%)
-- [ ] Mutation efficacy threshold met (`gomutant ./internal/...` ≥ 88.03%)
+- [ ] Mutation efficacy threshold met (`gomutants ./internal/...` ≥ 88.03%)
 - [ ] No new dependencies (or justified)
 
 ## Notes for reviewers

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // Report is the gremlins-compatible JSON report structure.

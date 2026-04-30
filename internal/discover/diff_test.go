@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 func TestParseUnifiedDiffSingleHunk(t *testing.T) {

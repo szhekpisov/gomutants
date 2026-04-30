@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/szhekpisov/gomutant/internal/mutator"
+	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
 // Terminal handles progress output to the terminal.
@@ -40,7 +40,7 @@ func NewTerminal(w io.Writer, total int, verbose bool) *Terminal {
 
 // Header prints the initial info banner.
 func (t *Terminal) Header(version string, target string, workers int, mutatorCount int) {
-	fmt.Fprintf(t.w, "gomutant v%s\n\n", version)
+	fmt.Fprintf(t.w, "gomutants v%s\n\n", version)
 	fmt.Fprintf(t.w, "Target: %s\n", target)
 	fmt.Fprintf(t.w, "Workers: %d | Mutations: %d types enabled\n\n", workers, mutatorCount)
 }

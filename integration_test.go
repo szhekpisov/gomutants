@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/szhekpisov/gomutant/internal/report"
+	"github.com/szhekpisov/gomutants/internal/report"
 )
 
 func TestIntegrationSimple(t *testing.T) {
