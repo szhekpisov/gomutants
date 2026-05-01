@@ -848,6 +848,30 @@ func TestRunResolvePackagesErrorMessage(t *testing.T) {
 	}
 }
 
+// TestRunGetwdError kills BRANCH_IF on the os.Getwd err return. Stub
+// getwdFunc to fail; the wrap "getting working directory" is the
+// distinguishing signature for this branch.
+func TestRunGetwdError(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	origGetwd := getwdFunc
+	defer func() { getwdFunc = origGetwd }()
+	getwdFunc = func() (string, error) {
+		return "", errors.New("inject getwd failure")
+	}
+
+	err := run(context.Background(), []string{"--only", "ARITHMETIC_BASE", "-w", "1", "-o", filepath.Join(dir, "r.json"), "testmod"})
+	if err == nil {
+		t.Fatal("expected error from Getwd stub")
+	}
+	if !strings.Contains(err.Error(), "getting working directory") {
+		t.Errorf("error should be wrapped 'getting working directory', got: %v — BRANCH_IF on the err-return strips the wrap", err)
+	}
+}
+
 // TestRunMkdirTempError kills BRANCH_IF on the os.MkdirTemp err return.
 // We swap mkdirTempFunc rather than munging TMPDIR because TMPDIR also
 // breaks `go list` (which runs before MkdirTemp), causing the test to

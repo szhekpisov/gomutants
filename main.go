@@ -69,6 +69,7 @@ var (
 	parseProfileFunc    = coverage.ParseFile
 	preReadFilesFunc    = discover.PreReadFiles
 	mkdirTempFunc       = os.MkdirTemp
+	getwdFunc           = os.Getwd
 )
 
 // phaseDurationDisplay rounds a duration to 100ms precision for display
@@ -158,7 +159,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	// Determine project directory (current working directory).
-	projectDir, err := os.Getwd()
+	projectDir, err := getwdFunc()
 	if err != nil {
 		return fmt.Errorf("getting working directory: %w", err)
 	}
