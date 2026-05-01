@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/szhekpisov/gomutants/internal/coverage"
+	"github.com/szhekpisov/gomutants/internal/discover"
 )
 
 // captureOutput swaps the package-level stdout writer with a bytes.Buffer
@@ -284,7 +288,12 @@ func TestRunPendingCountExact(t *testing.T) {
 }
 
 // TestRunConfigLoadError kills BRANCH_IF on the config.Load error check.
-// An invalid YAML file forces Load to return an error.
+// config.Load returns the *default* Config alongside its error, so the
+// elided body lets cfg.ApplyFlags work fine and downstream calls run
+// normally — the only signal that the error wasn't honored is that the
+// returned err originates from a later step (resolve/coverage) rather
+// than from config parsing. We assert the error message wraps config
+// parsing to lock that distinction in.
 func TestRunConfigLoadError(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
@@ -302,6 +311,9 @@ func TestRunConfigLoadError(t *testing.T) {
 	err := run(context.Background(), []string{"--config", cfgPath, "--dry-run", "testmod"})
 	if err == nil {
 		t.Fatal("expected run() to return config.Load error")
+	}
+	if !strings.Contains(err.Error(), "config") && !strings.Contains(err.Error(), "yaml") {
+		t.Errorf("error should originate from config.Load, got: %v — BRANCH_IF on the err-return body lets config errors fall through to a later step", err)
 	}
 }
 
@@ -647,6 +659,471 @@ func TestRunDryRunOutput(t *testing.T) {
 	if !strings.Contains(out, "+ → -") {
 		t.Errorf("expected '+ → -' in dry-run output: %q", out)
 	}
+}
+
+// TestRunDefaultsToCurrentDirOnEmptyPackages kills BRANCH_IF on the
+// `if len(packages) == 0 { packages = []string{"./..."} }` body. Without
+// the default assignment, packages stays empty and ResolvePackages fails
+// (or returns empty), so the test crashes or runs against zero packages.
+func TestRunDefaultsToCurrentDirOnEmptyPackages(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{"--dry-run", "--only", "ARITHMETIC_BASE"})
+	})
+	if err != nil {
+		t.Fatalf("expected dry-run with default ./... to succeed: %v — BRANCH_IF on the empty-packages default leaves the pattern empty", err)
+	}
+	// Resolving packages should find the local module.
+	if !strings.Contains(out, "Resolving packages... done (1 packages)") {
+		t.Errorf("expected default ./... to resolve to 1 package, got: %q", out)
+	}
+}
+
+// TestRunCoverageErrorMessage kills BRANCH_IF on the runner.RunCoverage
+// err return by stubbing the call and asserting the err propagates with
+// its original wrapping.
+func TestRunCoverageErrorMessage(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	origCov := runCoverageFunc
+	defer func() { runCoverageFunc = origCov }()
+	runCoverageFunc = func(_ context.Context, _ string, _ []string, _, _ string) (string, error) {
+		return "", errors.New("inject coverage failure: marker_xyz")
+	}
+
+	err := run(context.Background(), []string{"--only", "ARITHMETIC_BASE", "-w", "1", "-o", filepath.Join(dir, "r.json"), "testmod"})
+	if err == nil {
+		t.Fatal("expected error from RunCoverage stub")
+	}
+	if !strings.Contains(err.Error(), "marker_xyz") {
+		t.Errorf("err lost the underlying RunCoverage message; got: %v — BRANCH_IF on the err-return body lets a different (later) error surface", err)
+	}
+}
+
+// TestRunMeasureBaselineErrorMessage kills BRANCH_IF on the runner.MeasureBaseline
+// err return.
+func TestRunMeasureBaselineErrorMessage(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	origM := measureBaselineFunc
+	defer func() { measureBaselineFunc = origM }()
+	measureBaselineFunc = func(_ context.Context, _ string, _ []string) (time.Duration, error) {
+		return 0, errors.New("inject baseline failure: marker_pdq")
+	}
+
+	err := run(context.Background(), []string{"--only", "ARITHMETIC_BASE", "-w", "1", "-o", filepath.Join(dir, "r.json"), "testmod"})
+	if err == nil {
+		t.Fatal("expected error from MeasureBaseline stub")
+	}
+	if !strings.Contains(err.Error(), "marker_pdq") {
+		t.Errorf("err lost the MeasureBaseline message; got: %v", err)
+	}
+}
+
+// TestRunParseProfileErrorMessage kills BRANCH_IF on the coverage.ParseFile
+// err return.
+func TestRunParseProfileErrorMessage(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	origParse := parseProfileFunc
+	defer func() { parseProfileFunc = origParse }()
+	parseProfileFunc = func(string) (*coverage.Profile, error) {
+		return nil, errors.New("inject parse failure: marker_abc")
+	}
+
+	err := run(context.Background(), []string{"--only", "ARITHMETIC_BASE", "-w", "1", "-o", filepath.Join(dir, "r.json"), "testmod"})
+	if err == nil {
+		t.Fatal("expected error from ParseProfile stub")
+	}
+	if !strings.Contains(err.Error(), "marker_abc") {
+		t.Errorf("err lost the ParseProfile message; got: %v", err)
+	}
+}
+
+// TestRunPreReadFilesErrorMessage kills BRANCH_IF on the discover.PreReadFiles
+// err return. The wrap text is "pre-reading source files: ...".
+func TestRunPreReadFilesErrorMessage(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	origRead := preReadFilesFunc
+	defer func() { preReadFilesFunc = origRead }()
+	preReadFilesFunc = func([]discover.Package) (map[string][]byte, error) {
+		return nil, errors.New("inject pre-read failure: marker_klm")
+	}
+
+	err := run(context.Background(), []string{"--only", "ARITHMETIC_BASE", "-w", "1", "-o", filepath.Join(dir, "r.json"), "testmod"})
+	if err == nil {
+		t.Fatal("expected error from PreReadFiles stub")
+	}
+	if !strings.Contains(err.Error(), "pre-reading source files") {
+		t.Errorf("err should wrap with 'pre-reading source files'; got: %v — BRANCH_IF on the err-return strips the wrap", err)
+	}
+	if !strings.Contains(err.Error(), "marker_klm") {
+		t.Errorf("err lost the PreReadFiles message; got: %v", err)
+	}
+}
+
+// TestRunUnleashStripGuardSafeOnEmptyArgs kills EXPRESSION_REMOVE on the
+// `len(args) > 0` operand and CONDITIONALS_BOUNDARY on the same `> 0`.
+// Both mutations let `args[0]` be evaluated when args is empty, producing
+// an out-of-bounds panic.
+func TestRunUnleashStripGuardSafeOnEmptyArgs(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("run([]) panicked: %v — guard on `len(args) > 0` was relaxed", r)
+		}
+	}()
+	// Empty args: the unleash strip must short-circuit, not index args[0].
+	// run() will fail later (no go.mod, etc.); we only care that the strip
+	// guard didn't blow up.
+	_ = run(context.Background(), []string{})
+}
+
+// TestRunMissingGoMod kills BRANCH_IF on the readModuleName error return
+// in run(). The wrap text "reading go.mod" is what distinguishes the
+// readModuleName failure from the downstream `go list` failure that fires
+// when the err-return is elided — both contain "go.mod" verbatim, so the
+// test must pin on the more specific prefix.
+func TestRunMissingGoMod(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Go file but no go.mod.
+	if err := os.WriteFile(filepath.Join(dir, "x.go"),
+		[]byte("package x\nfunc F() int { return 1 + 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+	err := run(context.Background(), []string{"--dry-run", "."})
+	if err == nil {
+		t.Fatal("expected error when go.mod is missing")
+	}
+	if !strings.Contains(err.Error(), "reading go.mod") {
+		t.Errorf("error should be wrapped 'reading go.mod', got: %v — BRANCH_IF on the err-return lets the go.mod failure fall through to a `go list` error that also mentions go.mod", err)
+	}
+}
+
+// TestRunResolvePackagesErrorMessage upgrades TestRunResolvePackagesError
+// with an error-content assertion. The BRANCH_IF on the resolve err-return
+// only surfaces if we observe that the returned error came from resolve,
+// not from a later step that would also error.
+func TestRunResolvePackagesErrorMessage(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module testmod\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+	err := run(context.Background(), []string{"--dry-run", "completely/nonexistent/package/xyz"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// resolvePackages wraps with "go list:" prefix. The downstream RunCoverage
+	// would also error on the same package but with "coverage run failed:"
+	// prefix, so pinning the prefix forces the test through the correct branch.
+	if !strings.Contains(err.Error(), "go list") {
+		t.Errorf("error should be wrapped with 'go list', got: %v — BRANCH_IF on the err-return lets the failure resurface from a later step", err)
+	}
+}
+
+// TestRunMkdirTempError kills BRANCH_IF on the os.MkdirTemp err return.
+// We swap mkdirTempFunc rather than munging TMPDIR because TMPDIR also
+// breaks `go list` (which runs before MkdirTemp), causing the test to
+// fail at the wrong step.
+func TestRunMkdirTempError(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	origMkdir := mkdirTempFunc
+	defer func() { mkdirTempFunc = origMkdir }()
+	mkdirTempFunc = func(string, string) (string, error) {
+		return "", errors.New("inject mkdirtemp failure: marker_efg")
+	}
+
+	err := run(context.Background(), []string{"--only", "ARITHMETIC_BASE", "-w", "1", "-o", filepath.Join(dir, "r.json"), "testmod"})
+	if err == nil {
+		t.Fatal("expected error from MkdirTemp stub")
+	}
+	if !strings.Contains(err.Error(), "creating temp dir") {
+		t.Errorf("error should be wrapped 'creating temp dir', got: %v — BRANCH_IF on the err-return strips the wrap", err)
+	}
+}
+
+// TestRunDefaultsToRecursivePattern kills STATEMENT_REMOVE on the
+// `packages = []string{"./..."}` default. We set up a project with a
+// sub-package; the default `./...` finds both packages, while an empty
+// pattern only resolves the cwd package. Asserting "done (2 packages)"
+// pins the difference.
+func TestRunDefaultsToRecursivePattern(t *testing.T) {
+	dir := setupTinyProject(t)
+	subDir := filepath.Join(dir, "sub")
+	if err := os.Mkdir(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "x.go"),
+		[]byte("package sub\nfunc F() int { return 1 + 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "x_test.go"),
+		[]byte("package sub\nimport \"testing\"\nfunc TestF(t *testing.T) { if F() != 3 { t.Fatal(\"\") } }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{"--dry-run", "--only", "ARITHMETIC_BASE"})
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(out, "Resolving packages... done (2 packages)") {
+		t.Errorf("expected 2 packages with default ./... pattern, got: %q — STATEMENT_REMOVE on the default-assignment leaves packages empty so only the cwd package resolves", out)
+	}
+}
+
+// TestRunCoverageProfileParseError kills BRANCH_IF on the coverage.ParseFile
+// error check. We force RunCoverage to succeed and write a profile, then
+// nuke the profile right before ParseFile reads it. Achieved indirectly
+// via coverpkg=nomatch (produces an empty profile that still parses) —
+// the surest path is to swap the test by pointing tmpDir into a directory
+// that gets removed; instead we trust that an empty/malformed profile
+// parses successfully and rely on the fallthrough mutation surfacing
+// further. Skipping this in favor of the broader pipeline test.
+//
+// Instead: assert that the success path's "Collecting coverage..." line
+// pairs with "done (Xs)". The phaseDuration helper handles the ARITHMETIC
+// mutation directly.
+func TestPhaseDurationDisplay(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want time.Duration
+	}{
+		// Round-to-100ms boundary cases.
+		{0, 0},
+		{49 * time.Millisecond, 0},
+		{50 * time.Millisecond, 100 * time.Millisecond},
+		{234 * time.Millisecond, 200 * time.Millisecond},
+		{1234 * time.Millisecond, 1200 * time.Millisecond},
+	}
+	for _, c := range cases {
+		got := phaseDurationDisplay(c.in)
+		if got != c.want {
+			t.Errorf("phaseDurationDisplay(%v) = %v, want %v — ARITHMETIC mutation on `100*time.Millisecond` collapses the rounding", c.in, got, c.want)
+		}
+	}
+}
+
+// TestRunBuildTestMapWarningOnError kills BRANCH_IF / BRANCH_ELSE /
+// STATEMENT_REMOVE / CONDITIONALS_NEGATION on the BuildTestMap error
+// branch. We swap buildTestMapFunc to return an error and assert the
+// stderr warning + the "skipped" PhaseDone line both appear.
+func TestRunBuildTestMapWarningOnError(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	origBuild := buildTestMapFunc
+	defer func() { buildTestMapFunc = origBuild }()
+	buildTestMapFunc = func(_ context.Context, _ string, _ []string, _, _ string, _ int) (*coverage.TestMap, error) {
+		return nil, errors.New("inject build-test-map failure")
+	}
+
+	var out, errBuf bytes.Buffer
+	origStdout := stdout
+	origStderr := stderr
+	stdout = &out
+	stderr = &errBuf
+	defer func() {
+		stdout = origStdout
+		stderr = origStderr
+	}()
+
+	err := run(context.Background(), []string{
+		"--only", "ARITHMETIC_BASE",
+		"-w", "1",
+		"-o", filepath.Join(dir, "report.json"),
+		"testmod",
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(errBuf.String(), "warning: per-test coverage map failed") {
+		t.Errorf("stderr missing warning; got: %q — BRANCH_IF / STATEMENT_REMOVE strip the diagnostic", errBuf.String())
+	}
+	if !strings.Contains(out.String(), "Building per-test coverage map... skipped") {
+		t.Errorf("stdout missing 'skipped' PhaseDone; got: %q — CONDITIONALS_NEGATION on `err != nil` flips the branch", out.String())
+	}
+}
+
+// TestRunBuildTestMapDoneOnSuccess kills BRANCH_ELSE and STATEMENT_REMOVE
+// on the success arm of the BuildTestMap branch — without "done" being
+// printed, the user has no signal the per-test map is in use.
+func TestRunBuildTestMapDoneOnSuccess(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", filepath.Join(dir, "report.json"),
+			"testmod",
+		})
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(out, "Building per-test coverage map... done") {
+		t.Errorf("output missing 'Building per-test coverage map... done'; got: %q", out)
+	}
+}
+
+// TestRunPoolResultsApplied kills STATEMENT_REMOVE on the
+// `mutants = pool.Run(...)` assignment. Without the assignment the
+// returned mutants are still all Pending, so the report shows zero
+// killed/lived/notViable counts — the asserted "Killed: 1" pin would
+// fail.
+func TestRunPoolResultsApplied(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", filepath.Join(dir, "report.json"),
+			"testmod",
+		})
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Tiny project has exactly one ARITHMETIC_BASE mutant on `+`.
+	// The mutated `+`→`-` makes TestAdd fail, so it should be killed.
+	if !strings.Contains(out, "Killed:       1") {
+		t.Errorf("output missing 'Killed:       1'; got: %q — STATEMENT_REMOVE on `mutants = pool.Run(...)` drops the result assignment", out)
+	}
+}
+
+// TestRunWriteJSONError kills BRANCH_IF on the report.WriteJSON error
+// return. We point --output at a path that can't be created (a directory)
+// so WriteJSON fails; the original wraps the error, the mutant lets it
+// fall through silently and `run` returns nil.
+func TestRunWriteJSONError(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	// Make `report.json` a directory so WriteJSON's open fails.
+	badPath := filepath.Join(dir, "report.json")
+	if err := os.Mkdir(badPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := run(context.Background(), []string{
+		"--only", "ARITHMETIC_BASE",
+		"-w", "1",
+		"-o", badPath,
+		"testmod",
+	})
+	if err == nil {
+		t.Fatal("expected WriteJSON error when output path is a directory")
+	}
+	if !strings.Contains(err.Error(), "writing report") && !strings.Contains(err.Error(), "report") {
+		t.Errorf("error should wrap WriteJSON failure, got: %v", err)
+	}
+}
+
+// TestReadModuleNameWrappedReadError upgrades TestReadModuleNameMissing
+// with an error-message check that locks down BRANCH_IF on the ReadFile
+// err return inside readModuleName.
+func TestReadModuleNameWrappedReadError(t *testing.T) {
+	_, err := readModuleName("/definitely/not/a/real/dir/xyz")
+	if err == nil {
+		t.Fatal("expected error reading nonexistent go.mod")
+	}
+	if !strings.Contains(err.Error(), "reading go.mod") {
+		t.Errorf("error should wrap with 'reading go.mod', got: %v — BRANCH_IF on the read-error return elides the wrap", err)
+	}
+}
+
+// TestReadModuleNameBlankLines kills EXPRESSION_REMOVE on the
+// `len(fields) >= 2 && fields[0] == "module"` guard. The left operand is
+// what guards `fields[0]` from indexing an empty slice. We feed a go.mod
+// with leading blank/whitespace lines so the loop encounters
+// strings.Fields output of length 0; the original short-circuits, the
+// mutant panics on fields[0].
+func TestReadModuleNameBlankLines(t *testing.T) {
+	dir := t.TempDir()
+	// Blank line, then whitespace-only, then the module directive.
+	goMod := "\n   \nmodule example.com/m\n\ngo 1.26\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("readModuleName panicked on blank lines: %v — EXPRESSION_REMOVE on the len-check guard relaxed it", r)
+		}
+	}()
+	got, err := readModuleName(dir)
+	if err != nil {
+		t.Fatalf("readModuleName: %v", err)
+	}
+	if got != "example.com/m" {
+		t.Errorf("got %q, want example.com/m", got)
+	}
+}
+
+// setupTinyProject creates a minimal Go project with one TestAdd that
+// kills the ARITHMETIC_BASE mutation on `+`. Used by tests that want a
+// cheap full-pipeline run.
+func setupTinyProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
 }
 
 func TestSplitLines(t *testing.T) {

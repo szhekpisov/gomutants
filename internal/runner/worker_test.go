@@ -568,7 +568,7 @@ func TestWorkerTestWriteFailures(t *testing.T) {
 }
 
 // TestShortFlagFromEnv kills CONDITIONALS_NEGATION on the
-// `os.Getenv("GOMUTANT_TEST_SHORT") == "1"` check.
+// `os.Getenv("GOMUTANTS_TEST_SHORT") == "1"` check.
 func TestShortFlagFromEnv(t *testing.T) {
 	for _, tt := range []struct {
 		env  string
@@ -580,7 +580,7 @@ func TestShortFlagFromEnv(t *testing.T) {
 		{"1", true},
 	} {
 		t.Run("env="+tt.env, func(t *testing.T) {
-			t.Setenv("GOMUTANT_TEST_SHORT", tt.env)
+			t.Setenv("GOMUTANTS_TEST_SHORT", tt.env)
 			if got := shortFlagFromEnv(); got != tt.want {
 				t.Errorf("env=%q: got %v, want %v — CONDITIONALS_NEGATION on `==` flips this", tt.env, got, tt.want)
 			}

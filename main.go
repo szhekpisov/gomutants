@@ -55,6 +55,31 @@ var stdout io.Writer = os.Stdout
 // stderr is the writer for warnings. Tests swap this to capture output.
 var stderr io.Writer = os.Stderr
 
+// buildTestMapFunc is the per-test coverage map builder. Swappable so
+// tests can drive the warning/skip path without engineering a real
+// `go test -list` failure.
+var buildTestMapFunc = coverage.BuildTestMap
+
+// runCoverageFunc / measureBaselineFunc / parseProfileFunc / preReadFilesFunc
+// indirect through swappable variables so tests can selectively fail
+// individual pipeline steps and lock down each err-return wrap.
+var (
+	runCoverageFunc     = runner.RunCoverage
+	measureBaselineFunc = runner.MeasureBaseline
+	parseProfileFunc    = coverage.ParseFile
+	preReadFilesFunc    = discover.PreReadFiles
+	mkdirTempFunc       = os.MkdirTemp
+)
+
+// phaseDurationDisplay rounds a duration to 100ms precision for display
+// in phase-done lines. Extracted so the rounding constant is testable
+// without parsing fmt output: ARITHMETIC mutations on `100*time.Millisecond`
+// (e.g. `*` → `/`, which collapses to 0 and disables rounding) surface as
+// observable changes in the returned Duration.
+func phaseDurationDisplay(d time.Duration) time.Duration {
+	return d.Round(100 * time.Millisecond)
+}
+
 func run(ctx context.Context, args []string) error {
 	// Strip "unleash" for gremlins CLI compat.
 	if len(args) > 0 && args[0] == "unleash" {
@@ -160,7 +185,7 @@ func run(ctx context.Context, args []string) error {
 	term.PhaseDone(fmt.Sprintf("done (%d packages)", len(pkgs)))
 
 	// 2. Create temp directory.
-	tmpDir, err := os.MkdirTemp("", "gomutants-*")
+	tmpDir, err := mkdirTempFunc("", "gomutants-*")
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
 	}
@@ -169,24 +194,24 @@ func run(ctx context.Context, args []string) error {
 	// 3. Collect coverage.
 	term.Phase("Collecting coverage...")
 	coverStart := time.Now()
-	profilePath, err := runner.RunCoverage(ctx, projectDir, packages, cfg.CoverPkg, tmpDir)
+	profilePath, err := runCoverageFunc(ctx, projectDir, packages, cfg.CoverPkg, tmpDir)
 	if err != nil {
 		return err
 	}
-	profile, err := coverage.ParseFile(profilePath)
+	profile, err := parseProfileFunc(profilePath)
 	if err != nil {
 		return err
 	}
-	term.PhaseDone(fmt.Sprintf("done (%s)", time.Since(coverStart).Round(100*time.Millisecond)))
+	term.PhaseDone(fmt.Sprintf("done (%s)", phaseDurationDisplay(time.Since(coverStart))))
 
 	// 4. Measure baseline test duration.
 	term.Phase("Measuring baseline...")
-	baseline, err := runner.MeasureBaseline(ctx, projectDir, packages)
+	baseline, err := measureBaselineFunc(ctx, projectDir, packages)
 	if err != nil {
 		return err
 	}
 	testTimeout := baseline * time.Duration(cfg.TimeoutCoefficient)
-	term.PhaseDone(fmt.Sprintf("done (%s, timeout: %s)", baseline.Round(100*time.Millisecond), testTimeout.Round(time.Second)))
+	term.PhaseDone(fmt.Sprintf("done (%s, timeout: %s)", phaseDurationDisplay(baseline), testTimeout.Round(time.Second)))
 
 	// 5. Discover mutants.
 	term.Phase("Discovering mutants...")
@@ -227,14 +252,14 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	// 6. Pre-read source files.
-	srcCache, err := discover.PreReadFiles(pkgs)
+	srcCache, err := preReadFilesFunc(pkgs)
 	if err != nil {
 		return fmt.Errorf("pre-reading source files: %w", err)
 	}
 
 	// 7. Build per-test coverage map.
 	term.Phase("Building per-test coverage map...")
-	testMap, err := coverage.BuildTestMap(ctx, projectDir, packages, cfg.CoverPkg, tmpDir, cfg.Workers)
+	testMap, err := buildTestMapFunc(ctx, projectDir, packages, cfg.CoverPkg, tmpDir, cfg.Workers)
 	if err != nil {
 		// Non-fatal: fall back to running all tests per mutant.
 		fmt.Fprintf(stderr, "warning: per-test coverage map failed: %v\n", err)
@@ -247,7 +272,11 @@ func run(ctx context.Context, args []string) error {
 	// 8. Run mutation testing.
 	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose)
 	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, testTimeout, tmpDir, srcCache, projectDir, testMap)
-	mutants = pool.Run(ctx, mutants, term2.OnResult)
+	// pool.Run modifies the mutants slice in place; the previous assignment
+	// `mutants = pool.Run(...)` was a no-op that surfaced as an equivalent
+	// STATEMENT_REMOVE mutant. As an ExprStmt the call is the only thing
+	// driving status updates, so STATEMENT_REMOVE here visibly drops them.
+	pool.Run(ctx, mutants, term2.OnResult)
 
 	// 9. Generate report.
 	totalElapsed := time.Since(coverStart)
