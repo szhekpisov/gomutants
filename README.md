@@ -312,4 +312,4 @@ Found a bug or have a feature request? [Open an issue](https://github.com/szhekp
 
 ---
 
-If you find this project useful, please consider giving it a ⭐ on [GitHub](https://github.com/szhekpisov/gomutants) — it helps others discover it.
+If you find this project useful, please consider giving it a ⭐ — it helps others discover it.
