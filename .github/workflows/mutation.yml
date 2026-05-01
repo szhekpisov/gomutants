@@ -48,7 +48,7 @@ jobs:
       # exits 10 on any LIVED mutant on changed lines.
       - name: Run mutation testing (PR, changed-since)
         if: github.event_name == 'pull_request'
-        uses: szhekpisov/gomutants@main
+        uses: szhekpisov/gomutants@15315f9b020ec723e5f4495224e48712bcb939c1 # main
         with:
           args: -workers=2 -verbose --changed-since "origin/${{ github.base_ref }}" ./...
 
@@ -57,7 +57,7 @@ jobs:
       # dashboard report consumed by the upload step below.
       - name: Run mutation testing (full tree, post-merge)
         if: github.event_name == 'push'
-        uses: szhekpisov/gomutants@main
+        uses: szhekpisov/gomutants@15315f9b020ec723e5f4495224e48712bcb939c1 # main
         with:
           args: -workers=2 -verbose --stryker-output stryker-report.json ./...
 
