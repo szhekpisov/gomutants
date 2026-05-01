@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 
 	"github.com/szhekpisov/gomutants/internal/mutator"
@@ -708,6 +709,35 @@ func f(x int) int {
 		if c.Original == c.Replacement {
 			t.Errorf("found phantom mutation (original==replacement): %q at offset %d", c.Original, c.StartOffset)
 		}
+	}
+}
+
+// TestStatementRemoveMultiLhsNotSkipped kills BRANCH_IF on the
+// `if len(lhs) != 1 { return false }` guard inside isBlankLhs. Without
+// the early return, a multi-LHS assignment whose first slot happens to
+// be `_` (e.g. `_, b = c, d`) would also be classified as "blank LHS"
+// and the candidate would be skipped — even though the assignment as a
+// whole has real side effects on `b` and is a legitimate STATEMENT_REMOVE
+// target.
+func TestStatementRemoveMultiLhsNotSkipped(t *testing.T) {
+	src := `package p
+func f() int {
+	var b int
+	_, b = 1, 2
+	return b
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.StatementRemove)
+	candidates := m.Discover(fset, file, srcBytes)
+	found := false
+	for _, c := range candidates {
+		if strings.HasPrefix(c.Original, "_, b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a candidate for `_, b = 1, 2`; BRANCH_IF on isBlankLhs's len-check elides the early-return and lhs[0]=`_` makes the multi-LHS look blank")
 	}
 }
 
