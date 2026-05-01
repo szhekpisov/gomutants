@@ -125,10 +125,10 @@ gomutants -o report.json --coverpkg ./pkg/mypackage/... \
 Surface surviving mutants as inline annotations on the PR diff:
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
   with:
     fetch-depth: 0  # required so --changed-since can reach the base ref
-- uses: szhekpisov/gomutants@main
+- uses: szhekpisov/gomutants@v0.1.0
   with:
     args: --changed-since origin/${{ github.base_ref }} ./...
 ```
@@ -138,8 +138,8 @@ Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...
 | Input | Default | Description |
 |---|---|---|
 | `args` | _required_ | Arguments forwarded to `gomutants`. The action appends `--annotations=github` automatically. |
-| `version` | `latest` | gomutants version to install. Skipped if `gomutants` is already on PATH. |
-| `fail-on-lived` | `true` | Fail the step if any LIVED mutant is reported. |
+| `version` | `latest` | gomutants version to install. With `version: latest` the action keeps a pre-installed binary on PATH; with any pinned tag/branch/SHA it always re-installs so what runs matches what was requested. |
+| `fail-on-lived` | `true` | Fail the step if any LIVED mutant is reported. Implemented via gomutants's own `--exit-on-lived` flag, so the gating is independent of the report path. |
 | `working-directory` | `.` | Directory containing `go.mod`. |
 
 **Security:** the `args` input is splatted into a shell command, and `version` is interpolated into `go install …@<version>`. Don't pipe untrusted strings (PR titles, branch names) into either. For supply-chain hardening, pin `version` to a specific commit SHA rather than `latest`.
@@ -182,6 +182,7 @@ Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutation
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
 | `--annotations` | | | Emit annotations for LIVED mutants. Supported: `github` (workflow-command warnings on stdout). |
 | `--stryker-output` | | | Also write a [Stryker mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) report at this path (for the HTML viewer and Stryker Dashboard). |
+| `--exit-on-lived` | | false | Exit non-zero if any mutant survives. Reports are still written first. |
 | `--dry-run` | | false | List mutants without testing |
 | `--verbose` | `-v` | false | Stream each mutant as tested |
 | `--version` | | | Print version and exit |

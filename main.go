@@ -60,6 +60,7 @@ func run(ctx context.Context, args []string) error {
 		annotations        string
 		strykerOutput      string
 		dryRun             bool
+		exitOnLived        bool
 		verbose            bool
 		showVersion        bool
 	)
@@ -77,6 +78,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
 	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
 	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
+	fs.BoolVar(&exitOnLived, "exit-on-lived", false, "exit non-zero if any mutant survives (LIVED); reports are still written first")
 	fs.BoolVar(&dryRun, "dry-run", false, "list mutants without testing")
 	fs.BoolVar(&verbose, "verbose", false, "show each mutant as tested")
 	fs.BoolVar(&verbose, "v", false, "verbose (shorthand)")
@@ -250,6 +252,10 @@ func run(ctx context.Context, args []string) error {
 		if err := report.WriteGitHubAnnotations(stdout, r); err != nil {
 			return fmt.Errorf("writing annotations: %w", err)
 		}
+	}
+
+	if exitOnLived && r.MutantsLived > 0 {
+		return fmt.Errorf("%d surviving mutant(s)", r.MutantsLived)
 	}
 	return nil
 }

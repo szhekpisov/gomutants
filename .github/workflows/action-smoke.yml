@@ -28,10 +28,21 @@ jobs:
       - name: Install gomutants from source
         run: go install ./...
 
-      - name: Run action against this repo
+      # Wiring sanity: --dry-run finishes in seconds and validates the
+      # action's flag plumbing without spawning per-mutant test runs.
+      - name: Smoke (dry-run)
         uses: ./
         with:
-          # --dry-run skips test execution so the smoke job stays fast
-          # (<30s) and produces a deterministic report.
           args: --dry-run ./internal/report/...
+          fail-on-lived: "false"
+
+      # End-to-end: a real run against a small target so the annotation
+      # pipeline (--annotations=github + WriteGitHubAnnotations) is
+      # actually exercised. fail-on-lived stays false so the job is
+      # green regardless of mutation score — we only assert the action
+      # wires up correctly, not that the codebase is mutation-clean.
+      - name: Smoke (live run)
+        uses: ./
+        with:
+          args: --only ARITHMETIC_BASE -w 2 ./internal/report/...
           fail-on-lived: "false"

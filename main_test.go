@@ -423,6 +423,89 @@ func TestRunFullPipeline(t *testing.T) {
 	}
 }
 
+// TestRunExitOnLived asserts that --exit-on-lived turns a surviving mutant
+// into a non-zero exit (a returned error), and that the report is still
+// written before that error fires. The "tests" here call the SUT but never
+// assert anything, so any ARITHMETIC_BASE mutation lives.
+func TestRunExitOnLived(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\t_ = Add(1, 2)\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	outPath := filepath.Join(dir, "report.json")
+	_, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", outPath,
+			"--exit-on-lived",
+			"testmod",
+		})
+	})
+	if err == nil {
+		t.Fatal("expected --exit-on-lived to return an error when LIVED > 0")
+	}
+	if !strings.Contains(err.Error(), "surviving mutant") {
+		t.Errorf("error should mention surviving mutants, got: %v", err)
+	}
+	// Report must be written even when the gate fires — the action depends
+	// on the JSON/Stryker outputs being available for upload after a fail.
+	if _, statErr := os.Stat(outPath); statErr != nil {
+		t.Errorf("report should be written before the gate fires: %v", statErr)
+	}
+}
+
+// TestRunExitOnLivedSilentWhenClean is the inverse: with no LIVED mutants
+// (test asserts the result), --exit-on-lived must NOT return an error.
+// Pins the `r.MutantsLived > 0` guard so a mutation that flips the
+// comparison or drops the guard is observable.
+func TestRunExitOnLivedSilentWhenClean(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n\tif Add(5, 7) != 12 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	_, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", filepath.Join(dir, "report.json"),
+			"--exit-on-lived",
+			"testmod",
+		})
+	})
+	if err != nil {
+		t.Fatalf("--exit-on-lived must not error when LIVED == 0: %v", err)
+	}
+}
+
 // TestRunDryRunOutput asserts the exact dry-run line format, which kills
 // STATEMENT_REMOVE on the dry-run Printf.
 func TestRunDryRunOutput(t *testing.T) {

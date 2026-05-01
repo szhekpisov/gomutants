@@ -9,13 +9,12 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
-var livedStatus = mutator.StatusLived.String()
-
 // WriteGitHubAnnotations writes one ::warning:: workflow command per LIVED
 // mutant in r to w. The format is consumed by GitHub Actions and surfaces
 // as inline annotations on the PR diff. See:
 // https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
 func WriteGitHubAnnotations(w io.Writer, r *Report) error {
+	livedStatus := mutator.StatusLived.String()
 	bw := bufio.NewWriter(w)
 	for _, f := range r.Files {
 		for _, m := range f.Mutations {
