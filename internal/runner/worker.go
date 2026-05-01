@@ -251,12 +251,14 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 
 	var memKilled atomic.Bool
 	monitorDone := make(chan struct{})
+	monitorExited := make(chan struct{})
 	go func() {
 		// 1s cadence: 5 workers × 1 poll/s = 5 ps/sec aggregate (was 25 at
 		// 200ms). The 2 GiB cap is loose enough that a 800 ms-later kill is
 		// still safe — even on M-series RAM bandwidth a runaway alloc takes
 		// ≥1s to add 2 GiB resident. testTimeout (10× baseline) is the
 		// outer backstop.
+		defer close(monitorExited)
 		t := time.NewTicker(monitorPollInterval)
 		defer t.Stop()
 		for {
@@ -275,6 +277,11 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 
 	err = cmd.Wait()
 	close(monitorDone)
+	// Wait for the monitor goroutine to fully exit before returning. Without
+	// this barrier its still-pending reads of psOutputFunc / syscallKillFunc
+	// race with the next test's swap of those package-level vars (caught by
+	// `go test -race`).
+	<-monitorExited
 
 	// Parent-context cancel (Ctrl-C, upstream deadline) propagates via
 	// exec.CommandContext as a non-nil cmd.Wait error that is neither
