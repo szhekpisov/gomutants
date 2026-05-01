@@ -588,8 +588,8 @@ func TestBuildTestArgsPackageArgLast(t *testing.T) {
 		t.Errorf("last arg = %q, want package import path; full args: %v",
 			args[len(args)-1], args)
 	}
-	// Also: -timeout, -overlay, -failfast, -count=1 must all be present.
-	for _, want := range []string{"-failfast", "-count=1"} {
+	// Also: -timeout, -overlay, -failfast, -count=1, -vet=off must all be present.
+	for _, want := range []string{"-failfast", "-count=1", "-vet=off"} {
 		if !containsStr(args, want) {
 			t.Errorf("args missing %q: %v", want, args)
 		}
