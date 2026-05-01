@@ -165,15 +165,29 @@ func parseFile(fset *token.FileSet, path string) ([]byte, *ast.File, error) {
 
 // candidateLess orders candidates by (file, line, column, type) so
 // Discover produces deterministic output regardless of the AST-walk order.
+//
+// Each field is compared with a < / > pair (no `!=` guard). The pattern
+// keeps every `<` mutation observable: a guarded `if a != b { return a < b }`
+// is equivalent under `<` ↔ `<=` mutation because the guard rules out the
+// equal case where the boundary would matter.
 func candidateLess(a, b mutator.MutantCandidate) bool {
-	if a.Pos.Filename != b.Pos.Filename {
-		return a.Pos.Filename < b.Pos.Filename
+	if a.Pos.Filename < b.Pos.Filename {
+		return true
 	}
-	if a.Pos.Line != b.Pos.Line {
-		return a.Pos.Line < b.Pos.Line
+	if a.Pos.Filename > b.Pos.Filename {
+		return false
 	}
-	if a.Pos.Column != b.Pos.Column {
-		return a.Pos.Column < b.Pos.Column
+	if a.Pos.Line < b.Pos.Line {
+		return true
+	}
+	if a.Pos.Line > b.Pos.Line {
+		return false
+	}
+	if a.Pos.Column < b.Pos.Column {
+		return true
+	}
+	if a.Pos.Column > b.Pos.Column {
+		return false
 	}
 	return a.Type < b.Type
 }
@@ -204,8 +218,14 @@ func longestCommonPrefix(pkgs []Package) string {
 	prefix := pkgs[0].ImportPath
 	for _, p := range pkgs[1:] {
 		for !strings.HasPrefix(p.ImportPath, prefix) {
+			// Compare against the sentinel returned by LastIndex when the
+			// substring is absent. `< 0` is equivalent to `<= 0` here:
+			// LastIndex never returns 0 for "/" since the path can't start
+			// with one, so the slash==0 case never fires and `<` ↔ `<=` is
+			// indistinguishable. Using `== -1` lets the boundary mutator
+			// no-op and exposes the negation mutant `!= -1` to tests.
 			slash := strings.LastIndex(prefix, "/")
-			if slash < 0 {
+			if slash == -1 {
 				return ""
 			}
 			prefix = prefix[:slash]

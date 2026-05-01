@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 
 	"github.com/szhekpisov/gomutants/internal/mutator"
@@ -688,6 +689,58 @@ func f() int {
 	}
 }
 
+// TestStatementRemoveSkipsBlankLhs covers the early-return added so that
+// "_ = expr" doesn't produce a candidate whose replacement is identical to
+// the original (a phantom LIVED mutant). Without the guard, both expressions
+// inside this function would surface as STATEMENT_REMOVE candidates.
+func TestStatementRemoveSkipsBlankLhs(t *testing.T) {
+	src := `package p
+func f(x int) int {
+	_ = x
+	_ = 1 + 2
+	y := x
+	return y
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.StatementRemove)
+	candidates := m.Discover(fset, file, srcBytes)
+	for _, c := range candidates {
+		if c.Original == c.Replacement {
+			t.Errorf("found phantom mutation (original==replacement): %q at offset %d", c.Original, c.StartOffset)
+		}
+	}
+}
+
+// TestStatementRemoveMultiLhsNotSkipped kills BRANCH_IF on the
+// `if len(lhs) != 1 { return false }` guard inside isBlankLhs. Without
+// the early return, a multi-LHS assignment whose first slot happens to
+// be `_` (e.g. `_, b = c, d`) would also be classified as "blank LHS"
+// and the candidate would be skipped — even though the assignment as a
+// whole has real side effects on `b` and is a legitimate STATEMENT_REMOVE
+// target.
+func TestStatementRemoveMultiLhsNotSkipped(t *testing.T) {
+	src := `package p
+func f() int {
+	var b int
+	_, b = 1, 2
+	return b
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.StatementRemove)
+	candidates := m.Discover(fset, file, srcBytes)
+	found := false
+	for _, c := range candidates {
+		if strings.HasPrefix(c.Original, "_, b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a candidate for `_, b = 1, 2`; BRANCH_IF on isBlankLhs's len-check elides the early-return and lhs[0]=`_` makes the multi-LHS look blank")
+	}
+}
+
 func TestStatementRemoveSkipsShortDecl(t *testing.T) {
 	src := `package p
 func f() {
@@ -699,9 +752,10 @@ func f() {
 	m := findMutator(t, mutator.StatementRemove)
 	candidates := m.Discover(fset, file, srcBytes)
 
-	// ":=" is skipped, "_ = x" is an AssignStmt with Tok=ASSIGN.
-	if len(candidates) != 1 {
-		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	// ":=" is skipped (short decl), "_ = x" is also skipped (blank LHS
+	// would yield a phantom mutation identical to the original).
+	if len(candidates) != 0 {
+		t.Fatalf("expected 0 candidates, got %d", len(candidates))
 	}
 }
 
@@ -856,6 +910,83 @@ func f(a, b int) int { return a + b }
 	m := findMutator(t, mutator.ExpressionRemove)
 	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
 		t.Errorf("ExpressionRemove: arithmetic ops should produce 0 candidates, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestInvertLogicalSkipsNonLogical kills BRANCH_IF on the `if !ok { return true }`
+// guard at invert_logical.go:25. Without it, any binary expression (arithmetic,
+// comparison, bitwise) would produce a candidate with a zero-value (ILLEGAL)
+// replacement token.
+func TestInvertLogicalSkipsNonLogical(t *testing.T) {
+	src := `package p
+func f(a, b int) int {
+	_ = a + b
+	_ = a == b
+	_ = a & b
+	return a - b
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertLogical)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("InvertLogical: non-logical ops should produce 0 candidates, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestInvertBitwiseAssignmentsSkipsNonBitwise kills BRANCH_IF on the
+// `if !ok { return true }` guard at invert_bitwise_assignments.go:29. Without
+// it, plain `=` and arithmetic compound assigns would produce candidates with
+// a zero-value replacement token.
+func TestInvertBitwiseAssignmentsSkipsNonBitwise(t *testing.T) {
+	src := `package p
+func f(a, b int) {
+	a = b
+	a += b
+	a -= b
+	a *= b
+	a /= b
+	a %= b
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertBitwiseAssignments)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("InvertBitwiseAssignments: non-bitwise assigns should produce 0 candidates, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestStatementRemoveEmptyRhs kills BRANCH_IF on the `if len(stmt.Rhs) == 0`
+// guard at statement_remove.go:24. The guard protects against parser-recovered
+// AssignStmts with empty Rhs; without it, `stmt.Rhs[0].Pos()` panics. Synthetic
+// AST construction is used because Go's parser recovery normally yields
+// Rhs=[BadExpr] rather than an empty slice.
+func TestStatementRemoveEmptyRhs(t *testing.T) {
+	file := &ast.File{
+		Name: ast.NewIdent("p"),
+		Decls: []ast.Decl{
+			&ast.FuncDecl{
+				Name: ast.NewIdent("f"),
+				Type: &ast.FuncType{Params: &ast.FieldList{}},
+				Body: &ast.BlockStmt{
+					List: []ast.Stmt{
+						&ast.AssignStmt{
+							Lhs: []ast.Expr{ast.NewIdent("x")},
+							Tok: token.ASSIGN,
+						},
+					},
+				},
+			},
+		},
+	}
+	fset := token.NewFileSet()
+	m := findMutator(t, mutator.StatementRemove)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("StatementRemove panicked on empty-Rhs AssignStmt: %v", r)
+		}
+	}()
+	if got := m.Discover(fset, file, nil); len(got) != 0 {
+		t.Errorf("expected 0 candidates for empty Rhs, got %d", len(got))
 	}
 }
 

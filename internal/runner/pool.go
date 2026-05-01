@@ -74,32 +74,23 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 	// mutant in a package pays the cold compile; subsequent ones in that
 	// package hit the build cache for deps + stdlib.
 	sort.SliceStable(pending, func(a, b int) bool {
-		ma, mb := mutants[pending[a]], mutants[pending[b]]
-		if ma.Pkg != mb.Pkg {
-			return ma.Pkg < mb.Pkg
-		}
-		if ma.File != mb.File {
-			return ma.File < mb.File
-		}
-		return ma.StartOffset < mb.StartOffset
+		return mutantLess(mutants[pending[a]], mutants[pending[b]])
 	})
 
 	work := make(chan int, len(pending))
 	results := make(chan mutator.Mutant, len(pending))
 
-	var wg sync.WaitGroup
+	workers := p.createWorkers()
 
-	// Start workers.
-	workersStarted := 0
-	for i := range p.workers {
-		w, err := NewWorker(i, p.tmpDir, p.timeout, p.srcCache, p.projectDir, p.testMap)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "gomutants: NewWorker %d failed: %v\n", i, err)
-			continue
-		}
-		w.childGOMAXPROCS = childGOMAXPROCSFor(p.workers)
-		w.testCPU = p.testCPU
-		workersStarted++
+	// If no worker could be created, abort cleanly rather than deadlocking
+	// on a feeder blocked forever sending into `work` with no readers.
+	if len(workers) == 0 {
+		fmt.Fprintln(os.Stderr, "gomutants: no workers could be started; skipping mutation run")
+		return mutants
+	}
+
+	var wg sync.WaitGroup
+	for _, w := range workers {
 		wg.Add(1)
 		go func(w *Worker) {
 			defer wg.Done()
@@ -111,13 +102,6 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 				results <- result
 			}
 		}(w)
-	}
-
-	// If no worker could be created, abort cleanly rather than deadlocking
-	// on a feeder blocked forever sending into `work` with no readers.
-	if workersStarted == 0 {
-		fmt.Fprintln(os.Stderr, "gomutants: no workers could be started; skipping mutation run")
-		return mutants
 	}
 
 	// Feed work.
@@ -156,6 +140,52 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 	}
 
 	return mutants
+}
+
+// createWorkers spins up p.workers workers, logs and skips ones that fail
+// to construct, and applies the per-worker GOMAXPROCS cap. Extracted from
+// Run so the loop can be unit-tested directly: with a stub
+// newWorkerFunc, the test sees how many workers were created and what
+// childGOMAXPROCS each ended up with — neither of which is observable
+// through the pool's mutant return value.
+func (p *Pool) createWorkers() []*Worker {
+	workers := make([]*Worker, 0, p.workers)
+	cap := childGOMAXPROCSFor(p.workers)
+	for i := range p.workers {
+		w, err := newWorkerFunc(i, p.tmpDir, p.timeout, p.srcCache, p.projectDir, p.testMap)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gomutants: NewWorker %d failed: %v\n", i, err)
+			continue
+		}
+		w.childGOMAXPROCS = cap
+		w.testCPU = p.testCPU
+		workers = append(workers, w)
+	}
+	return workers
+}
+
+// newWorkerFunc is the constructor used by createWorkers; swappable for tests.
+var newWorkerFunc = NewWorker
+
+// mutantLess orders mutants by (Pkg, File, StartOffset) using paired `<`/`>`
+// comparisons so each `<` mutation flips behavior on the equality path. A
+// guarded `if a != b { return a < b }` would render `<` ↔ `<=` mutations
+// equivalent because the guard rules out the only case where the boundary
+// matters.
+func mutantLess(a, b mutator.Mutant) bool {
+	if a.Pkg < b.Pkg {
+		return true
+	}
+	if a.Pkg > b.Pkg {
+		return false
+	}
+	if a.File < b.File {
+		return true
+	}
+	if a.File > b.File {
+		return false
+	}
+	return a.StartOffset < b.StartOffset
 }
 
 // MeasureBaseline runs the test suite once to determine baseline duration.

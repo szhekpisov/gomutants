@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,9 +16,12 @@ import (
 
 // Function variables for testing.
 var (
-	resolvePackagesFunc = resolvePackages
-	listTestsFunc       = listTests
-	parseFileFunc       = ParseFile
+	resolvePackagesFunc   = resolvePackages
+	listTestsFunc         = listTests
+	parseFileFunc         = ParseFile
+	compileTestBinaryFunc = compileTestBinary
+	runCompiledTestFunc   = runCompiledTest
+	statFileFunc          = os.Stat
 )
 
 // TestMap maps (file, line) positions to the test functions that cover them.
@@ -54,38 +58,7 @@ func BuildTestMap(ctx context.Context, projectDir string, packages []string, cov
 		return nil, fmt.Errorf("resolving packages: %w", err)
 	}
 
-	pkgBins := make(map[string]*compiledPkg)
-	for _, pkg := range resolvedPkgs {
-		binPath := filepath.Join(tmpDir, "testbin-"+sanitize(pkg.importPath)+".test")
-		args := []string{"test", "-c", "-o", binPath, "-cover"}
-		if coverPkg != "" {
-			args = append(args, "-coverpkg="+coverPkg)
-		}
-		args = append(args, pkg.importPath)
-
-		cmd := exec.CommandContext(ctx, "go", args...)
-		cmd.Dir = projectDir
-		cmd.Stdout = nil
-		cmd.Stderr = nil
-
-		if err := cmd.Run(); err != nil {
-			// Package may have no tests; skip.
-			continue
-		}
-
-		// Verify binary was created (packages with no tests produce no
-		// binary). Stat is the right probe here — LookPath is for PATH
-		// resolution, not file existence.
-		if _, err := statFile(binPath); err != nil {
-			continue
-		}
-
-		pkgBins[pkg.importPath] = &compiledPkg{
-			binPath:    binPath,
-			importPath: pkg.importPath,
-			dir:        pkg.dir,
-		}
-	}
+	pkgBins := buildPkgBins(ctx, projectDir, tmpDir, coverPkg, resolvedPkgs)
 
 	// 3. Run tests in parallel using compiled binaries.
 	work := make(chan testEntry, len(tests))
@@ -152,10 +125,11 @@ func processWork(ctx context.Context, work <-chan testEntry, pkgBins map[string]
 			continue
 		}
 		profilePath := filepath.Join(tmpDir, fmt.Sprintf("testmap-%d.cov", workerID))
-		blocks := runCompiledTest(ctx, cp, test.name, profilePath)
-		if len(blocks) > 0 {
-			results <- testCoverage{testName: test.name, blocks: blocks}
+		blocks := runCompiledTestFunc(ctx, cp, test.name, profilePath)
+		if len(blocks) == 0 {
+			continue
 		}
+		results <- testCoverage{testName: test.name, blocks: blocks}
 	}
 }
 
@@ -172,6 +146,51 @@ func feedWork(ctx context.Context, tests []testEntry, work chan<- testEntry) {
 	close(work)
 }
 
+// buildPkgBins compiles each package's test binary and indexes the results
+// by import path. Compile failures (no tests, syntax errors) are skipped
+// silently — extracted from BuildTestMap so the skip behavior can be
+// tested without driving the whole pipeline.
+func buildPkgBins(ctx context.Context, projectDir, tmpDir, coverPkg string, pkgs []resolvedPkg) map[string]*compiledPkg {
+	pkgBins := make(map[string]*compiledPkg)
+	for _, pkg := range pkgs {
+		cp, err := compileTestBinaryFunc(ctx, projectDir, tmpDir, coverPkg, pkg)
+		if err != nil {
+			// Package may have no tests, fail to compile, or produce no
+			// binary; all are non-fatal — skip and keep going.
+			continue
+		}
+		pkgBins[pkg.importPath] = cp
+	}
+	return pkgBins
+}
+
+// compileTestBinary compiles `pkg`'s test binary into tmpDir and returns
+// the compiledPkg metadata. Errors from `go test -c` and from a missing
+// output file (a package with no tests produces no binary) are folded
+// into the returned error so callers can `continue` on a single check.
+func compileTestBinary(ctx context.Context, projectDir, tmpDir, coverPkg string, pkg resolvedPkg) (*compiledPkg, error) {
+	binPath := filepath.Join(tmpDir, "testbin-"+sanitize(pkg.importPath)+".test")
+	args := []string{"test", "-c", "-o", binPath, "-cover"}
+	if coverPkg != "" {
+		args = append(args, "-coverpkg="+coverPkg)
+	}
+	args = append(args, pkg.importPath)
+
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = projectDir
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("go test -c %s: %w", pkg.importPath, err)
+	}
+	if _, err := statFileFunc(binPath); err != nil {
+		return nil, fmt.Errorf("test binary missing for %s: %w", pkg.importPath, err)
+	}
+	return &compiledPkg{
+		binPath:    binPath,
+		importPath: pkg.importPath,
+		dir:        pkg.dir,
+	}, nil
+}
+
 // runCompiledTest runs a pre-compiled test binary for a single test with coverage.
 func runCompiledTest(ctx context.Context, cp *compiledPkg, testName, profilePath string) []Block {
 	args := []string{
@@ -181,8 +200,6 @@ func runCompiledTest(ctx context.Context, cp *compiledPkg, testName, profilePath
 
 	cmd := exec.CommandContext(ctx, cp.binPath, args...)
 	cmd.Dir = cp.dir
-	cmd.Stdout = nil
-	cmd.Stderr = nil
 
 	if err := cmd.Run(); err != nil {
 		return nil
@@ -246,17 +263,27 @@ func listTests(ctx context.Context, projectDir string, packages []string) ([]tes
 			return nil, fmt.Errorf("go test -list for %s: %w\n%s", pkg, err, stderr.String())
 		}
 
-		scanner := bufio.NewScanner(&stdout)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || strings.HasPrefix(line, "ok") {
-				continue
-			}
-			allTests = append(allTests, testEntry{name: line, pkg: pkg})
-		}
+		allTests = append(allTests, parseListTestsOutput(&stdout, pkg)...)
 	}
 
 	return allTests, nil
+}
+
+// parseListTestsOutput parses the stdout of `go test -list .`. Each non-empty,
+// non-"ok"-prefixed line is one test name. Extracted so the line-filter can
+// be exercised directly from a string reader — driving it through listTests
+// would require a real `go test` invocation.
+func parseListTestsOutput(r io.Reader, pkg string) []testEntry {
+	var tests []testEntry
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "ok") {
+			continue
+		}
+		tests = append(tests, testEntry{name: line, pkg: pkg})
+	}
+	return tests
 }
 
 type resolvedPkg struct {
@@ -286,10 +313,6 @@ func resolvePackages(ctx context.Context, projectDir string, patterns []string) 
 		}
 	}
 	return pkgs, nil
-}
-
-func statFile(path string) (os.FileInfo, error) {
-	return os.Stat(path)
 }
 
 // sanitize makes a test name safe for use as a filename.

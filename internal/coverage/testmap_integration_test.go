@@ -332,27 +332,6 @@ func TestResolvePackagesFailure(t *testing.T) {
 	}
 }
 
-func TestStatFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.txt")
-	if err := os.WriteFile(path, []byte("hi"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := statFile(path)
-	if err != nil {
-		t.Fatalf("statFile: %v", err)
-	}
-	if info.Size() != 2 {
-		t.Errorf("size=%d, want 2", info.Size())
-	}
-
-	_, err = statFile("/nonexistent/file")
-	if err == nil {
-		t.Fatal("expected error for nonexistent file")
-	}
-}
-
 func TestBuildTestMapListTestsError(t *testing.T) {
 	// Package with syntax error — listTests fails.
 	dir := t.TempDir()
