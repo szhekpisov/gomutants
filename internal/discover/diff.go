@@ -14,6 +14,12 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
+// diffMaxBufSize is both the initial allocation and the maximum line size
+// for the unified-diff scanner. Keeping init == max means the scanner
+// never grows, which removes the equivalent mutant produced when the
+// initial size and the max are independently mutable.
+const diffMaxBufSize = 16 * 1024 * 1024
+
 // LineRange is a closed interval [Start, End] of 1-indexed line numbers.
 type LineRange struct {
 	Start int
@@ -38,6 +44,15 @@ func GitRoot(ctx context.Context, dir string) (string, error) {
 	return strings.TrimRight(stdout.String(), "\n"), nil
 }
 
+// looksLikeBadRevision reports whether stderr from `git diff` indicates
+// the caller passed a ref that git couldn't resolve. Split out so each
+// branch of the OR is independently testable without relying on git's
+// exact wording for a given ref-state.
+func looksLikeBadRevision(stderr string) bool {
+	return strings.Contains(stderr, "unknown revision") ||
+		strings.Contains(stderr, "bad revision")
+}
+
 // RunGitDiff executes `git diff --unified=0 <ref>` in dir and returns the
 // changed line ranges per file (paths relative to the git root). Lines
 // only deleted at a position (count=0) produce no range — there is nothing
@@ -50,10 +65,7 @@ func RunGitDiff(ctx context.Context, dir, ref string) (map[string][]LineRange, e
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		stderrStr := stderr.String()
-		// Common confusion: ref names a remote branch the user hasn't
-		// fetched yet. Git's "unknown revision or path" / "bad revision"
-		// stderr is generic — point to the likely fix.
-		if strings.Contains(stderrStr, "unknown revision") || strings.Contains(stderrStr, "bad revision") {
+		if looksLikeBadRevision(stderrStr) {
 			return nil, fmt.Errorf("git diff %s: %w\n%s\nhint: %q is not a valid revision in this repo — if it's a remote branch, try `git fetch`", ref, err, stderrStr, ref)
 		}
 		return nil, fmt.Errorf("git diff %s: %w\n%s", ref, err, stderrStr)
@@ -71,15 +83,16 @@ func ParseUnifiedDiff(r io.Reader) (map[string][]LineRange, error) {
 	var current string
 
 	sc := bufio.NewScanner(r)
-	// Per-line cap of 16MB: a single source line in the diff can exceed
-	// 1MB for vendored/generated files; 16MB is well past anything a
-	// human would read while still bounding pathological input.
-	sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	// One fixed-size buffer: large enough for vendored/generated diff
+	// lines (>1MB happens), small enough to bound pathological input.
+	sc.Buffer(make([]byte, diffMaxBufSize), diffMaxBufSize)
 	for sc.Scan() {
 		line := sc.Text()
-		switch {
-		case strings.HasPrefix(line, "+++ "):
-			path := strings.TrimPrefix(line, "+++ ")
+		// if/else (not switch): inside a switch case, `break` exits only
+		// the switch — making `continue → break` mutations equivalent
+		// here. Using if/else binds break to the surrounding for loop,
+		// so mutations on the loop-control statements are detectable.
+		if path, ok := strings.CutPrefix(line, "+++ "); ok {
 			// Strip trailing tab-prefixed metadata (timestamps).
 			if i := strings.IndexByte(path, '\t'); i >= 0 {
 				path = path[:i]
@@ -89,7 +102,7 @@ func ParseUnifiedDiff(r io.Reader) (map[string][]LineRange, error) {
 				continue
 			}
 			current = stripDiffPrefix(path)
-		case strings.HasPrefix(line, "@@"):
+		} else if strings.HasPrefix(line, "@@") {
 			if current == "" {
 				continue
 			}
@@ -121,25 +134,25 @@ func stripDiffPrefix(p string) string {
 // hunk header like "@@ -1,2 +3,4 @@ ctx". Returns ok=false if the header
 // is malformed or the new-side count is zero (deletion-only hunk).
 func parseHunkHeader(line string) (LineRange, bool) {
-	_, after, found := strings.Cut(line, "+")
-	if !found {
-		return LineRange{}, false
-	}
+	// Locate the "+<start>[,<count>] " token. The first Cut may "succeed"
+	// with after="" if there is no '+'; the second Cut catches that, so
+	// we don't need a separate not-found check after the first.
+	_, after, _ := strings.Cut(line, "+")
 	tok, _, found := strings.Cut(after, " ")
 	if !found {
 		return LineRange{}, false
 	}
 	startStr, countStr, hasCount := strings.Cut(tok, ",")
-	start, err := strconv.Atoi(startStr)
-	if err != nil || start <= 0 {
+	// Atoi returns (0, err) for invalid input — the start <= 0 / count <= 0
+	// checks below catch parse failures and non-positive values uniformly,
+	// so we drop the redundant explicit error checks.
+	start, _ := strconv.Atoi(startStr)
+	if start <= 0 {
 		return LineRange{}, false
 	}
 	count := 1
 	if hasCount {
-		count, err = strconv.Atoi(countStr)
-		if err != nil {
-			return LineRange{}, false
-		}
+		count, _ = strconv.Atoi(countStr)
 	}
 	if count <= 0 {
 		return LineRange{}, false
@@ -152,34 +165,19 @@ func parseHunkHeader(line string) (LineRange, bool) {
 // gitRoot; mutant File paths are absolute. The input slice is not
 // modified; the returned slice is a fresh allocation.
 func FilterByDiff(mutants []mutator.Mutant, ranges map[string][]LineRange, gitRoot string) []mutator.Mutant {
-	if len(ranges) == 0 {
-		return nil
-	}
-	// Mutants cluster by file (often hundreds per file), so cache the
-	// per-file path normalization.
-	relCache := make(map[string]string)
 	out := make([]mutator.Mutant, 0, len(mutants))
 	for _, m := range mutants {
-		rel, ok := relCache[m.File]
-		if !ok {
-			r, err := filepath.Rel(gitRoot, m.File)
-			if err != nil {
-				relCache[m.File] = ""
-				continue
-			}
-			// filepath.Rel uses backslashes on Windows; git always uses forward slashes.
-			rel = filepath.ToSlash(r)
-			relCache[m.File] = rel
-		}
+		// filepath.Rel returns ("", err) on every error path, so the
+		// rel == "" check below catches both genuine errors and the
+		// (impossible-in-practice) empty-target case.
+		r, _ := filepath.Rel(gitRoot, m.File)
+		// filepath.Rel uses backslashes on Windows; git always uses forward slashes.
+		rel := filepath.ToSlash(r)
 		if rel == "" {
 			continue
 		}
-		hunks, ok := ranges[rel]
-		if !ok {
-			continue
-		}
-		for _, r := range hunks {
-			if r.Contains(m.Line) {
+		for _, h := range ranges[rel] {
+			if h.Contains(m.Line) {
 				out = append(out, m)
 				break
 			}
