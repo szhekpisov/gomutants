@@ -102,7 +102,7 @@ func HashFile(absPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -244,12 +244,12 @@ func Save(c *Cache, path string) error {
 	// cleans up any temp file left by an error path below.
 	defer func() {
 		if tmpName != "" {
-			os.Remove(tmpName)
+			_ = os.Remove(tmpName)
 		}
 	}()
 
 	if err := json.NewEncoder(tmp).Encode(c); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
