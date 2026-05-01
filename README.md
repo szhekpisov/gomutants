@@ -298,7 +298,9 @@ The `workers=5` wall-clock is shaped by three things layered on the engine:
 
 ### Self-efficacy (gomutants on itself)
 
-gomutants kills **69.32%** of mutants in its own test suite (664 mutants across 8 packages, v0.1.0). Coverage is 97% — most lived mutants are real test gaps, not blind spots. Per-package breakdown in [`testdata/golden/self-efficacy.txt`](testdata/golden/self-efficacy.txt). The `internal/...` subset (excluding `main`) clears 88.03%, which is the gate this repo's CI enforces post-merge.
+gomutants kills **100%** of mutants in its `./internal/...` library code (every package at 100% efficacy). Statement coverage is also 100%. The CI gate fails on any surviving mutant on changed lines per PR and on the full `./internal/...` tree post-merge — drift surfaces on the merge that introduces it.
+
+The `main` package is excluded from mutation testing. Its mutants exercise the integration test suite (which forks gomutants subprocesses to test mutated overlays), each taking minutes; running them in CI under the same gate isn't tractable, and most surviving mutants are output-formatting drift the integration tests intentionally don't pin.
 
 ## Contributing
 

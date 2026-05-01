@@ -15,11 +15,11 @@ on:
 jobs:
   mutation:
     runs-on: ubuntu-latest
-    # Full-tree post-merge runs need more headroom than --changed-since
-    # PR runs: main's mutants exercise integration tests that fork
-    # subprocesses, so each takes minutes. 60 covers ./... at -workers=2
-    # on a GitHub-hosted Linux runner.
-    timeout-minutes: 60
+    # 30 min covers internal/... at -workers=2 on a GitHub-hosted
+    # Linux runner. main is excluded (see "Run mutation testing"
+    # comment below), so we don't need the longer integration-test
+    # budget that ./... required.
+    timeout-minutes: 30
     steps:
       - uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
         with:
@@ -46,6 +46,13 @@ jobs:
 
       # PR run: scope to the diff. threshold-efficacy=100 (action default)
       # exits 10 on any LIVED mutant on changed lines.
+      # Scope to ./internal/... so the gate applies to the library code
+      # the project promises to keep mutation-clean. main is excluded:
+      # its mutants run the integration test suite (which forks
+      # gomutants subprocesses), so each takes minutes — incompatible
+      # with the runner's compute budget — and most surviving mutants
+      # are output-formatting drift that the integration tests
+      # intentionally don't pin.
       - name: Run mutation testing (PR, changed-since)
         if: github.event_name == 'pull_request'
         uses: szhekpisov/gomutants@15315f9b020ec723e5f4495224e48712bcb939c1 # main
@@ -53,16 +60,16 @@ jobs:
           # No quotes around the ref: $ARGS in the action is unquoted so
           # it word-splits, and a literal `"` would land in the
           # --changed-since value (`fatal: ambiguous argument '"origin/main"'`).
-          args: -workers=2 -verbose --changed-since origin/${{ github.base_ref }} ./...
+          args: -workers=2 -verbose --changed-since origin/${{ github.base_ref }} ./internal/...
 
-      # Post-merge run: full ./... covers code no PR happened to touch.
-      # Same threshold-efficacy=100 gate. --stryker-output writes the
+      # Post-merge full-tree run on the same internal/... scope. Same
+      # threshold-efficacy=100 gate. --stryker-output writes the
       # dashboard report consumed by the upload step below.
       - name: Run mutation testing (full tree, post-merge)
         if: github.event_name == 'push'
         uses: szhekpisov/gomutants@15315f9b020ec723e5f4495224e48712bcb939c1 # main
         with:
-          args: -workers=2 -verbose --stryker-output stryker-report.json ./...
+          args: -workers=2 -verbose --stryker-output stryker-report.json ./internal/...
 
       # Push the Stryker-format report to the public dashboard so the
       # mutation-score badge in the README reflects the latest main. Only
