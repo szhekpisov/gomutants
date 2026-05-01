@@ -85,4 +85,9 @@ type Mutant struct {
 	Status       MutantStatus
 	Duration     time.Duration
 	Pkg          string // Package import path for go test.
+	// FromCache marks results sourced from a prior-run cache entry
+	// rather than this run's go-test invocation. In-memory only — not
+	// serialized to the JSON report. Used by report.Generate to count
+	// MutantsCached without changing the gremlins-compatible schema.
+	FromCache bool
 }

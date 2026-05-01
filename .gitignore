@@ -18,6 +18,9 @@
 # Mutation testing reports
 mutation-report.json
 
+# Incremental-analysis cache
+.gomutants-cache.json
+
 # Dependency directories
 # vendor/
 

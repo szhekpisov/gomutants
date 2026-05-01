@@ -272,6 +272,30 @@ func TestSummaryNonTTYNoLeadingNewline(t *testing.T) {
 	}
 }
 
+func TestSummaryShowsCachedLineWhenNonZero(t *testing.T) {
+	var buf bytes.Buffer
+	term := NewTerminal(&buf, 0, false)
+	r := &Report{
+		MutantsKilled: 5, MutantsLived: 1,
+		MutantsTotal: 6, MutantsCached: 4,
+		TestEfficacy: 83.33,
+	}
+	term.Summary(r)
+	if !strings.Contains(buf.String(), "Cached:       4  (skipped)\n") {
+		t.Errorf("expected Cached line, got %q", buf.String())
+	}
+}
+
+func TestSummaryHidesCachedLineWhenZero(t *testing.T) {
+	var buf bytes.Buffer
+	term := NewTerminal(&buf, 0, false)
+	r := &Report{MutantsKilled: 5, MutantsTotal: 5, TestEfficacy: 100}
+	term.Summary(r)
+	if strings.Contains(buf.String(), "Cached:") {
+		t.Errorf("expected no Cached line when MutantsCached=0, got %q", buf.String())
+	}
+}
+
 func TestPct(t *testing.T) {
 	if got := pct(0, 0); got != 0 {
 		t.Errorf("pct(0, 0) = %f, want 0", got)

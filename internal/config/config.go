@@ -24,6 +24,7 @@ type Config struct {
 	Disable            []string                  `yaml:"disable"`
 	Only               []string                  `yaml:"only"`
 	ChangedSince       string                    `yaml:"changed-since"`
+	Cache              string                    `yaml:"cache"`
 	Mutants            map[string]*MutatorConfig `yaml:"mutants"`
 }
 
@@ -70,7 +71,7 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, output, disable, only, changedSince string, dryRun, verbose bool) {
+func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, output, disable, only, changedSince, cache string, dryRun, verbose bool) {
 	if workers > 0 {
 		c.Workers = workers
 	}
@@ -94,6 +95,9 @@ func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, 
 	}
 	if changedSince != "" {
 		c.ChangedSince = changedSince
+	}
+	if cache != "" {
+		c.Cache = cache
 	}
 	if dryRun {
 		c.DryRun = true

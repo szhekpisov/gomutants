@@ -158,6 +158,35 @@ func TestGenerateAllKilled(t *testing.T) {
 	}
 }
 
+func TestGenerateCountsMutantsCached(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled, FromCache: true},
+		{ID: 2, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 2, Col: 1, Status: mutator.StatusLived, FromCache: true},
+		{ID: 3, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 3, Col: 1, Status: mutator.StatusKilled},
+	}
+	r := Generate(mutants, "mod", time.Second)
+	if r.MutantsCached != 2 {
+		t.Errorf("MutantsCached=%d, want 2", r.MutantsCached)
+	}
+	if r.MutantsKilled != 2 {
+		t.Errorf("MutantsKilled=%d, want 2 (FromCache must not change status counts)", r.MutantsKilled)
+	}
+}
+
+func TestGenerateOmitsMutantsCachedWhenZero(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
+	}
+	r := Generate(mutants, "mod", time.Second)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), `"mutants_cached"`) {
+		t.Errorf("mutants_cached should be omitted when 0, got: %s", data)
+	}
+}
+
 func TestWriteJSON(t *testing.T) {
 	r := &Report{
 		GoModule:    "example.com/mod",

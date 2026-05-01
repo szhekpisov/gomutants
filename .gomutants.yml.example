@@ -15,6 +15,15 @@ timeout-coefficient: 10
 # JSON report output path (default: mutation-report.json).
 output: mutation-report.json
 
+# Incremental-analysis cache path. When set (or via --cache <path>),
+# gomutants persists per-mutant outcomes keyed by content hashes of the
+# production file and the test files that cover the mutant (resolved
+# from the per-test coverage map; falls back to all _test.go in the
+# mutant's package directory). On the next run, mutants whose source
+# and covering tests are byte-identical to the cached run are skipped.
+# Empty/unset disables caching (default).
+# cache: .gomutants-cache.json
+
 # Mutator types to disable (run all except these).
 # disable:
 #   - BRANCH_IF
