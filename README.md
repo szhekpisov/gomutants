@@ -84,7 +84,7 @@ Beyond the standard token-level operators, gomutants ships block-level mutators 
 ## Install
 
 ```bash
-go install github.com/szhekpisov/gomutants@latest
+go install github.com/szhekpisov/gomutants@v0.1.0
 ```
 
 Requires Go 1.26 or later.
@@ -312,4 +312,4 @@ Found a bug or have a feature request? [Open an issue](https://github.com/szhekp
 
 ---
 
-If you find this project useful, please consider giving it a ⭐ on [GitHub](https://github.com/szhekpisov/gomutants) — it helps others discover it.
+If you find this project useful, please consider giving it a ⭐ — it helps others discover it.
