@@ -282,6 +282,42 @@ func TestInBlock(t *testing.T) {
 	}
 }
 
+// TestIsCoveredContinuesPastCount0Block kills INVERT_LOOP_CTRL on the
+// `continue` after the `b.Count == 0` guard in IsCovered (parse.go:68).
+// Mutated to `break`, the loop exits as soon as it sees a Count==0 block —
+// even if a later block would actually cover the position.
+func TestIsCoveredContinuesPastCount0Block(t *testing.T) {
+	profile := &Profile{
+		blocks: []Block{
+			// Same file, Count==0 block first; it skips the position so
+			// only `continue` (not `break`) lets us reach the next block.
+			{File: "file.go", StartLine: 1, StartCol: 1, EndLine: 5, EndCol: 99, Count: 0},
+			{File: "file.go", StartLine: 10, StartCol: 1, EndLine: 15, EndCol: 99, Count: 1},
+		},
+	}
+	if !profile.IsCovered("file.go", 12, 5) {
+		t.Error("IsCovered must continue past Count==0 block to reach a covering block")
+	}
+}
+
+// TestIsCoveredContinuesPastNonMatchingPosition kills INVERT_LOOP_CTRL on
+// the `continue` after `!inBlock(...)` (parse.go:71). Mutated to `break`,
+// a non-covering block of the same file aborts the lookup and a later
+// covering block is missed.
+func TestIsCoveredContinuesPastNonMatchingPosition(t *testing.T) {
+	profile := &Profile{
+		blocks: []Block{
+			// Same file, Count > 0, but the queried position is outside.
+			{File: "file.go", StartLine: 1, StartCol: 1, EndLine: 5, EndCol: 99, Count: 1},
+			// Same file, Count > 0, queried position is inside.
+			{File: "file.go", StartLine: 10, StartCol: 1, EndLine: 15, EndCol: 99, Count: 1},
+		},
+	}
+	if !profile.IsCovered("file.go", 12, 5) {
+		t.Error("IsCovered must continue past a non-covering block to reach the covering one")
+	}
+}
+
 // TestParseReaderSkipsModePrefixedLineThatWouldParse kills BRANCH_IF on the
 // `strings.HasPrefix(line, "mode:")` body. Under mutation the "continue" is
 // elided, so a line that begins with "mode:" but is otherwise well-formed
