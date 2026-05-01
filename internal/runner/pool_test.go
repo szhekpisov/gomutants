@@ -2,12 +2,17 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/szhekpisov/gomutants/internal/coverage"
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
@@ -49,6 +54,42 @@ func setupTestProject(t *testing.T) string {
 	return dir
 }
 
+// TestChildGOMAXPROCSFor covers each branch of the helper, locking down
+// CONDITIONALS_BOUNDARY (`<=` ↔ `<`), CONDITIONALS_NEGATION, the BRANCH_IF
+// on the early-return body, and ARITHMETIC_BASE on `NumCPU()/workers`.
+func TestChildGOMAXPROCSFor(t *testing.T) {
+	tests := []struct {
+		workers  int
+		want     int
+		wantPass func(int) bool
+	}{
+		// workers <= 1 must return 0 (inherit). The BRANCH_IF on the early
+		// return is the only thing keeping workers=0 from triggering a
+		// divide-by-zero in `NumCPU/workers`.
+		{0, 0, nil},
+		{1, 0, nil},
+	}
+	for _, tt := range tests {
+		got := childGOMAXPROCSFor(tt.workers)
+		if got != tt.want {
+			t.Errorf("childGOMAXPROCSFor(%d) = %d, want %d", tt.workers, got, tt.want)
+		}
+	}
+
+	// workers >= 2: result must be ≤ NumCPU. Mutating `/` to `*` blows past
+	// NumCPU even for small worker counts. Mutating `<=` to `<` returns
+	// max(1, NumCPU) when workers==1, which is also > NumCPU/2 here.
+	if got := childGOMAXPROCSFor(2); got > runtime.NumCPU() {
+		t.Errorf("childGOMAXPROCSFor(2) = %d, must be ≤ NumCPU=%d (ARITHMETIC_BASE on / would inflate it)",
+			got, runtime.NumCPU())
+	}
+	// At least 1 — the max(1, ...) clamp is also load-bearing on
+	// single-CPU CI hosts.
+	if got := childGOMAXPROCSFor(8); got < 1 {
+		t.Errorf("childGOMAXPROCSFor(8) = %d, must be ≥ 1", got)
+	}
+}
+
 func TestPoolRunNoPending(t *testing.T) {
 	p := NewPool(2, 0, 30*time.Second, t.TempDir(), nil, ".", nil)
 	mutants := []mutator.Mutant{
@@ -65,6 +106,217 @@ func TestPoolRunNoPending(t *testing.T) {
 	}
 	if result[1].Status != mutator.StatusKilled {
 		t.Errorf("mutant 2 status=%v, want KILLED", result[1].Status)
+	}
+}
+
+// TestPoolRunNoPendingDoesNotCreateWorkers kills BRANCH_IF on the
+// `if len(pending) == 0 { return mutants }` body. Without the early return,
+// Run would still construct workers (NewWorker writes worker-N.go and
+// overlay-N.json into tmpDir) before falling through to the empty results
+// loop and producing the same final mutant slice. Asserting the tmpDir is
+// untouched is the only observable handle we have on the early-return.
+func TestPoolRunNoPendingDoesNotCreateWorkers(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := NewPool(2, 0, time.Second, tmpDir, nil, ".", nil)
+	mutants := []mutator.Mutant{
+		{ID: 1, Status: mutator.StatusKilled},
+	}
+	p.Run(context.Background(), mutants, nil)
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("tmpDir has %d entries after empty-pending Run; expected 0 — early-return on len(pending)==0 was elided, workers were created", len(entries))
+	}
+}
+
+// TestMutantLessSortStability covers the (pkg, file, offset) ordering
+// directly. Using paired `<`/`>` checks (no `!=` guard) — see the
+// candidateLess refactor in internal/discover — keeps `<` ↔ `<=` mutations
+// observable on equal-key inputs.
+func TestMutantLessSortStability(t *testing.T) {
+	mk := func(pkg, file string, off int) mutator.Mutant {
+		return mutator.Mutant{Pkg: pkg, File: file, StartOffset: off}
+	}
+	cases := []struct {
+		name string
+		a, b mutator.Mutant
+		want bool
+	}{
+		{"pkg less", mk("a", "f", 0), mk("b", "f", 0), true},
+		{"pkg greater", mk("b", "f", 0), mk("a", "f", 0), false},
+		{"eqPkg fileLt", mk("p", "a", 0), mk("p", "b", 0), true},
+		{"eqPkg fileGt", mk("p", "b", 0), mk("p", "a", 0), false},
+		{"eqFile offLt", mk("p", "f", 1), mk("p", "f", 9), true},
+		{"eqFile offGt", mk("p", "f", 9), mk("p", "f", 1), false},
+		// Equal across the board — < returns false (not less than itself).
+		{"all equal", mk("p", "f", 5), mk("p", "f", 5), false},
+		// Pkg `>` decisive: BRANCH_IF on its `{ return false }` body falls
+		// through to file-`<` and returns true here. Original returns false.
+		{"aPkgGt bFileLt", mk("z", "a", 0), mk("a", "z", 0), false},
+		{"eqPkg aFileGt bOffLt", mk("p", "z", 0), mk("p", "a", 99), false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mutantLess(tt.a, tt.b); got != tt.want {
+				t.Errorf("mutantLess = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPoolCreateWorkersAppliesGOMAXPROCS kills STATEMENT_REMOVE on
+// `w.childGOMAXPROCS = childGOMAXPROCSFor(p.workers)`. With the assignment
+// elided, every worker is created with childGOMAXPROCS=0 (the zero value),
+// so the GOMAXPROCS env override never gets propagated to inner go test.
+func TestPoolCreateWorkersAppliesGOMAXPROCS(t *testing.T) {
+	p := NewPool(4, 0, time.Second, t.TempDir(), nil, ".", nil)
+	workers := p.createWorkers()
+	if len(workers) == 0 {
+		t.Fatal("expected workers; createWorkers returned none")
+	}
+	want := childGOMAXPROCSFor(4)
+	for i, w := range workers {
+		if w.childGOMAXPROCS != want {
+			t.Errorf("worker[%d].childGOMAXPROCS = %d, want %d (STATEMENT_REMOVE drops the assignment)",
+				i, w.childGOMAXPROCS, want)
+		}
+	}
+}
+
+// TestPoolCreateWorkersContinuesPastFailure kills INVERT_LOOP_CTRL on
+// the `continue` after a NewWorker failure and STATEMENT_REMOVE on the
+// stderr log. With newWorkerFunc stubbed to fail on the first call and
+// succeed on subsequent calls, the original returns 3 workers and logs a
+// diagnostic to stderr; the `continue` → `break` mutation returns 0;
+// removing the Fprintf drops the diagnostic.
+func TestPoolCreateWorkersContinuesPastFailure(t *testing.T) {
+	orig := newWorkerFunc
+	defer func() { newWorkerFunc = orig }()
+	var calls atomic.Int32
+	newWorkerFunc = func(id int, tmpDir string, timeout time.Duration, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) (*Worker, error) {
+		n := calls.Add(1)
+		if n == 1 {
+			return nil, errors.New("first failure")
+		}
+		return &Worker{id: id, tmpSrcPath: filepath.Join(tmpDir, "src"), overlayPath: filepath.Join(tmpDir, "ovl"), timeout: timeout}, nil
+	}
+
+	p := NewPool(4, 0, time.Second, t.TempDir(), nil, ".", nil)
+	var workers []*Worker
+	captured := captureStderr(t, func() {
+		workers = p.createWorkers()
+	})
+	if len(workers) != 3 {
+		t.Errorf("got %d workers, want 3 (1 failure + 3 successes); INVERT_LOOP_CTRL turns the err-continue into break", len(workers))
+	}
+	if !strings.Contains(captured, "NewWorker 0 failed") {
+		t.Errorf("stderr missing the per-failure diagnostic; got: %q — STATEMENT_REMOVE on the Fprintf elides the log", captured)
+	}
+}
+
+// TestPoolNoWorkersLogsToStderr kills BRANCH_IF and STATEMENT_REMOVE on
+// the `if len(workers) == 0 { Fprintln(os.Stderr, ...) }` block. Without
+// the log call, callers downstream lose the diagnostic — the only signal
+// that the pool ran but did nothing.
+func TestPoolNoWorkersLogsToStderr(t *testing.T) {
+	captured := captureStderr(t, func() {
+		orig := newWorkerFunc
+		defer func() { newWorkerFunc = orig }()
+		newWorkerFunc = func(int, string, time.Duration, map[string][]byte, string, *coverage.TestMap) (*Worker, error) {
+			return nil, errors.New("always fail")
+		}
+		p := NewPool(2, 0, time.Second, t.TempDir(), nil, ".", nil)
+		mutants := []mutator.Mutant{
+			{ID: 1, File: "/abs/f.go", Pkg: "p", Status: mutator.StatusPending},
+		}
+		p.Run(context.Background(), mutants, nil)
+	})
+	if !strings.Contains(captured, "no workers could be started") {
+		t.Errorf("stderr missing the diagnostic; got: %q", captured)
+	}
+}
+
+// captureStderr redirects os.Stderr through a pipe for the duration of fn
+// and returns whatever was written. Used to assert on log lines that have
+// no other observable handle.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
+
+	done := make(chan struct{})
+	var captured strings.Builder
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(&captured, r)
+	}()
+	fn()
+	w.Close()
+	<-done
+	return captured.String()
+}
+
+// TestPoolRunCancelledNoCallback kills BRANCH_IF on the worker goroutine's
+// `if ctx.Err() != nil { return }`. With the body elided, w.Test runs
+// (returns Pending via its own ctx-cancel handling) and the result still
+// makes it onto the results channel — so the user-supplied callback fires
+// for a mutant the user expected to be skipped.
+func TestPoolRunCancelledNoCallback(t *testing.T) {
+	dir := setupTestProject(t)
+	srcPath := filepath.Join(dir, "add.go")
+	src, _ := os.ReadFile(srcPath)
+	cache := map[string][]byte{srcPath: src}
+	plusIdx := strings.IndexByte(string(src), '+')
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := NewPool(1, 0, 30*time.Second, t.TempDir(), cache, dir, nil)
+	mutants := []mutator.Mutant{
+		{ID: 1, File: srcPath, Pkg: "testmod", StartOffset: plusIdx, EndOffset: plusIdx + 1, Replacement: "-", Status: mutator.StatusPending},
+	}
+
+	var calls atomic.Int32
+	p.Run(ctx, mutants, func(mutator.Mutant) { calls.Add(1) })
+
+	if got := calls.Load(); got != 0 {
+		t.Errorf("callback fired %d times for cancelled ctx; BRANCH_IF on the worker's ctx.Err() check lets results through", got)
+	}
+}
+
+// TestRunCoverageStdoutGoesToStderr kills STATEMENT_REMOVE on
+// `cmd.Stdout = os.Stderr` in RunCoverage. `go test` buffers stdout from
+// passing tests, so we make the test fail; the failure message embeds a
+// unique marker that go test always prints. With the assignment in place
+// the marker surfaces in the parent's stderr; without it, it disappears.
+func TestRunCoverageStdoutGoesToStderr(t *testing.T) {
+	const marker = "MARKER_8z2qPxV"
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tt.Fatal(\"" + marker + "\")\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	captured := captureStderr(t, func() {
+		// RunCoverage returns an error because the test fails; we don't
+		// care about the error itself, only the test output that should
+		// have been routed to os.Stderr.
+		_, _ = RunCoverage(context.Background(), dir, []string{"testmod"}, "", t.TempDir())
+	})
+	if !strings.Contains(captured, marker) {
+		t.Errorf("marker %q not found in stderr capture; STATEMENT_REMOVE on `cmd.Stdout = os.Stderr` discards test output. Captured: %q", marker, captured)
 	}
 }
 

@@ -23,40 +23,70 @@ import (
 // flips a loop termination or allocation bound can make go test (or its test
 // binary) balloon to tens of GB within seconds. We SIGKILL the whole process
 // group at this cap; a killed mutant is classified as TimedOut.
-const maxSubprocRSSBytes int64 = 2 * 1024 * 1024 * 1024 // 2 GiB
+//
+// var (not const) so tests can lower it to a tiny value and force the
+// monitor goroutine's kill path on a normal-sized test process.
+var maxSubprocRSSBytes int64 = 2 * 1024 * 1024 * 1024 // 2 GiB
+
+// monitorPollInterval is the cadence at which the RSS monitor probes
+// `ps -g`. var so tests can shrink it to make the kill path fire quickly.
+var monitorPollInterval = 1 * time.Second
+
+// psOutputFunc returns ps's stdout for a given pgid. Swappable so tests
+// can drive pgroupRSSBytes without touching the real ps binary or the
+// host's process table.
+var psOutputFunc = func(pgid int) ([]byte, error) {
+	return exec.Command("ps", "-o", "rss=", "-g", strconv.Itoa(pgid)).Output()
+}
 
 // pgroupRSSBytes returns the summed RSS of all processes in the given PGID.
 // Uses `ps -g` (BSD/macOS flag) which is also supported on Linux GNU ps.
+//
+// The accumulator is structured as a single `if err == nil` add so the
+// continue-on-empty / continue-on-parse-error branches don't surface as
+// equivalent mutants (in both, n stays 0 and total += 0 is a no-op).
 func pgroupRSSBytes(pgid int) int64 {
-	out, err := exec.Command("ps", "-o", "rss=", "-g", strconv.Itoa(pgid)).Output()
+	out, err := psOutputFunc(pgid)
 	if err != nil {
 		return 0
 	}
 	var total int64
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+		n, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64)
+		if err == nil {
+			total += n * 1024 // ps rss is KB
 		}
-		n, err := strconv.ParseInt(line, 10, 64)
-		if err != nil {
-			continue
-		}
-		total += n * 1024 // ps rss is KB
 	}
 	return total
 }
 
+// syscallKillFunc is the indirection used by killPgroup; swappable so tests
+// can verify the negative-pgid sign flip without sending real signals.
+var syscallKillFunc = syscall.Kill
+
+// syscallGetpgidFunc is the indirection used by Worker.Test's pgid lookup.
+// Swappable so a test can simulate the macOS race window where Getpgid
+// transiently fails — exercising the cmd.Process.Pid fallback path.
+var syscallGetpgidFunc = syscall.Getpgid
+
 // killPgroup sends SIGKILL to the entire process group.
 func killPgroup(pgid int) {
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	_ = syscallKillFunc(-pgid, syscall.SIGKILL)
 }
 
 // nonZeroSince returns time.Since(start) but guarantees a strictly positive
 // result, so callers can use Duration==0 as a "never set" sentinel. Without
 // this, rapid early-return paths can yield a zero Duration on some clocks.
 func nonZeroSince(start time.Time) time.Duration {
-	d := time.Since(start)
+	return clampPositive(time.Since(start))
+}
+
+// clampPositive returns d if it is strictly positive, otherwise the smallest
+// positive Duration. Extracted from nonZeroSince so the d == 0 boundary can
+// be tested directly — driving nonZeroSince is racy because time.Since on a
+// just-captured `time.Now()` returns a tiny but nonzero positive duration
+// on real clocks, hiding the `<` vs `<=` mutation.
+func clampPositive(d time.Duration) time.Duration {
 	if d <= 0 {
 		return time.Nanosecond
 	}
@@ -75,19 +105,34 @@ type cappedBuffer struct {
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
-	if remaining := maxCapturedOutput - len(c.buf); remaining > 0 {
-		if len(p) <= remaining {
-			c.buf = append(c.buf, p...)
-		} else {
-			c.buf = append(c.buf, p[:remaining]...)
-		}
-	}
+	// Compute take with min/max so neither comparison is an AST `<`/`<=`
+	// operator the boundary mutator can target. The previous if-else form
+	// produced equivalent boundary mutants because both branches collapsed
+	// to the same observable result on the equality cases.
+	take := min(len(p), max(0, maxCapturedOutput-len(c.buf)))
+	c.buf = append(c.buf, p[:take]...)
 	return len(p), nil
 }
 
 func (c *cappedBuffer) String() string { return string(c.buf) }
 
 var compileErrorRe = regexp.MustCompile(`\.go:\d+:\d+:`)
+
+// writeFileFunc and execCommandContext are package-level indirections to
+// os.WriteFile and exec.CommandContext respectively. Swapping them in tests
+// lets us hit the unhappy paths in NewWorker / Worker.Test (write failure,
+// fork/exec failure) without contriving filesystem or PATH state.
+var (
+	writeFileFunc       = os.WriteFile
+	execCommandContext  = exec.CommandContext
+)
+
+// shortFlagFromEnv reports whether the inner `go test` should be invoked
+// with -short. Extracted from Worker.Test so the env-string equality check
+// is reachable without spinning up a subprocess.
+func shortFlagFromEnv() bool {
+	return os.Getenv("GOMUTANTS_TEST_SHORT") == "1"
+}
 
 // overlay is the JSON structure for `go test -overlay`.
 type overlay struct {
@@ -123,10 +168,10 @@ func NewWorker(id int, tmpDir string, timeout time.Duration, sourceCache map[str
 	overlayFile := filepath.Join(tmpDir, fmt.Sprintf("overlay-%d.json", id))
 
 	// Create empty files so paths exist.
-	if err := os.WriteFile(tmpSrc, nil, 0o644); err != nil {
+	if err := writeFileFunc(tmpSrc, nil, 0o644); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(overlayFile, nil, 0o644); err != nil {
+	if err := writeFileFunc(overlayFile, nil, 0o644); err != nil {
 		return nil, err
 	}
 
@@ -162,7 +207,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	}
 
 	// 3. Write patched source to worker's temp file.
-	if err := os.WriteFile(w.tmpSrcPath, patched, 0o644); err != nil {
+	if err := writeFileFunc(w.tmpSrcPath, patched, 0o644); err != nil {
 		m.Status = mutator.StatusNotViable
 		m.Duration = nonZeroSince(start)
 		return m
@@ -171,7 +216,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	// 4. Write overlay JSON (absolute paths required).
 	ov := overlay{Replace: map[string]string{m.File: w.tmpSrcPath}}
 	ovBytes, _ := json.Marshal(ov)
-	if err := os.WriteFile(w.overlayPath, ovBytes, 0o644); err != nil {
+	if err := writeFileFunc(w.overlayPath, ovBytes, 0o644); err != nil {
 		m.Status = mutator.StatusNotViable
 		m.Duration = nonZeroSince(start)
 		return m
@@ -181,26 +226,8 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	testCtx, cancel := context.WithTimeout(ctx, w.timeout)
 	defer cancel()
 
-	args := w.buildTestArgs(m, os.Getenv("GOMUTANTS_TEST_SHORT") == "1")
-	cmd := exec.CommandContext(testCtx, "go", args...)
-	cmd.Dir = w.projectDir
-	// Put go test + its compiler + test-binary descendants in their own
-	// process group so we can kill the whole tree if RSS runs away.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if w.childGOMAXPROCS > 0 {
-		// exec auto-sets PWD=cmd.Dir only when cmd.Env is nil (see Go's
-		// exec.go ~L1220). When we set Env explicitly the child inherits the
-		// parent's stale PWD, which breaks module-relative paths. Mirror the
-		// auto-PWD behavior plus our GOMAXPROCS cap.
-		cmd.Env = append(os.Environ(),
-			"PWD="+cmd.Dir,
-			fmt.Sprintf("GOMAXPROCS=%d", w.childGOMAXPROCS),
-		)
-	}
-
-	var stdout, stderr cappedBuffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	args := w.buildTestArgs(m, shortFlagFromEnv())
+	cmd, stdout, stderr := w.makeTestCmd(testCtx, args)
 
 	if err := cmd.Start(); err != nil {
 		// cmd.Start failure is an infrastructure problem (exec/fork failure,
@@ -217,7 +244,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	// macOS it happens in the child post-fork, so there's a brief window
 	// where cmd.Process.Pid and the group leader's pid may differ.
 	// Getpgid(pid) avoids both the race and any future scheduler changes.
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	pgid, err := syscallGetpgidFunc(cmd.Process.Pid)
 	if err != nil {
 		pgid = cmd.Process.Pid
 	}
@@ -230,7 +257,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 		// still safe — even on M-series RAM bandwidth a runaway alloc takes
 		// ≥1s to add 2 GiB resident. testTimeout (10× baseline) is the
 		// outer backstop.
-		t := time.NewTicker(1 * time.Second)
+		t := time.NewTicker(monitorPollInterval)
 		defer t.Stop()
 		for {
 			select {
@@ -263,6 +290,34 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	m.Duration = time.Since(start)
 	m.Status = classifyTestOutcome(err, memKilled.Load(), testCtx.Err(), stdout.String(), stderr.String())
 	return m
+}
+
+// makeTestCmd builds the *exec.Cmd that runs the mutated `go test` plus
+// its capped stdout/stderr buffers. Extracted from Worker.Test so each
+// piece of cmd configuration (Setpgid, GOMAXPROCS env, capped buffers)
+// can be asserted on directly. Without extraction the cmd is local to
+// Test and the SysProcAttr / Env mutations are invisible to tests.
+func (w *Worker) makeTestCmd(ctx context.Context, args []string) (*exec.Cmd, *cappedBuffer, *cappedBuffer) {
+	cmd := execCommandContext(ctx, "go", args...)
+	cmd.Dir = w.projectDir
+	// Put go test + its compiler + test-binary descendants in their own
+	// process group so we can kill the whole tree if RSS runs away.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if w.childGOMAXPROCS > 0 {
+		// exec auto-sets PWD=cmd.Dir only when cmd.Env is nil (see Go's
+		// exec.go ~L1220). When we set Env explicitly the child inherits the
+		// parent's stale PWD, which breaks module-relative paths. Mirror the
+		// auto-PWD behavior plus our GOMAXPROCS cap.
+		cmd.Env = append(os.Environ(),
+			"PWD="+cmd.Dir,
+			fmt.Sprintf("GOMAXPROCS=%d", w.childGOMAXPROCS),
+		)
+	}
+	stdout := &cappedBuffer{}
+	stderr := &cappedBuffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	return cmd, stdout, stderr
 }
 
 // buildTestArgs constructs the `go test` argv for a single mutant. Split
