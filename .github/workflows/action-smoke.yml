@@ -36,13 +36,15 @@ jobs:
           args: --dry-run ./internal/report/...
           fail-on-lived: "false"
 
-      # End-to-end: a real run against a small target so the annotation
-      # pipeline (--annotations=github + WriteGitHubAnnotations) is
-      # actually exercised. fail-on-lived stays false so the job is
-      # green regardless of mutation score — we only assert the action
-      # wires up correctly, not that the codebase is mutation-clean.
+      # End-to-end: a real run against the smallest internal package so
+      # the full pipeline (test execution + --annotations=github +
+      # WriteGitHubAnnotations) is exercised in CI. ./internal/patch/...
+      # is ~17 lines of source and known mutation-clean, so the step
+      # runs in well under a minute. fail-on-lived stays false: we
+      # assert the action wires up correctly, not that the codebase is
+      # mutation-clean.
       - name: Smoke (live run)
         uses: ./
         with:
-          args: --only ARITHMETIC_BASE -w 2 ./internal/report/...
+          args: --only ARITHMETIC_BASE -w 2 ./internal/patch/...
           fail-on-lived: "false"
