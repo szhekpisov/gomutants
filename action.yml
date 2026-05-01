@@ -1,0 +1,89 @@
+name: gomutants
+description: Mutation testing for Go with PR-scoped runs and inline annotations.
+branding:
+  icon: alert-triangle
+  color: yellow
+
+inputs:
+  args:
+    description: |
+      Arguments passed to gomutants (e.g. "--changed-since origin/main ./...").
+      The action automatically appends --annotations=github so surviving mutants
+      show up as inline annotations on the PR diff.
+    required: true
+  version:
+    description: gomutants version to install (git tag, branch, or "latest").
+    required: false
+    default: latest
+  threshold-efficacy:
+    description: |
+      Minimum test efficacy % (KILLED/(KILLED+LIVED)). Below threshold
+      the step exits with code 10. Default "100" gates on any LIVED
+      mutant. Set to "" to disable. gremlins-compat exit code.
+    required: false
+    default: "100"
+  threshold-mcover:
+    description: |
+      Minimum mutant coverage % ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)).
+      Below threshold the step exits with code 11. Default "" disables
+      the gate. gremlins-compat exit code.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory to run gomutants from. Must contain go.mod.
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      with:
+        go-version-file: ${{ inputs.working-directory }}/go.mod
+
+    - name: Fetch base ref (PR events)
+      if: github.event_name == 'pull_request'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: git fetch --no-tags origin "$BASE_REF"
+
+    - name: Install gomutants
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      # Skip only when the caller didn't pin a version — for "latest" we
+      # honor a pre-installed binary (this lets a smoke job pre-build from
+      # source). When the caller pins to a tag/branch/SHA we always
+      # install, so version: matches what runs.
+      run: |
+        if [ "$VERSION" = "latest" ] && command -v gomutants >/dev/null 2>&1; then
+          echo "gomutants already on PATH ($(gomutants --version)); skipping install (version: latest)"
+        else
+          go install "github.com/szhekpisov/gomutants@$VERSION"
+        fi
+
+    - name: Run gomutants
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ARGS: ${{ inputs.args }}
+        THRESHOLD_EFFICACY: ${{ inputs.threshold-efficacy }}
+        THRESHOLD_MCOVER: ${{ inputs.threshold-mcover }}
+      # --annotations=github goes first because Go's flag package stops
+      # parsing flags after the first non-flag token (the package list).
+      # Empty threshold inputs disable that gate; non-empty values forward
+      # to gomutants directly. Default threshold-efficacy=100 means a
+      # surviving mutant fails the step (gremlins-compat exit code 10).
+      # $ARGS is intentionally unquoted so multi-token inputs word-split.
+      run: |
+        gate=()
+        if [ -n "$THRESHOLD_EFFICACY" ]; then
+          gate+=("--threshold-efficacy=$THRESHOLD_EFFICACY")
+        fi
+        if [ -n "$THRESHOLD_MCOVER" ]; then
+          gate+=("--threshold-mcover=$THRESHOLD_MCOVER")
+        fi
+        gomutants --annotations=github "${gate[@]}" $ARGS

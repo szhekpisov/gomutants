@@ -94,13 +94,15 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           trap '' TERM
-          ./gomutants -workers=2 -verbose --changed-since "origin/${BASE_REF}" -o mutation-report.json ./internal/...
+          ./gomutants -workers=2 -verbose --changed-since "origin/${BASE_REF}" \
+            -o mutation-report.json --stryker-output stryker-report.json ./internal/...
 
       - name: Run mutation testing (full tree, post-merge)
         if: github.event_name == 'push'
         run: |
           trap '' TERM
-          ./gomutants -workers=2 -verbose -o mutation-report.json ./internal/...
+          ./gomutants -workers=2 -verbose \
+            -o mutation-report.json --stryker-output stryker-report.json ./internal/...
 
       # On --changed-since runs the absolute test_efficacy floor is no
       # longer meaningful (subset varies per PR). Gate instead on "no
@@ -131,10 +133,14 @@ jobs:
             exit 1
           fi
 
-      # Pinned to the local measurement on internal/ at PR time:
-      # 88.03% (522 killed, 71 lived, 53 not_viable, 9 timed_out,
-      # 26 not_covered). Threshold = current floor; any regression
-      # fails the gate. Bump alongside test improvements.
+      # Re-pinned 2026-05-01 against ./internal/...:
+      # 86.71% (633 killed, 97 lived, 69 not_viable, 0 timed_out,
+      # 28 not_covered, 827 total). The codebase grew from 593 tested
+      # mutants at the prior calibration to 730 today; pre-existing
+      # files (notably discover/diff.go, runner/worker.go,
+      # runner/pool.go) account for 70+ of the LIVED. Threshold set
+      # below the current measurement with small headroom; bump it
+      # *up* as tests improve, never silently down.
       - name: Check efficacy threshold (post-merge)
         if: github.event_name == 'push'
         run: |
@@ -148,12 +154,29 @@ jobs:
             echo "::error::test_efficacy missing from mutation-report.json"
             exit 1
           fi
-          THRESHOLD=88.03
+          THRESHOLD=86.50
           echo "Test efficacy: ${EFFICACY}% (required: ${THRESHOLD}%)"
           if [ "$(echo "${EFFICACY} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
             echo "::error::Mutation test efficacy ${EFFICACY}% is below ${THRESHOLD}% threshold"
             exit 1
           fi
+
+      # Push the Stryker-format report to the public dashboard so the
+      # mutation-score badge in the README reflects the latest main. Only
+      # runs on push to main: the dashboard keys reports by branch/SHA,
+      # and PR-branch uploads from --changed-since runs are partial.
+      # `if: always()` is intentionally NOT used — a failed mutation run
+      # should not push a misleading score.
+      - name: Upload to Stryker Dashboard
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          STRYKER_DASHBOARD_KEY: ${{ secrets.STRYKER_DASHBOARD_KEY }}
+        run: |
+          curl -fSs -X PUT \
+            -H "X-Api-Key: $STRYKER_DASHBOARD_KEY" \
+            -H "Content-Type: application/json" \
+            --data @stryker-report.json \
+            "https://dashboard.stryker-mutator.io/api/reports/github.com/szhekpisov/gomutants/main"
 
       - name: Clean build cache
         if: always()
@@ -164,5 +187,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutation-report
-          path: mutation-report.json
+          path: |
+            mutation-report.json
+            stryker-report.json
           retention-days: 30

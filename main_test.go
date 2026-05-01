@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,19 @@ func captureOutput(t *testing.T, fn func() error) (string, error) {
 	orig := stdout
 	stdout = &buf
 	defer func() { stdout = orig }()
+	err := fn()
+	return buf.String(), err
+}
+
+// captureStderr swaps the package-level stderr writer for the duration of
+// fn so tests can assert against warnings/notes (e.g. the "no testable
+// mutants discovered; --threshold-efficacy not evaluated" message).
+func captureStderr(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := stderr
+	stderr = &buf
+	defer func() { stderr = orig }()
 	err := fn()
 	return buf.String(), err
 }
@@ -420,6 +434,186 @@ func TestRunFullPipeline(t *testing.T) {
 	// Verify report was written.
 	if _, err := os.Stat(outPath); err != nil {
 		t.Fatalf("report not written: %v", err)
+	}
+}
+
+// TestRunThresholdEfficacy asserts that --threshold-efficacy=100 turns a
+// surviving mutant into exit code 10 (gremlins-compat), and that the
+// report is still written before that error fires. The "test" here calls
+// the SUT but never asserts anything, so any ARITHMETIC_BASE mutation
+// lives.
+func TestRunThresholdEfficacy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\t_ = Add(1, 2)\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	outPath := filepath.Join(dir, "report.json")
+	_, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", outPath,
+			"--threshold-efficacy=100",
+			"testmod",
+		})
+	})
+	if err == nil {
+		t.Fatal("expected --threshold-efficacy=100 to return an error when LIVED > 0")
+	}
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 10 {
+		t.Errorf("expected exitError code 10 (gremlins-compat), got: %v", err)
+	}
+	// Report must be written even when the gate fires — the action depends
+	// on the JSON/Stryker outputs being available for upload after a fail.
+	if _, statErr := os.Stat(outPath); statErr != nil {
+		t.Errorf("report should be written before the gate fires: %v", statErr)
+	}
+}
+
+// TestRunThresholdEfficacySilentWhenClean is the inverse: with no LIVED
+// mutants (test asserts the result), --threshold-efficacy=100 must NOT
+// return an error. Pins the `r.TestEfficacy < thresholdEfficacy` guard so a
+// mutation that flips the comparison or drops the guard is observable.
+func TestRunThresholdEfficacySilentWhenClean(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n\tif Add(5, 7) != 12 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	_, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", filepath.Join(dir, "report.json"),
+			"--threshold-efficacy=100",
+			"testmod",
+		})
+	})
+	if err != nil {
+		t.Fatalf("--threshold-efficacy=100 must not error when LIVED == 0: %v", err)
+	}
+}
+
+// TestRunThresholdMcover pins the second gate: a function whose mutants
+// are all NOT_COVERED (no test exercises it) drops mutant coverage to 0%,
+// which must surface as exit code 11.
+func TestRunThresholdMcover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module testmod\n\ngo 1.26\n",
+		// No test file references Add at all -> ARITHMETIC_BASE mutant on
+		// `+` is NOT_COVERED. KILLED+LIVED == 0, NOT_COVERED == 1, so
+		// gremlins-formula mcover = 0/1 = 0%.
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestNoop(t *testing.T) {}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	_, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", filepath.Join(dir, "report.json"),
+			"--threshold-mcover=50",
+			"testmod",
+		})
+	})
+	if err == nil {
+		t.Fatal("expected --threshold-mcover=50 to error when coverage is 0%")
+	}
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 11 {
+		t.Errorf("expected exitError code 11 (gremlins-compat), got: %v", err)
+	}
+}
+
+// TestRunThresholdSkipsOnEmptyDiscovery pins the deviation from gremlins:
+// when a threshold's denominator is zero (no mutants to evaluate), the
+// gate is *skipped* with a stderr note rather than failing with a
+// misleading "0% below N%" message. A function with no arithmetic
+// operators yields zero ARITHMETIC_BASE mutants, so both K+L and
+// K+L+NC are zero and both gates skip.
+func TestRunThresholdSkipsOnEmptyDiscovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":         "module testmod\n\ngo 1.26\n",
+		"greet.go":       "package testmod\n\nfunc Greet() string {\n\treturn \"hello\"\n}\n",
+		"greet_test.go":  "package testmod\n\nimport \"testing\"\n\nfunc TestGreet(t *testing.T) {\n\tif Greet() != \"hello\" {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	stderrText, err := captureStderr(t, func() error {
+		_, runErr := captureOutput(t, func() error {
+			return run(context.Background(), []string{
+				"--only", "ARITHMETIC_BASE",
+				"-w", "1",
+				"-o", filepath.Join(dir, "report.json"),
+				"--threshold-efficacy=80",
+				"--threshold-mcover=60",
+				"testmod",
+			})
+		})
+		return runErr
+	})
+	if err != nil {
+		t.Fatalf("threshold gates must skip (not error) on empty discovery: %v", err)
+	}
+	if !strings.Contains(stderrText, "--threshold-efficacy not evaluated") {
+		t.Errorf("expected stderr to note the skipped efficacy gate, got: %q", stderrText)
+	}
+	// mcoverDenom == 0 only when KILLED+LIVED+NOT_COVERED == 0; here all
+	// are zero because there are no mutants at all, so the mcover skip
+	// note must also appear.
+	if !strings.Contains(stderrText, "--threshold-mcover not evaluated") {
+		t.Errorf("expected stderr to note the skipped mcover gate, got: %q", stderrText)
 	}
 }
 

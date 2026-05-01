@@ -33,10 +33,12 @@ type FileReport struct {
 
 // MutationReport is a single mutation entry.
 type MutationReport struct {
-	Type   string `json:"type"`
-	Status string `json:"status"`
-	Line   int    `json:"line"`
-	Column int    `json:"column"`
+	Type        string `json:"type"`
+	Status      string `json:"status"`
+	Line        int    `json:"line"`
+	Column      int    `json:"column"`
+	Original    string `json:"original,omitempty"`
+	Replacement string `json:"replacement,omitempty"`
 }
 
 // Generate builds a Report from the list of mutants.
@@ -70,10 +72,12 @@ func Generate(mutants []mutator.Mutant, goModule string, elapsed time.Duration) 
 		}
 
 		mr := MutationReport{
-			Type:   string(m.Type),
-			Status: m.Status.String(),
-			Line:   m.Line,
-			Column: m.Col,
+			Type:        string(m.Type),
+			Status:      m.Status.String(),
+			Line:        m.Line,
+			Column:      m.Col,
+			Original:    m.Original,
+			Replacement: m.Replacement,
 		}
 		fileMap[m.RelFile] = append(fileMap[m.RelFile], mr)
 	}
@@ -108,10 +112,16 @@ var marshalJSON = json.Marshal
 
 // WriteJSON writes the report to a file.
 func WriteJSON(r *Report, path string) error {
+	return writeJSONFile(path, r)
+}
+
+// writeJSONFile marshals v as JSON and writes it to path, creating parent
+// directories as needed. Shared by WriteJSON and WriteStryker.
+func writeJSONFile(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := marshalJSON(r)
+	data, err := marshalJSON(v)
 	if err != nil {
 		return err
 	}

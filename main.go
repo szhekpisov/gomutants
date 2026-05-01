@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"go/token"
@@ -29,9 +30,24 @@ func main() {
 
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "gomutants: %v\n", err)
+		var ee *exitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.code)
+		}
 		os.Exit(1)
 	}
 }
+
+// exitError carries a specific exit code through run()'s error return so
+// main can map it to os.Exit. Matches gremlins's exit-code surface (10
+// for efficacy, 11 for mutant coverage) so gremlins-compat scripts keep
+// distinguishing the two failure modes.
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e *exitError) Error() string { return e.msg }
 
 // stdout is the writer for user-facing output. Tests swap this to capture output.
 var stdout io.Writer = os.Stdout
@@ -57,6 +73,10 @@ func run(ctx context.Context, args []string) error {
 		disable            string
 		only               string
 		changedSince       string
+		annotations        string
+		strykerOutput      string
+		thresholdEfficacy  float64
+		thresholdMcover    float64
 		dryRun             bool
 		verbose            bool
 		showVersion        bool
@@ -73,6 +93,10 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&disable, "disable", "", "comma-separated mutator types to disable")
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
+	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
+	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
+	fs.Float64Var(&thresholdEfficacy, "threshold-efficacy", 0, "minimum test efficacy %% (KILLED/(KILLED+LIVED)); exit 10 if not met. 0 disables (gremlins-compat)")
+	fs.Float64Var(&thresholdMcover, "threshold-mcover", 0, "minimum mutant coverage %% ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)); exit 11 if not met. 0 disables (gremlins-compat)")
 	fs.BoolVar(&dryRun, "dry-run", false, "list mutants without testing")
 	fs.BoolVar(&verbose, "verbose", false, "show each mutant as tested")
 	fs.BoolVar(&verbose, "v", false, "verbose (shorthand)")
@@ -84,6 +108,12 @@ func run(ctx context.Context, args []string) error {
 
 	if testCPU < 0 {
 		return fmt.Errorf("--test-cpu must be >= 0, got %d", testCPU)
+	}
+
+	switch annotations {
+	case "", "github":
+	default:
+		return fmt.Errorf("--annotations=%q not recognized (supported: github)", annotations)
 	}
 
 	if showVersion {
@@ -228,6 +258,58 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("writing report: %w", err)
 	}
 	fmt.Fprintf(stdout, "Report: %s\n", cfg.Output)
+
+	if strykerOutput != "" {
+		if err := report.WriteStryker(strykerOutput, mutants, projectDir, version); err != nil {
+			return fmt.Errorf("writing Stryker report: %w", err)
+		}
+		fmt.Fprintf(stdout, "Stryker report: %s\n", strykerOutput)
+	}
+
+	if annotations == "github" {
+		if err := report.WriteGitHubAnnotations(stdout, r); err != nil {
+			return fmt.Errorf("writing annotations: %w", err)
+		}
+	}
+
+	// Threshold gates. Exit codes 10/11 match gremlins's surface so scripts
+	// that distinguish the two failure modes keep working. Mutant coverage
+	// uses the gremlins formula (KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED);
+	// r.MutationsCoverage in the JSON uses a different denominator and is
+	// kept as-is for backward-compat with existing report consumers.
+	//
+	// We deviate from gremlins on two points: a gate is *skipped* (with a
+	// stderr note) when its denominator is zero — empty discovery is almost
+	// always a config issue, not a test-quality issue, and reporting "0.00%
+	// below 80.00%" hides that. Error messages always include both
+	// percentages so a single read shows the full state.
+	tested := r.MutantsKilled + r.MutantsLived
+	mcoverDenom := tested + r.MutantsNotCovered
+	mcover := 0.0
+	if mcoverDenom > 0 {
+		mcover = float64(tested) / float64(mcoverDenom) * 100
+	}
+
+	if thresholdEfficacy > 0 {
+		if tested == 0 {
+			fmt.Fprintln(stderr, "gomutants: no testable mutants discovered; --threshold-efficacy not evaluated")
+		} else if r.TestEfficacy < thresholdEfficacy {
+			return &exitError{
+				code: 10,
+				msg:  fmt.Sprintf("test efficacy %.2f%% below --threshold-efficacy=%.2f%% (mutant coverage: %.2f%%)", r.TestEfficacy, thresholdEfficacy, mcover),
+			}
+		}
+	}
+	if thresholdMcover > 0 {
+		if mcoverDenom == 0 {
+			fmt.Fprintln(stderr, "gomutants: no covered or testable mutants discovered; --threshold-mcover not evaluated")
+		} else if mcover < thresholdMcover {
+			return &exitError{
+				code: 11,
+				msg:  fmt.Sprintf("mutant coverage %.2f%% below --threshold-mcover=%.2f%% (test efficacy: %.2f%%)", mcover, thresholdMcover, r.TestEfficacy),
+			}
+		}
+	}
 	return nil
 }
 
