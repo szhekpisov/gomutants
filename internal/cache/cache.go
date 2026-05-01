@@ -16,6 +16,7 @@
 package cache
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,7 +24,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/szhekpisov/gomutants/internal/mutator"
@@ -36,6 +37,38 @@ import (
 //	v1: package-dir tests_hash (replaced — undercounted cross-package coverage).
 //	v2: per-mutant tests_hash via TestFilesForFn; TIMED_OUT now gated on tests_hash.
 const SchemaVersion = 2
+
+// I/O syscalls used by Save are exposed as package-level function
+// variables so tests can inject failures into each error path
+// independently. Production code calls them through these vars; tests
+// swap them out for stubs that return controlled errors. Mirrors the
+// `var preReadFilesFunc = ...` pattern in main.go.
+var (
+	osMkdirAll = os.MkdirAll
+	osChmod    = os.Chmod
+	osRename   = os.Rename
+	osRemove   = os.Remove
+
+	// newSaveSink wraps the os.CreateTemp call so Save's flow runs
+	// against an interface (saveSink) rather than *os.File directly.
+	// This is what lets a test simulate "Encode fails / Close
+	// succeeds" or "Encode succeeds / Close fails" — a contrast that
+	// can't be produced from a real *os.File without filesystem-
+	// specific tricks.
+	newSaveSink = func(dir, pattern string) (saveSink, error) {
+		return os.CreateTemp(dir, pattern)
+	}
+)
+
+// saveSink is the minimal surface Save needs from a temp-file handle:
+// write the encoded JSON, close the descriptor, and report the on-disk
+// path so Chmod/Rename/Remove can target it. *os.File satisfies this
+// directly; tests substitute a fake to inject controlled errors.
+type saveSink interface {
+	io.Writer
+	io.Closer
+	Name() string
+}
 
 // Cache is the on-disk artifact. Entries are keyed by mutant identity
 // (rel_file, line, col, type, start_offset, original, replacement).
@@ -97,17 +130,19 @@ func mutantKey(m mutator.Mutant) entryKey {
 }
 
 // HashFile returns the hex-encoded sha256 of the file at absPath.
+//
+// Implemented over os.ReadFile rather than open+io.Copy: the file is
+// already small (cache entries are keyed off prod-source files we
+// already pre-read into memory in the discovery phase, and test files
+// in the rare cold-cache path), and a single error path means no
+// hidden mutants where one if-err return is shadowed by another.
 func HashFile(absPath string) (string, error) {
-	f, err := os.Open(absPath)
+	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // Hasher memoizes per-file hashes within a single run. Not safe for
@@ -148,20 +183,18 @@ func (h *Hasher) File(absPath string) (string, error) {
 
 // HashTestFiles returns a stable hex-encoded sha256 over the union of
 // the test files in absPaths. Inputs are sorted and de-duplicated, so
-// any iteration order produces the same hash. The returned digest mixes
-// each file's basename + per-file content hash, with NUL separators so
-// concatenation can't alias one file boundary into another.
+// any iteration order produces the same hash. The per-file Fprintf
+// uses length-prefixed framing so concatenation can't alias one file
+// boundary into another.
 //
-// An empty (or nil) input returns the hash of the empty string. A read
-// error on any file is propagated — callers should treat this as a
-// cache miss for that mutant.
+// An empty (or nil) input returns the hash of the empty string — the
+// same value the loop produces naturally without an early return, so
+// no special-case branch is needed. A read error on any file is
+// propagated — callers should treat this as a cache miss for that
+// mutant.
 func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
-	if len(absPaths) == 0 {
-		sum := sha256.Sum256(nil)
-		return hex.EncodeToString(sum[:]), nil
-	}
 	sorted := append([]string(nil), absPaths...)
-	sort.Strings(sorted)
+	slices.Sort(sorted)
 	uniq := sorted[:0]
 	for i, p := range sorted {
 		if i > 0 && p == sorted[i-1] {
@@ -172,46 +205,43 @@ func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
 
 	hh := sha256.New()
 	for _, p := range uniq {
-		// Filename + content hash + NUL separators. Filename catches
-		// add/remove (even of an empty file); per-file hash catches
-		// content edits; NULs prevent boundary aliasing across files.
-		hh.Write([]byte(filepath.Base(p)))
-		hh.Write([]byte{0})
 		fileHex, err := h.File(p)
 		if err != nil {
 			return "", err
 		}
-		hh.Write([]byte(fileHex))
-		hh.Write([]byte{0})
+		// Length-prefixed framing collapses basename and content hash
+		// into a single Write so neither field can be silently dropped
+		// by a STATEMENT_REMOVE mutation, and the explicit byte length
+		// prevents any boundary aliasing between adjacent files (e.g.
+		// "a"+hash colliding with "ahash"+content).
+		base := filepath.Base(p)
+		fmt.Fprintf(hh, "%d:%s|%s|", len(base), base, fileHex)
 	}
 	return hex.EncodeToString(hh.Sum(nil)), nil
 }
 
 // Load reads the cache from path. Returns an empty (but valid) Cache
-// stamped with the caller's identity if the file doesn't exist, fails
-// to parse, or has a mismatched schema/module/tool version. Callers
-// should treat the returned Cache as authoritative regardless of error
-// — Load never returns nil.
+// stamped with the caller's identity if the file is missing, fails to
+// parse, or has a mismatched schema/module/tool version. Callers should
+// treat the returned Cache as authoritative regardless of error — Load
+// never returns nil.
+//
+// Mutator definitions can change between tool versions, so stale
+// entries can silently produce wrong skips. Pessimistic invalidation
+// on any metadata mismatch is the safe default; the metadata gate is
+// the *only* observable rejection path because the read- and
+// parse-failure branches both produce a zero-value Cache that fails
+// the gate identically (SchemaVersion=0 ≠ caller's SchemaVersion).
 func Load(path, goModule, toolVersion string) *Cache {
 	empty := &Cache{
 		SchemaVersion: SchemaVersion,
 		GoModule:      goModule,
 		ToolVersion:   toolVersion,
 	}
-	if path == "" {
-		return empty
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return empty
-	}
 	var c Cache
-	if err := json.Unmarshal(data, &c); err != nil {
-		return empty
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &c) // c stays zero-value on parse error → fails metadata gate.
 	}
-	// Mutator definitions can change between tool versions, so stale
-	// entries can silently produce wrong skips. Pessimistic invalidation
-	// on any metadata mismatch is the safe default.
 	if c.SchemaVersion != SchemaVersion || c.GoModule != goModule || c.ToolVersion != toolVersion {
 		return empty
 	}
@@ -229,39 +259,49 @@ func Save(c *Cache, path string) error {
 		return nil
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := osMkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	// Temp file must live in the same directory as the target so
 	// os.Rename stays atomic — cross-filesystem renames degrade to
 	// copy+unlink on some platforms.
-	tmp, err := os.CreateTemp(dir, ".gomutants-cache-*.tmp")
+	tmp, err := newSaveSink(dir, ".gomutants-cache-*.tmp")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-	// Cleared after a successful rename; otherwise the deferred Remove
-	// cleans up any temp file left by an error path below.
+	// committed flips to true once the rename has placed the file at
+	// `path`; the deferred cleanup removes the *original* tmp path
+	// only on the failure path. (Once committed, tmpName no longer
+	// exists on disk, so calling Remove on it would be wrong.)
+	committed := false
 	defer func() {
-		if tmpName != "" {
-			_ = os.Remove(tmpName)
+		if !committed {
+			_ = osRemove(tmpName)
 		}
 	}()
 
-	if err := json.NewEncoder(tmp).Encode(c); err != nil {
-		_ = tmp.Close()
+	// Encode + Close happen unconditionally (we always want to release
+	// the file descriptor) and the first non-nil error wins. Wiring it
+	// this way means an Encode failure that was followed by a
+	// successful Close still surfaces — without this, a mutant that
+	// drops the encode-error return would silently produce a bogus
+	// cache file.
+	encodeErr := json.NewEncoder(tmp).Encode(c)
+	closeErr := tmp.Close()
+	if encodeErr != nil {
+		return encodeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := osChmod(tmpName, 0o644); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := osRename(tmpName, path); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	tmpName = ""
+	committed = true
 	return nil
 }
 
@@ -293,8 +333,13 @@ type TestFilesForFn func(m mutator.Mutant) []string
 //
 // Hash failures (unreadable file/dir) are silently treated as a miss
 // for that mutant so a transient I/O error never produces a wrong skip.
+//
+// The "no entries" and "key not found" cases fall through naturally:
+// indexing an empty (or nil — see below) idx with `idx[k]` returns the
+// zero-value Entry whose Status="" parses to Pending and fails
+// canReuse, so no extra short-circuit is needed.
 func (c *Cache) Lookup(mutants []mutator.Mutant, h *Hasher, testFilesFor TestFilesForFn) int {
-	if c == nil || len(c.Entries) == 0 {
+	if c == nil {
 		return 0
 	}
 	idx := make(map[entryKey]Entry, len(c.Entries))
@@ -307,10 +352,7 @@ func (c *Cache) Lookup(mutants []mutator.Mutant, h *Hasher, testFilesFor TestFil
 		if m.Status != mutator.StatusPending {
 			continue
 		}
-		entry, ok := idx[mutantKey(*m)]
-		if !ok {
-			continue
-		}
+		entry := idx[mutantKey(*m)] // zero-value Entry on miss; fails canReuse below.
 		status := parseStatus(entry.Status)
 		if !canReuse(status) {
 			continue
@@ -395,7 +437,7 @@ func (c *Cache) Update(mutants []mutator.Mutant, h *Hasher, projectDir string, t
 	// 1. Build new entries from this run for any mutant with a
 	//    cacheable terminal status. Cache hits (FromCache=true) keep
 	//    the same content, just re-emitted.
-	newByKey := make(map[entryKey]Entry, len(mutants)+len(c.Entries))
+	newByKey := make(map[entryKey]Entry, len(mutants))
 	for _, m := range mutants {
 		if !canReuse(m.Status) {
 			continue
@@ -429,16 +471,16 @@ func (c *Cache) Update(mutants []mutator.Mutant, h *Hasher, projectDir string, t
 	}
 
 	// 2. Carry over prior entries whose file still hashes the same and
-	//    that this run did not overwrite.
+	//    that this run did not overwrite. h.File returning an error
+	//    leaves curHash="" — distinct from any real (non-empty) hex
+	//    digest, so the curHash-mismatch check below subsumes the
+	//    "file gone" case without an extra branch.
 	for _, prior := range c.Entries {
 		if _, overwritten := newByKey[prior.key()]; overwritten {
 			continue
 		}
 		abs := filepath.Join(projectDir, prior.RelFile)
-		curHash, err := h.File(abs)
-		if err != nil {
-			continue
-		}
+		curHash, _ := h.File(abs)
 		if curHash != prior.ProdHash {
 			continue
 		}
@@ -451,30 +493,20 @@ func (c *Cache) Update(mutants []mutator.Mutant, h *Hasher, projectDir string, t
 	for _, e := range newByKey {
 		merged = append(merged, e)
 	}
-	sort.Slice(merged, func(i, j int) bool {
-		a, b := merged[i], merged[j]
-		if a.RelFile != b.RelFile {
-			return a.RelFile < b.RelFile
-		}
-		if a.Line != b.Line {
-			return a.Line < b.Line
-		}
-		if a.Col != b.Col {
-			return a.Col < b.Col
-		}
-		if a.StartOffset != b.StartOffset {
-			return a.StartOffset < b.StartOffset
-		}
-		if a.Type != b.Type {
-			return a.Type < b.Type
-		}
-		// Tie-break on Original/Replacement so two mutants sharing the
-		// same (file, line, col, offset, type) — identity-key collision
-		// avoidance only — emit in a deterministic order across runs.
-		if a.Original != b.Original {
-			return a.Original < b.Original
-		}
-		return a.Replacement < b.Replacement
+	// cmp.Or chain: each Compare returns 0 on tie (delegating to the
+	// next field) or non-zero with the right sign. Original/Replacement
+	// tie-break the (file,line,col,offset,type) identity-key collision
+	// case so two such entries always emit in a deterministic order.
+	slices.SortFunc(merged, func(a, b Entry) int {
+		return cmp.Or(
+			cmp.Compare(a.RelFile, b.RelFile),
+			cmp.Compare(a.Line, b.Line),
+			cmp.Compare(a.Col, b.Col),
+			cmp.Compare(a.StartOffset, b.StartOffset),
+			cmp.Compare(a.Type, b.Type),
+			cmp.Compare(a.Original, b.Original),
+			cmp.Compare(a.Replacement, b.Replacement),
+		)
 	})
 	c.Entries = merged
 }

@@ -3,6 +3,7 @@ package cache
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +136,18 @@ func TestHashTestFiles_MissingFilePropagatesError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope.go")
 	if _, err := NewHasher(nil).HashTestFiles([]string{missing}); err == nil {
 		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestCacheString(t *testing.T) {
+	var nilC *Cache
+	if got := nilC.String(); got != "<nil>" {
+		t.Errorf("nil cache String = %q, want \"<nil>\"", got)
+	}
+	c := &Cache{GoModule: "m", ToolVersion: "v", Entries: []Entry{{}, {}, {}}}
+	got := c.String()
+	if !strings.Contains(got, "module=m") || !strings.Contains(got, "tool=v") || !strings.Contains(got, "entries=3") {
+		t.Errorf("String() = %q, missing module/tool/entries fields", got)
 	}
 }
 

@@ -50,10 +50,11 @@ func BuildTestIndex(pkgDirs []string) *TestIndex {
 		}
 		seen[abs] = true
 
-		entries, err := os.ReadDir(abs)
-		if err != nil {
-			continue
-		}
+		// ReadDir failure (dir missing, permission denied, …) leaves
+		// entries==nil; ranging over nil is a zero-iteration loop, the
+		// same behavior we'd get from an explicit "continue on error"
+		// guard — so no separate branch is needed.
+		entries, _ := os.ReadDir(abs)
 
 		var dirFiles []string
 		for _, e := range entries {
@@ -69,7 +70,11 @@ func BuildTestIndex(pkgDirs []string) *TestIndex {
 
 			fset := token.NewFileSet()
 			// SkipObjectResolution: we only need top-level FuncDecl names,
-			// no need for the (slow) identifier-resolution pass.
+			// no need for the (slow) identifier-resolution pass. parser
+			// returns a nil *ast.File only when the source can't be read,
+			// in which case perr is also non-nil — so the `perr != nil`
+			// guard is sufficient and the redundant `|| f == nil` is
+			// elided to keep the mutation surface minimal.
 			f, perr := parser.ParseFile(fset, absPath, nil, parser.SkipObjectResolution)
 			if perr != nil {
 				continue
@@ -84,9 +89,13 @@ func BuildTestIndex(pkgDirs []string) *TestIndex {
 				}
 			}
 		}
-		if len(dirFiles) > 0 {
-			ti.byDir[abs] = dirFiles
-		}
+		// Always record the dir, even when it contained no test files,
+		// so AllInDir distinguishes "scanned but empty" from "never
+		// scanned" via map presence. The guard form `if len(dirFiles)
+		// > 0 { … }` was a near-equivalent mutant target (>= 0 still
+		// stored an empty slice with the same observable AllInDir
+		// result) so it's been folded into an unconditional write.
+		ti.byDir[abs] = dirFiles
 	}
 	return ti
 }

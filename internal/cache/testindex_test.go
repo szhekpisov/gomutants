@@ -80,17 +80,34 @@ func TestBuildTestIndex_CrossPackageNameCollision(t *testing.T) {
 // fallback hashing path must include it — but contributes no byName
 // entries. Mutants resolving through it then fall back to the
 // directory-wide list, which correctly captures the malformed file.
+//
+// The malformed file is engineered to parse just far enough that
+// `parser.ParseFile` returns a *non-nil* *ast.File with a complete
+// FuncDecl for TestPartial before encountering the syntax error.
+// Without the `if perr != nil { continue }` guard, that partial AST
+// would be walked and TestPartial would be (incorrectly) indexed —
+// so this test also catches the BRANCH_IF mutation on that guard.
 func TestBuildTestIndex_MalformedFileRecordedInDirOnly(t *testing.T) {
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good_test.go")
 	bad := filepath.Join(dir, "bad_test.go")
 	mustWrite(t, good, "package x\nimport \"testing\"\nfunc TestOK(t *testing.T) {}\n")
-	mustWrite(t, bad, "package x\nfunc {{{")
+	mustWrite(t, bad, `package x
+
+import "testing"
+
+func TestPartial(t *testing.T) {}
+
+func {{{
+`)
 
 	ti := BuildTestIndex([]string{dir})
 
 	if got := ti.FilesFor("TestOK"); len(got) != 1 || got[0] != good {
 		t.Errorf("FilesFor(TestOK) = %v, want [%s]", got, good)
+	}
+	if got := ti.FilesFor("TestPartial"); got != nil {
+		t.Errorf("TestPartial from a malformed file was indexed (parse-error guard not honored): %v", got)
 	}
 	all := ti.AllInDir(dir)
 	if len(all) != 2 {
