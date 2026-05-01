@@ -24,6 +24,12 @@ func (s *statementRemove) Discover(fset *token.FileSet, file *ast.File, src []by
 			if len(stmt.Rhs) == 0 {
 				return true
 			}
+			// Skip "_ = expr": replacement would be byte-identical to the
+			// original, producing a phantom LIVED mutant that no test can
+			// kill (since the source isn't actually changed).
+			if isBlankLhs(stmt.Lhs) {
+				return true
+			}
 			// Replace "x = expr" with "_ = expr".
 			// The replacement keeps the RHS to avoid unused-import errors.
 			pos := fset.Position(stmt.Pos())
@@ -87,4 +93,12 @@ func (s *statementRemove) Discover(fset *token.FileSet, file *ast.File, src []by
 		return true
 	})
 	return candidates
+}
+
+func isBlankLhs(lhs []ast.Expr) bool {
+	if len(lhs) != 1 {
+		return false
+	}
+	id, ok := lhs[0].(*ast.Ident)
+	return ok && id.Name == "_"
 }

@@ -877,6 +877,50 @@ func TestCandidateLessFallThrough(t *testing.T) {
 	}
 }
 
+// TestCandidateLessTieBreakers exercises every comparison in candidateLess
+// past the filename. The post-refactor structure pairs `<` and `>` checks
+// without an `!=` guard, so each `<`/`>` mutation flips behavior on the
+// equality path that the older guarded form rendered untestable.
+func TestCandidateLessTieBreakers(t *testing.T) {
+	mk := func(file string, line, col int, typ mutator.MutationType) mutator.MutantCandidate {
+		return mutator.MutantCandidate{
+			Type: typ,
+			Pos:  mutator.Position{Filename: file, Line: line, Column: col},
+		}
+	}
+	tests := []struct {
+		name string
+		a, b mutator.MutantCandidate
+		want bool
+	}{
+		// Equal filename, line decides.
+		{"eqFile aLineLt", mk("/f", 1, 5, mutator.ArithmeticBase), mk("/f", 9, 5, mutator.ArithmeticBase), true},
+		{"eqFile aLineGt", mk("/f", 9, 5, mutator.ArithmeticBase), mk("/f", 1, 5, mutator.ArithmeticBase), false},
+		// Equal filename + line, column decides.
+		{"eqLine aColLt", mk("/f", 4, 1, mutator.ArithmeticBase), mk("/f", 4, 9, mutator.ArithmeticBase), true},
+		{"eqLine aColGt", mk("/f", 4, 9, mutator.ArithmeticBase), mk("/f", 4, 1, mutator.ArithmeticBase), false},
+		// Equal everything except type.
+		{"eqAll typeLt", mk("/f", 4, 5, mutator.ArithmeticBase), mk("/f", 4, 5, mutator.InvertNegatives), true},
+		{"eqAll typeGt", mk("/f", 4, 5, mutator.InvertNegatives), mk("/f", 4, 5, mutator.ArithmeticBase), false},
+		// Filename `>` is decisive: BRANCH_IF on its `{ return false }` body
+		// would let later checks return true here.
+		{"aFileGtBLineLt", mk("/zzz", 1, 1, mutator.ArithmeticBase), mk("/aaa", 9, 9, mutator.InvertNegatives), false},
+		// Line `>` is decisive (equal file, a.line > b.line); BRANCH_IF on
+		// its body would fall through to col-`<` and return true.
+		{"eqFile aLineGtBColLt", mk("/f", 9, 1, mutator.ArithmeticBase), mk("/f", 1, 9, mutator.InvertNegatives), false},
+		// Column `>` is decisive (equal file/line, a.col > b.col);
+		// BRANCH_IF on its body would fall through to type-`<` and return true.
+		{"eqLine aColGtTypeLt", mk("/f", 4, 9, mutator.ArithmeticBase), mk("/f", 4, 1, mutator.InvertNegatives), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := candidateLess(tt.a, tt.b); got != tt.want {
+				t.Errorf("candidateLess = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestCandidateLessEqualCandidates exercises the final `return a.Type < b.Type`
 // with two candidates that are identical in every field. The original
 // returns false (equal types aren't "less than"); CONDITIONALS_BOUNDARY
@@ -906,6 +950,83 @@ func TestComputeRelFileNonMatchingPkg(t *testing.T) {
 	// Original answer uses filepath.Rel.
 	if got != "sub/file.go" {
 		t.Errorf("computeRelFile(x/y, z/q, /root/sub/file.go, /root) = %q, want sub/file.go", got)
+	}
+}
+
+// TestDiscoverContinuesPastUnparseable kills INVERT_LOOP_CTRL on the
+// `continue` after `gomutant: skipping unparseable` (discover.go:94).
+// Mutated to `break`, the file loop exits on the first parse failure and
+// any subsequent files in the same package are silently skipped.
+func TestDiscoverContinuesPastUnparseable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bad.go"), []byte("not valid go"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "good.go"), []byte("package p\nfunc F() int { return 1 + 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkgs := []Package{
+		{Dir: dir, ImportPath: "example.com/mix", GoFiles: []string{"bad.go", "good.go"}},
+	}
+
+	fset := token.NewFileSet()
+	reg := mutator.NewRegistry()
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com")
+	if len(mutants) == 0 {
+		t.Fatal("expected mutants from good.go even after bad.go was skipped — INVERT_LOOP_CTRL on the unparseable-continue mutates the loop into an early exit")
+	}
+}
+
+// TestPreReadFilesContinuesPastDuplicate kills INVERT_LOOP_CTRL on the
+// `continue` in PreReadFiles (files.go:20). Mutated to `break`, hitting
+// an already-cached path stops the inner file loop, dropping later files
+// in the same package.
+func TestPreReadFilesContinuesPastDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "shared.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "after.go"), []byte("package p\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two packages share shared.go. The second package lists shared.go
+	// first (already cached), then after.go (must still be read).
+	pkgs := []Package{
+		{Dir: dir, GoFiles: []string{"shared.go"}},
+		{Dir: dir, GoFiles: []string{"shared.go", "after.go"}},
+	}
+
+	files, err := PreReadFiles(pkgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := files[filepath.Join(dir, "after.go")]; !ok {
+		t.Errorf("after.go missing from result — INVERT_LOOP_CTRL turned `continue` into `break`, exiting the inner file loop on the duplicate")
+	}
+}
+
+// TestFilterByCoverageContinuesPastUnmapped kills INVERT_LOOP_CTRL on
+// filter.go's `continue` (line 32). Mutated to `break`, the first
+// unmapped mutant terminates the loop and later mutants stay Pending.
+func TestFilterByCoverageContinuesPastUnmapped(t *testing.T) {
+	profile := &coverage.Profile{}
+	pkgs := []Package{
+		{Dir: "/abs/path/pkg", ImportPath: "example.com/mod/pkg", GoFiles: []string{"file.go"}},
+	}
+	mutants := []mutator.Mutant{
+		{ID: 1, File: "/unknown/file.go", Line: 1, Col: 1, Status: mutator.StatusPending},
+		{ID: 2, File: "/abs/path/pkg/file.go", Line: 1, Col: 1, Status: mutator.StatusPending},
+	}
+
+	FilterByCoverage(mutants, profile, pkgs, "example.com/mod")
+
+	if mutants[0].Status != mutator.StatusNotCovered {
+		t.Errorf("mutants[0] should be NotCovered, got %v", mutants[0].Status)
+	}
+	if mutants[1].Status == mutator.StatusPending {
+		t.Errorf("mutants[1] still Pending — INVERT_LOOP_CTRL on the unmapped `continue` exits the loop and skips later mutants")
 	}
 }
 

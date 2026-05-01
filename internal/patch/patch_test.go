@@ -112,6 +112,24 @@ func TestApplyEndAtLength(t *testing.T) {
 	}
 }
 
+// Kills ARITHMETIC_BASE and INVERT_NEGATIVES on the capacity expression at
+// patch.go:12. Capacity is a pre-sizing optimization — wrong capacity still
+// produces correct output, so behavioral assertions on the returned bytes
+// don't catch these mutants. cap(result) is observable: the three appends
+// total to exactly the pre-sized capacity, so no grow occurs and cap matches
+// the formula exactly. Mutating - to + or + to - changes cap observably.
+func TestApplyCapacityIsExact(t *testing.T) {
+	original := []byte("abcdef")
+	got, err := patch.Apply(original, 1, 4, "X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// len(original) - (end-start) + len(replacement) = 6 - 3 + 1 = 4.
+	if want := 4; cap(got) != want {
+		t.Errorf("cap(got)=%d, want %d", cap(got), want)
+	}
+}
+
 func TestApplyDoesNotMutateOriginal(t *testing.T) {
 	original := []byte("a + b")
 	snapshot := string(original)
