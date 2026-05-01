@@ -139,7 +139,7 @@ Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...
 |---|---|---|
 | `args` | _required_ | Arguments forwarded to `gomutants`. The action appends `--annotations=github` automatically. |
 | `version` | `latest` | gomutants version to install. With `version: latest` the action keeps a pre-installed binary on PATH; with any pinned tag/branch/SHA it always re-installs so what runs matches what was requested. |
-| `fail-on-lived` | `true` | Fail the step if any LIVED mutant is reported. Implemented via gomutants's own `--exit-on-lived` flag, so the gating is independent of the report path. |
+| `fail-on-lived` | `true` | Fail the step if any LIVED mutant is reported. Implemented as `--threshold-efficacy=100` (gremlins-compat exit code 10), so the gating is independent of the report path. |
 | `working-directory` | `.` | Directory containing `go.mod`. |
 
 **Security:** the `args` input is splatted into a shell command, and `version` is interpolated into `go install …@<version>`. Don't pipe untrusted strings (PR titles, branch names) into either. For supply-chain hardening, pin `version` to a specific commit SHA rather than `latest`.
@@ -182,7 +182,8 @@ Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutation
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
 | `--annotations` | | | Emit annotations for LIVED mutants. Supported: `github` (workflow-command warnings on stdout). |
 | `--stryker-output` | | | Also write a [Stryker mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) report at this path (for the HTML viewer and Stryker Dashboard). |
-| `--exit-on-lived` | | false | Exit non-zero if any mutant survives. Reports are still written first. |
+| `--threshold-efficacy` | | 0 | Minimum test efficacy (KILLED/(KILLED+LIVED)). Below threshold → exit 10 (gremlins-compat). 0 disables. |
+| `--threshold-mcover` | | 0 | Minimum mutant coverage ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)). Below threshold → exit 11 (gremlins-compat). 0 disables. |
 | `--dry-run` | | false | List mutants without testing |
 | `--verbose` | `-v` | false | Stream each mutant as tested |
 | `--version` | | | Print version and exit |

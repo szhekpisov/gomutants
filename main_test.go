@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -423,11 +424,12 @@ func TestRunFullPipeline(t *testing.T) {
 	}
 }
 
-// TestRunExitOnLived asserts that --exit-on-lived turns a surviving mutant
-// into a non-zero exit (a returned error), and that the report is still
-// written before that error fires. The "tests" here call the SUT but never
-// assert anything, so any ARITHMETIC_BASE mutation lives.
-func TestRunExitOnLived(t *testing.T) {
+// TestRunThresholdEfficacy asserts that --threshold-efficacy=100 turns a
+// surviving mutant into exit code 10 (gremlins-compat), and that the
+// report is still written before that error fires. The "test" here calls
+// the SUT but never asserts anything, so any ARITHMETIC_BASE mutation
+// lives.
+func TestRunThresholdEfficacy(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
 	}
@@ -452,15 +454,16 @@ func TestRunExitOnLived(t *testing.T) {
 			"--only", "ARITHMETIC_BASE",
 			"-w", "1",
 			"-o", outPath,
-			"--exit-on-lived",
+			"--threshold-efficacy=100",
 			"testmod",
 		})
 	})
 	if err == nil {
-		t.Fatal("expected --exit-on-lived to return an error when LIVED > 0")
+		t.Fatal("expected --threshold-efficacy=100 to return an error when LIVED > 0")
 	}
-	if !strings.Contains(err.Error(), "surviving mutant") {
-		t.Errorf("error should mention surviving mutants, got: %v", err)
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 10 {
+		t.Errorf("expected exitError code 10 (gremlins-compat), got: %v", err)
 	}
 	// Report must be written even when the gate fires — the action depends
 	// on the JSON/Stryker outputs being available for upload after a fail.
@@ -469,11 +472,11 @@ func TestRunExitOnLived(t *testing.T) {
 	}
 }
 
-// TestRunExitOnLivedSilentWhenClean is the inverse: with no LIVED mutants
-// (test asserts the result), --exit-on-lived must NOT return an error.
-// Pins the `r.MutantsLived > 0` guard so a mutation that flips the
-// comparison or drops the guard is observable.
-func TestRunExitOnLivedSilentWhenClean(t *testing.T) {
+// TestRunThresholdEfficacySilentWhenClean is the inverse: with no LIVED
+// mutants (test asserts the result), --threshold-efficacy=100 must NOT
+// return an error. Pins the `r.TestEfficacy < thresholdEfficacy` guard so a
+// mutation that flips the comparison or drops the guard is observable.
+func TestRunThresholdEfficacySilentWhenClean(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
 	}
@@ -497,12 +500,55 @@ func TestRunExitOnLivedSilentWhenClean(t *testing.T) {
 			"--only", "ARITHMETIC_BASE",
 			"-w", "1",
 			"-o", filepath.Join(dir, "report.json"),
-			"--exit-on-lived",
+			"--threshold-efficacy=100",
 			"testmod",
 		})
 	})
 	if err != nil {
-		t.Fatalf("--exit-on-lived must not error when LIVED == 0: %v", err)
+		t.Fatalf("--threshold-efficacy=100 must not error when LIVED == 0: %v", err)
+	}
+}
+
+// TestRunThresholdMcover pins the second gate: a function whose mutants
+// are all NOT_COVERED (no test exercises it) drops mutant coverage to 0%,
+// which must surface as exit code 11.
+func TestRunThresholdMcover(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module testmod\n\ngo 1.26\n",
+		// No test file references Add at all -> ARITHMETIC_BASE mutant on
+		// `+` is NOT_COVERED. KILLED+LIVED == 0, NOT_COVERED == 1, so
+		// gremlins-formula mcover = 0/1 = 0%.
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestNoop(t *testing.T) {}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	_, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", filepath.Join(dir, "report.json"),
+			"--threshold-mcover=50",
+			"testmod",
+		})
+	})
+	if err == nil {
+		t.Fatal("expected --threshold-mcover=50 to error when coverage is 0%")
+	}
+	var ee *exitError
+	if !errors.As(err, &ee) || ee.code != 11 {
+		t.Errorf("expected exitError code 11 (gremlins-compat), got: %v", err)
 	}
 }
 

@@ -63,14 +63,14 @@ runs:
         FAIL_ON_LIVED: ${{ inputs.fail-on-lived }}
       # --annotations=github goes first because Go's flag package stops
       # parsing flags after the first non-flag token (the package list).
-      # --exit-on-lived (when fail-on-lived=true) makes gomutants exit
-      # non-zero if any LIVED mutant is reported, so we don't have to
-      # parse the JSON report (no jq dependency, and the report path
-      # stays user-configurable via -o).
+      # --threshold-efficacy=100 (when fail-on-lived=true) makes gomutants
+      # exit 10 if any LIVED mutant survives — gremlins-compatible
+      # surface, no jq dependency, and the report path stays
+      # user-configurable via -o.
       # $ARGS is intentionally unquoted so multi-token inputs word-split.
       run: |
         gate=()
         if [ "$FAIL_ON_LIVED" = "true" ]; then
-          gate+=(--exit-on-lived)
+          gate+=(--threshold-efficacy=100)
         fi
         gomutants --annotations=github "${gate[@]}" $ARGS
