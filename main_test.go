@@ -22,6 +22,19 @@ func captureOutput(t *testing.T, fn func() error) (string, error) {
 	return buf.String(), err
 }
 
+// captureStderr swaps the package-level stderr writer for the duration of
+// fn so tests can assert against warnings/notes (e.g. the "no testable
+// mutants discovered; --threshold-efficacy not evaluated" message).
+func captureStderr(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := stderr
+	stderr = &buf
+	defer func() { stderr = orig }()
+	err := fn()
+	return buf.String(), err
+}
+
 func TestRunVersion(t *testing.T) {
 	out, err := captureOutput(t, func() error {
 		return run(context.Background(), []string{"--version"})
@@ -549,6 +562,58 @@ func TestRunThresholdMcover(t *testing.T) {
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != 11 {
 		t.Errorf("expected exitError code 11 (gremlins-compat), got: %v", err)
+	}
+}
+
+// TestRunThresholdSkipsOnEmptyDiscovery pins the deviation from gremlins:
+// when a threshold's denominator is zero (no mutants to evaluate), the
+// gate is *skipped* with a stderr note rather than failing with a
+// misleading "0% below N%" message. A function with no arithmetic
+// operators yields zero ARITHMETIC_BASE mutants, so both K+L and
+// K+L+NC are zero and both gates skip.
+func TestRunThresholdSkipsOnEmptyDiscovery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":         "module testmod\n\ngo 1.26\n",
+		"greet.go":       "package testmod\n\nfunc Greet() string {\n\treturn \"hello\"\n}\n",
+		"greet_test.go":  "package testmod\n\nimport \"testing\"\n\nfunc TestGreet(t *testing.T) {\n\tif Greet() != \"hello\" {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	stderrText, err := captureStderr(t, func() error {
+		_, runErr := captureOutput(t, func() error {
+			return run(context.Background(), []string{
+				"--only", "ARITHMETIC_BASE",
+				"-w", "1",
+				"-o", filepath.Join(dir, "report.json"),
+				"--threshold-efficacy=80",
+				"--threshold-mcover=60",
+				"testmod",
+			})
+		})
+		return runErr
+	})
+	if err != nil {
+		t.Fatalf("threshold gates must skip (not error) on empty discovery: %v", err)
+	}
+	if !strings.Contains(stderrText, "--threshold-efficacy not evaluated") {
+		t.Errorf("expected stderr to note the skipped efficacy gate, got: %q", stderrText)
+	}
+	// mcoverDenom == 0 only when KILLED+LIVED+NOT_COVERED == 0; here all
+	// are zero because there are no mutants at all, so the mcover skip
+	// note must also appear.
+	if !strings.Contains(stderrText, "--threshold-mcover not evaluated") {
+		t.Errorf("expected stderr to note the skipped mcover gate, got: %q", stderrText)
 	}
 }
 

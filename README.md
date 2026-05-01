@@ -140,9 +140,8 @@ Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...
 |---|---|---|
 | `args` | _required_ | Arguments forwarded to `gomutants`. The action appends `--annotations=github` automatically. |
 | `version` | `latest` | gomutants version to install. With `version: latest` the action keeps a pre-installed binary on PATH; with any pinned tag/branch/SHA it always re-installs so what runs matches what was requested. |
-| `fail-on-lived` | `true` | Shorthand for `threshold-efficacy: 100` (fail if any LIVED mutant is reported, gremlins-compat exit code 10). Ignored when `threshold-efficacy` or `threshold-mcover` is set explicitly. |
-| `threshold-efficacy` | _empty_ | Minimum test efficacy `%` (`KILLED/(KILLED+LIVED)`). Below threshold → exit 10. When set, takes precedence over `fail-on-lived`. |
-| `threshold-mcover` | _empty_ | Minimum mutant coverage `%` (`(KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)`). Below threshold → exit 11. When set, takes precedence over `fail-on-lived`. |
+| `threshold-efficacy` | `100` | Minimum test efficacy `%` (`KILLED/(KILLED+LIVED)`). Below threshold → exit 10. Default `100` fails the step on any LIVED mutant; set to `""` to disable. |
+| `threshold-mcover` | _empty_ | Minimum mutant coverage `%` (`(KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)`). Below threshold → exit 11. Empty disables. |
 | `working-directory` | `.` | Directory containing `go.mod`. |
 
 **Security:** the `args` input is splatted into a shell command, and `version` is interpolated into `go install …@<version>`. Don't pipe untrusted strings (PR titles, branch names) into either. For supply-chain hardening, pin `version` to a specific commit SHA rather than `latest`.

@@ -168,7 +168,7 @@ jobs:
         env:
           STRYKER_DASHBOARD_KEY: ${{ secrets.STRYKER_DASHBOARD_KEY }}
         run: |
-          curl -fSsL -X PUT \
+          curl -fSs -X PUT \
             -H "X-Api-Key: $STRYKER_DASHBOARD_KEY" \
             -H "Content-Type: application/json" \
             --data @stryker-report.json \

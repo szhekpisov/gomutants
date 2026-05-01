@@ -15,25 +15,18 @@ inputs:
     description: gomutants version to install (git tag, branch, or "latest").
     required: false
     default: latest
-  fail-on-lived:
-    description: |
-      Fail the step if any LIVED mutant is reported. Shorthand for
-      threshold-efficacy=100. Ignored when threshold-efficacy or
-      threshold-mcover is set explicitly.
-    required: false
-    default: "true"
   threshold-efficacy:
     description: |
       Minimum test efficacy % (KILLED/(KILLED+LIVED)). Below threshold
-      the step exits with code 10. Empty leaves the gate disabled (or
-      governed by fail-on-lived). gremlins-compat.
+      the step exits with code 10. Default "100" gates on any LIVED
+      mutant. Set to "" to disable. gremlins-compat exit code.
     required: false
-    default: ""
+    default: "100"
   threshold-mcover:
     description: |
       Minimum mutant coverage % ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)).
-      Below threshold the step exits with code 11. Empty leaves the gate
-      disabled. gremlins-compat.
+      Below threshold the step exits with code 11. Default "" disables
+      the gate. gremlins-compat exit code.
     required: false
     default: ""
   working-directory:
@@ -77,14 +70,13 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         ARGS: ${{ inputs.args }}
-        FAIL_ON_LIVED: ${{ inputs.fail-on-lived }}
         THRESHOLD_EFFICACY: ${{ inputs.threshold-efficacy }}
         THRESHOLD_MCOVER: ${{ inputs.threshold-mcover }}
       # --annotations=github goes first because Go's flag package stops
       # parsing flags after the first non-flag token (the package list).
-      # Gating: explicit threshold-efficacy / threshold-mcover inputs win;
-      # otherwise fail-on-lived: true is shorthand for
-      # --threshold-efficacy=100 (gremlins-compat exit code 10).
+      # Empty threshold inputs disable that gate; non-empty values forward
+      # to gomutants directly. Default threshold-efficacy=100 means a
+      # surviving mutant fails the step (gremlins-compat exit code 10).
       # $ARGS is intentionally unquoted so multi-token inputs word-split.
       run: |
         gate=()
@@ -93,8 +85,5 @@ runs:
         fi
         if [ -n "$THRESHOLD_MCOVER" ]; then
           gate+=("--threshold-mcover=$THRESHOLD_MCOVER")
-        fi
-        if [ ${#gate[@]} -eq 0 ] && [ "$FAIL_ON_LIVED" = "true" ]; then
-          gate+=(--threshold-efficacy=100)
         fi
         gomutants --annotations=github "${gate[@]}" $ARGS

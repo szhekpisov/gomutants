@@ -34,17 +34,17 @@ jobs:
         uses: ./
         with:
           args: --dry-run ./internal/report/...
-          fail-on-lived: "false"
+          threshold-efficacy: ""
 
       # End-to-end: a real run against the smallest internal package so
       # the full pipeline (test execution + --annotations=github +
       # WriteGitHubAnnotations) is exercised in CI. ./internal/patch/...
       # is ~17 lines of source and known mutation-clean, so the step
-      # runs in well under a minute. fail-on-lived stays false: we
+      # runs in well under a minute. threshold-efficacy is disabled: we
       # assert the action wires up correctly, not that the codebase is
       # mutation-clean.
       - name: Smoke (live run)
         uses: ./
         with:
           args: --only ARITHMETIC_BASE -w 2 ./internal/patch/...
-          fail-on-lived: "false"
+          threshold-efficacy: ""

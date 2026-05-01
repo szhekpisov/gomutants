@@ -272,30 +272,41 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	// Threshold gates (gremlins-compat). Exit codes 10/11 match gremlins so
-	// scripts that distinguished the two failure modes keep working. Default
-	// 0 disables each gate, also matching gremlins.
-	if thresholdEfficacy > 0 && r.TestEfficacy < thresholdEfficacy {
-		return &exitError{
-			code: 10,
-			msg:  fmt.Sprintf("test efficacy %.2f%% below --threshold-efficacy=%.2f%%", r.TestEfficacy, thresholdEfficacy),
+	// Threshold gates. Exit codes 10/11 match gremlins's surface so scripts
+	// that distinguish the two failure modes keep working. Mutant coverage
+	// uses the gremlins formula (KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED);
+	// r.MutationsCoverage in the JSON uses a different denominator and is
+	// kept as-is for backward-compat with existing report consumers.
+	//
+	// We deviate from gremlins on two points: a gate is *skipped* (with a
+	// stderr note) when its denominator is zero — empty discovery is almost
+	// always a config issue, not a test-quality issue, and reporting "0.00%
+	// below 80.00%" hides that. Error messages always include both
+	// percentages so a single read shows the full state.
+	tested := r.MutantsKilled + r.MutantsLived
+	mcoverDenom := tested + r.MutantsNotCovered
+	mcover := 0.0
+	if mcoverDenom > 0 {
+		mcover = float64(tested) / float64(mcoverDenom) * 100
+	}
+
+	if thresholdEfficacy > 0 {
+		if tested == 0 {
+			fmt.Fprintln(stderr, "gomutants: no testable mutants discovered; --threshold-efficacy not evaluated")
+		} else if r.TestEfficacy < thresholdEfficacy {
+			return &exitError{
+				code: 10,
+				msg:  fmt.Sprintf("test efficacy %.2f%% below --threshold-efficacy=%.2f%% (mutant coverage: %.2f%%)", r.TestEfficacy, thresholdEfficacy, mcover),
+			}
 		}
 	}
 	if thresholdMcover > 0 {
-		// Compute mutant coverage with the gremlins formula
-		// (KILLED+LIVED) / (KILLED+LIVED+NOT_COVERED). r.MutationsCoverage
-		// in the JSON uses a slightly different denominator (it folds in
-		// NOT_VIABLE/TIMED_OUT) which we keep for backward-compat with the
-		// existing report field.
-		denom := r.MutantsKilled + r.MutantsLived + r.MutantsNotCovered
-		mcover := 0.0
-		if denom > 0 {
-			mcover = float64(r.MutantsKilled+r.MutantsLived) / float64(denom) * 100
-		}
-		if mcover < thresholdMcover {
+		if mcoverDenom == 0 {
+			fmt.Fprintln(stderr, "gomutants: no covered or testable mutants discovered; --threshold-mcover not evaluated")
+		} else if mcover < thresholdMcover {
 			return &exitError{
 				code: 11,
-				msg:  fmt.Sprintf("mutant coverage %.2f%% below --threshold-mcover=%.2f%%", mcover, thresholdMcover),
+				msg:  fmt.Sprintf("mutant coverage %.2f%% below --threshold-mcover=%.2f%% (test efficacy: %.2f%%)", mcover, thresholdMcover, r.TestEfficacy),
 			}
 		}
 	}
