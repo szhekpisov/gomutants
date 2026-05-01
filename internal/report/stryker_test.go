@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -245,6 +246,184 @@ func TestWriteStryker_PropagatesReadError(t *testing.T) {
 	if !strings.Contains(err.Error(), "does-not-exist.go") {
 		t.Errorf("error %q should mention the missing file", err)
 	}
+}
+
+// TestWriteStryker_ReadsEachFileOnce pins the per-file cache: dropping the
+// `indexCache[m.File] = idx` assignment would still produce correct output but
+// re-read every file once per mutant — observable only by counting reads.
+func TestWriteStryker_ReadsEachFileOnce(t *testing.T) {
+	dir := t.TempDir()
+	srcA := filepath.Join(dir, "a.go")
+	srcB := filepath.Join(dir, "b.go")
+	for _, p := range []string{srcA, srcB} {
+		if err := os.WriteFile(p, []byte("package x\n"), 0o644); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+
+	calls := map[string]int{}
+	orig := readFile
+	t.Cleanup(func() { readFile = orig })
+	readFile = func(p string) ([]byte, error) {
+		calls[p]++
+		return orig(p)
+	}
+
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, File: srcA, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
+		{ID: 2, Type: mutator.ArithmeticBase, File: srcA, RelFile: "a.go", Line: 1, Col: 2, Status: mutator.StatusKilled},
+		{ID: 3, Type: mutator.ArithmeticBase, File: srcB, RelFile: "b.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
+		{ID: 4, Type: mutator.ArithmeticBase, File: srcA, RelFile: "a.go", Line: 1, Col: 3, Status: mutator.StatusKilled},
+	}
+	out := filepath.Join(dir, "s.json")
+	if err := WriteStryker(out, mutants, "/p", "0.1.0"); err != nil {
+		t.Fatalf("WriteStryker: %v", err)
+	}
+	if calls[srcA] != 1 || calls[srcB] != 1 {
+		t.Errorf("expected one read per unique file, got %v", calls)
+	}
+}
+
+// TestWriteStryker_EndOffsetFallbacks pins the three branches of the
+// end-position guard at stryker.go:86. Each scenario distinguishes the live
+// fallback from any of the mutations the tree produces (dropping the guard,
+// flipping || to &&, weakening < to <=, etc).
+func TestWriteStryker_EndOffsetFallbacks(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "x.go")
+	src := "package x\n\n\n\nfunc f() { var ab = 1; _ = ab }\n"
+	if err := os.WriteFile(srcPath, []byte(src), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	makeMutant := func(line, col, endOff int, orig string) mutator.Mutant {
+		return mutator.Mutant{
+			ID: 1, Type: mutator.ArithmeticBase, File: srcPath, RelFile: "x.go",
+			Line: line, Col: col, Original: orig,
+			EndOffset: endOff, Status: mutator.StatusLived,
+		}
+	}
+
+	t.Run("EndOffset==0 falls back to startCol+len(Original)", func(t *testing.T) {
+		// Without the fallback, lineCol(0) returns (1,1), so end would land on
+		// line 1 column 1 instead of the start line.
+		m := makeMutant(5, 10, 0, "ab")
+		got := writeAndReadFirst(t, []mutator.Mutant{m}, "x.go")
+		if got.Location.End.Line != 5 || got.Location.End.Column != 12 {
+			t.Errorf("end=(%d,%d), want (5,12)", got.Location.End.Line, got.Location.End.Column)
+		}
+	})
+
+	t.Run("EndOffset==0 fires the fallback even when startLine is 1", func(t *testing.T) {
+		// Pins the `m.EndOffset == 0` arm of the OR specifically: with
+		// startLine=1, `endLine < startLine` is false, so only the EndOffset
+		// check distinguishes the live behavior from a mutation that drops
+		// it.
+		m := makeMutant(1, 4, 0, "ab")
+		got := writeAndReadFirst(t, []mutator.Mutant{m}, "x.go")
+		if got.Location.End.Line != 1 || got.Location.End.Column != 6 {
+			t.Errorf("end=(%d,%d), want (1,6)", got.Location.End.Line, got.Location.End.Column)
+		}
+	})
+
+	t.Run("stale EndOffset before start triggers fallback", func(t *testing.T) {
+		// EndOffset=2 resolves to line 1; start is line 5. Without the
+		// `endLine < startLine` arm of the guard, end would land on line 1.
+		m := makeMutant(5, 10, 2, "ab")
+		got := writeAndReadFirst(t, []mutator.Mutant{m}, "x.go")
+		if got.Location.End.Line != 5 || got.Location.End.Column != 12 {
+			t.Errorf("end=(%d,%d), want (5,12)", got.Location.End.Line, got.Location.End.Column)
+		}
+	})
+
+	t.Run("valid EndOffset uses the lineCol-derived position", func(t *testing.T) {
+		// "ab" appears in the source. Compute its real offsets and assert the
+		// end is the lineCol value, not startCol+len. With < weakened to <=,
+		// the fallback would fire and clobber the real value.
+		startOff := strings.Index(src, "ab")
+		if startOff < 0 {
+			t.Fatal("setup: 'ab' not found in src")
+		}
+		startLine, startCol := newFileIndex([]byte(src)).lineCol(startOff)
+		// Use a 1-character Original so startCol+len differs from the real
+		// lineCol-derived end (which spans 2 chars).
+		m := makeMutant(startLine, startCol, startOff+2, "a")
+		got := writeAndReadFirst(t, []mutator.Mutant{m}, "x.go")
+		if got.Location.End.Line != startLine {
+			t.Errorf("end.Line=%d, want %d", got.Location.End.Line, startLine)
+		}
+		if got.Location.End.Column == startCol+1 {
+			t.Errorf("end.Column=%d matches startCol+len(Original); fallback fired when it shouldn't", got.Location.End.Column)
+		}
+		if got.Location.End.Column != startCol+2 {
+			t.Errorf("end.Column=%d, want %d", got.Location.End.Column, startCol+2)
+		}
+	})
+}
+
+// TestWriteStryker_SortOrdering pins the per-file (line, col, id) sort. With
+// a non-sorted dispatch order, output must reach a single canonical order so
+// any mutation that drops the sort, swaps the comparator, or flips operands
+// is observable.
+func TestWriteStryker_SortOrdering(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "s.go")
+	if err := os.WriteFile(srcPath, []byte("package x\n"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	mk := func(id, line, col int) mutator.Mutant {
+		return mutator.Mutant{
+			ID: id, Type: mutator.ArithmeticBase, File: srcPath, RelFile: "s.go",
+			Line: line, Col: col, Status: mutator.StatusKilled,
+		}
+	}
+	// Dispatch order is intentionally jumbled.
+	mutants := []mutator.Mutant{
+		mk(3, 5, 1),
+		mk(1, 2, 3),
+		mk(2, 2, 1),
+		mk(5, 2, 1),
+		mk(4, 5, 1),
+	}
+
+	out := filepath.Join(dir, "s.json")
+	if err := WriteStryker(out, mutants, "/p", "0.1.0"); err != nil {
+		t.Fatalf("WriteStryker: %v", err)
+	}
+	data, _ := os.ReadFile(out)
+	var got strykerReport
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	gotIDs := []string{}
+	for _, m := range got.Files["s.go"].Mutants {
+		gotIDs = append(gotIDs, m.ID)
+	}
+	want := []string{"2", "5", "1", "3", "4"} // (2,1,2),(2,1,5),(2,3,1),(5,1,3),(5,1,4)
+	if !slices.Equal(gotIDs, want) {
+		t.Errorf("ID order = %v, want %v", gotIDs, want)
+	}
+}
+
+func writeAndReadFirst(t *testing.T, mutants []mutator.Mutant, relFile string) strykerMutantResult {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := WriteStryker(out, mutants, "/p", "0.1.0"); err != nil {
+		t.Fatalf("WriteStryker: %v", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var got strykerReport
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(got.Files[relFile].Mutants) == 0 {
+		t.Fatalf("no mutants in %s", relFile)
+	}
+	return got.Files[relFile].Mutants[0]
 }
 
 func TestWriteStryker_Empty(t *testing.T) {

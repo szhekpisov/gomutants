@@ -1,8 +1,10 @@
 package report
 
 import (
+	"cmp"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -12,6 +14,10 @@ import (
 // Stryker schema v2 — https://github.com/stryker-mutator/mutation-testing-elements
 // The schema feeds the shared HTML viewer (mutation-testing-elements) and the
 // Stryker Dashboard, which both expect this exact shape.
+
+// readFile is a swappable seam so tests can observe how often each source
+// file is read, pinning the per-file caching behavior of WriteStryker.
+var readFile = os.ReadFile
 
 type strykerReport struct {
 	SchemaVersion string                       `json:"schemaVersion"`
@@ -70,7 +76,7 @@ func WriteStryker(path string, mutants []mutator.Mutant, projectDir, frameworkVe
 	for _, m := range mutants {
 		idx, ok := indexCache[m.File]
 		if !ok {
-			b, err := os.ReadFile(m.File)
+			b, err := readFile(m.File)
 			if err != nil {
 				return fmt.Errorf("reading %s for Stryker report: %w", m.File, err)
 			}
@@ -113,15 +119,12 @@ func WriteStryker(path string, mutants []mutator.Mutant, projectDir, frameworkVe
 	// Sort mutants within each file by (line, col, id) so the output is
 	// deterministic regardless of dispatch order.
 	for k, f := range files {
-		sort.SliceStable(f.Mutants, func(i, j int) bool {
-			a, b := f.Mutants[i], f.Mutants[j]
-			if a.Location.Start.Line != b.Location.Start.Line {
-				return a.Location.Start.Line < b.Location.Start.Line
-			}
-			if a.Location.Start.Column != b.Location.Start.Column {
-				return a.Location.Start.Column < b.Location.Start.Column
-			}
-			return a.ID < b.ID
+		slices.SortStableFunc(f.Mutants, func(a, b strykerMutantResult) int {
+			return cmp.Or(
+				cmp.Compare(a.Location.Start.Line, b.Location.Start.Line),
+				cmp.Compare(a.Location.Start.Column, b.Location.Start.Column),
+				cmp.Compare(a.ID, b.ID),
+			)
 		})
 		files[k] = f
 	}
@@ -176,12 +179,7 @@ func newFileIndex(src []byte) *fileIndex {
 // counts bytes, not runes — Stryker consumes bytes consistently across
 // emitters.
 func (fi *fileIndex) lineCol(off int) (line, col int) {
-	if off < 0 {
-		off = 0
-	}
-	if off > len(fi.src) {
-		off = len(fi.src)
-	}
+	off = min(max(off, 0), len(fi.src))
 	i := max(sort.Search(len(fi.lineStarts), func(i int) bool { return fi.lineStarts[i] > off })-1, 0)
 	return i + 1, off - fi.lineStarts[i] + 1
 }

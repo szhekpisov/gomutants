@@ -57,6 +57,48 @@ func TestWriteGitHubAnnotations_FallsBackWhenOriginalMissing(t *testing.T) {
 	}
 }
 
+// TestAnnotationMessage_OnlyOneSideSet pins the OR semantics: the arrow form
+// must render whenever either Original or Replacement is non-empty (e.g.
+// STATEMENT_REMOVE has only a Replacement; some block-level mutators have only
+// an Original). A future refactor that turned the OR into AND, dropped a side,
+// or flipped the operands would silently downgrade to the type-only fallback.
+func TestAnnotationMessage_OnlyOneSideSet(t *testing.T) {
+	cases := []struct {
+		name string
+		m    MutationReport
+		want string
+	}{
+		{
+			name: "only Original",
+			m:    MutationReport{Type: "BRANCH_IF", Status: "LIVED", Line: 1, Column: 1, Original: "{ doStuff() }"},
+			want: "Mutant LIVED — BRANCH_IF ({ doStuff() } → )",
+		},
+		{
+			name: "only Replacement",
+			m:    MutationReport{Type: "STATEMENT_REMOVE", Status: "LIVED", Line: 1, Column: 1, Replacement: "_ = 0"},
+			want: "Mutant LIVED — STATEMENT_REMOVE ( → _ = 0)",
+		},
+		{
+			name: "both set",
+			m:    MutationReport{Type: "ARITHMETIC_BASE", Status: "LIVED", Line: 1, Column: 1, Original: "+", Replacement: "-"},
+			want: "Mutant LIVED — ARITHMETIC_BASE (+ → -)",
+		},
+		{
+			name: "neither set falls back",
+			m:    MutationReport{Type: "TYPE_X", Status: "LIVED", Line: 1, Column: 1},
+			want: "Mutant LIVED — TYPE_X",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := annotationMessage(tc.m)
+			if got != tc.want {
+				t.Errorf("annotationMessage = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEscapeProperty(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"a.go", "a.go"},
