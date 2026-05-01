@@ -2,7 +2,7 @@ name: Action smoke test
 on:
   pull_request:
   push:
-    branches: [main, worktree-init]
+    branches: [main]
 
 permissions:
   contents: read
