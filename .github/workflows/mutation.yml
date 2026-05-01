@@ -50,7 +50,10 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: szhekpisov/gomutants@15315f9b020ec723e5f4495224e48712bcb939c1 # main
         with:
-          args: -workers=2 -verbose --changed-since "origin/${{ github.base_ref }}" ./...
+          # No quotes around the ref: $ARGS in the action is unquoted so
+          # it word-splits, and a literal `"` would land in the
+          # --changed-since value (`fatal: ambiguous argument '"origin/main"'`).
+          args: -workers=2 -verbose --changed-since origin/${{ github.base_ref }} ./...
 
       # Post-merge run: full ./... covers code no PR happened to touch.
       # Same threshold-efficacy=100 gate. --stryker-output writes the
