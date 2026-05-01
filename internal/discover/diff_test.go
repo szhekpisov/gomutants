@@ -218,13 +218,13 @@ func TestParseUnifiedDiffScannerError(t *testing.T) {
 
 func TestFilterByDiffRelErrors(t *testing.T) {
 	// filepath.Rel returns an error when one path is absolute and the
-	// other is relative — exercises the relCache poison-and-skip path.
+	// other is relative — exercises the rel == "" skip path.
 	ranges := map[string][]LineRange{
 		"a.go": {{Start: 1, End: 1}},
 	}
 	mutants := []mutator.Mutant{
 		{ID: 1, File: "/abs/a.go", Line: 1},
-		{ID: 2, File: "/abs/a.go", Line: 1}, // second hit on same file → cached "" branch
+		{ID: 2, File: "/abs/a.go", Line: 1},
 	}
 	got := FilterByDiff(mutants, ranges, "relative-root")
 	if len(got) != 0 {
@@ -495,7 +495,204 @@ func TestGitRootNotARepo(t *testing.T) {
 	// repo. Without it, git would walk up to the enclosing repo and
 	// "succeed" with the wrong toplevel.
 	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
-	if _, err := GitRoot(context.Background(), dir); err == nil {
-		t.Error("expected error when not in a git repo")
+	_, err := GitRoot(context.Background(), dir)
+	if err == nil {
+		t.Fatal("expected error when not in a git repo")
+	}
+	// The error must include git's stderr so users can see why git
+	// failed; this also pins down `cmd.Stderr = &stderr` so a mutation
+	// that drops the assignment is detected.
+	if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error should include git stderr (\"not a git repository\"); got: %v", err)
+	}
+}
+
+func TestLooksLikeBadRevision(t *testing.T) {
+	cases := map[string]bool{
+		"fatal: unknown revision 'x'":                    true,
+		"fatal: bad revision 'x'":                        true,
+		"fatal: ambiguous argument: not in working tree": false,
+		"":                                               false,
+	}
+	for in, want := range cases {
+		if got := looksLikeBadRevision(in); got != want {
+			t.Errorf("looksLikeBadRevision(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// TestParseUnifiedDiffLargeLine exercises the configured 16 MiB scanner
+// buffer: a 200 KiB line exceeds bufio.Scanner's 64 KiB default, so any
+// mutation that drops the sc.Buffer call would error out instead of
+// parsing the diff.
+func TestParseUnifiedDiffLargeLine(t *testing.T) {
+	big := strings.Repeat("x", 200*1024)
+	in := "+++ b/big.go\n@@ -1 +1 @@\n+" + big + "\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := got["big.go"]; len(r) != 1 || r[0].Start != 1 {
+		t.Errorf("expected big.go ranges [{Start:1,End:1}], got %v", r)
+	}
+}
+
+// TestParseUnifiedDiffPathWithLeadingTab pins down the `i >= 0` boundary
+// on the IndexByte('\t') strip. Synthetic input "+++ \tname" puts the
+// tab at index 0; with `>= 0` the path strips to empty (and the hunk is
+// dropped); with `> 0` the leading tab survives and the hunk attaches
+// to a bogus key.
+func TestParseUnifiedDiffPathWithLeadingTab(t *testing.T) {
+	in := "+++ \tx.go\n@@ -1 +1 @@\n+x\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("path stripped to empty must produce no ranges; got %v", got)
+	}
+}
+
+// TestParseUnifiedDiffDevNullDoesNotAttachHunks checks the /dev/null
+// branch resets `current` so a synthetic following hunk can't be
+// attached to ranges["/dev/null"]. Real git emits +0,0 here, but we
+// want to exercise the path code, not parseHunkHeader.
+func TestParseUnifiedDiffDevNullDoesNotAttachHunks(t *testing.T) {
+	in := "+++ /dev/null\n@@ -1 +1 @@\n+x\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("/dev/null target must not capture any hunks; got %v", got)
+	}
+}
+
+// TestParseUnifiedDiffDevNullResetsCurrent ensures the `current = ""`
+// assignment runs: without it, a /dev/null entry following a real file
+// leaves `current` stale and a later hunk attaches to the wrong file.
+func TestParseUnifiedDiffDevNullResetsCurrent(t *testing.T) {
+	in := "+++ b/foo.go\n@@ -1 +1 @@\n+a\n" +
+		"+++ /dev/null\n" +
+		"@@ -2 +2 @@\n+b\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["foo.go"]) != 1 {
+		t.Errorf("foo.go should keep exactly one hunk; got %v", got["foo.go"])
+	}
+}
+
+// TestParseUnifiedDiffContinuesAfterDevNull pins down the `continue` on
+// the /dev/null branch: turning it into a `break` would abort the
+// scanner and drop everything after.
+func TestParseUnifiedDiffContinuesAfterDevNull(t *testing.T) {
+	in := "+++ /dev/null\n" +
+		"+++ b/foo.go\n@@ -1 +1 @@\n+x\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["foo.go"] == nil {
+		t.Errorf("foo.go must still parse after /dev/null entry; got %v", got)
+	}
+}
+
+// TestParseUnifiedDiffHunkBeforeFileSkipped checks the `if current == ""
+// {continue}` guard: without it, a stray @@ before any +++ would attach
+// a hunk to ranges[""].
+func TestParseUnifiedDiffHunkBeforeFileSkipped(t *testing.T) {
+	in := "@@ -1 +1 @@\n+x\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("@@ before any +++ must not produce ranges; got %v", got)
+	}
+}
+
+// TestParseUnifiedDiffContinuesPastUnboundHunk pairs with the test
+// above: with `continue → break`, a later valid +++ would never be
+// reached.
+func TestParseUnifiedDiffContinuesPastUnboundHunk(t *testing.T) {
+	in := "@@ -1 +1 @@\n" +
+		"+++ b/foo.go\n@@ -2 +2 @@\n+x\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["foo.go"] == nil {
+		t.Errorf("foo.go must parse after unbound hunk; got %v", got)
+	}
+}
+
+// TestParseUnifiedDiffContinuesPastMalformedHunk pins down the
+// `continue` after `parseHunkHeader` returns ok=false: a `break` here
+// would drop every diff entry after the first malformed hunk.
+func TestParseUnifiedDiffContinuesPastMalformedHunk(t *testing.T) {
+	// First file's @@ has no '+' marker (parseHunkHeader → false);
+	// second file's @@ is well-formed.
+	in := "+++ b/foo.go\n" +
+		"@@ -1 -1 @@\n" +
+		"+++ b/bar.go\n" +
+		"@@ -1 +1 @@\n+x\n"
+	got, err := ParseUnifiedDiff(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["bar.go"] == nil {
+		t.Errorf("bar.go must parse after malformed @@; got %v", got)
+	}
+}
+
+// TestFilterByDiffEmptyRelDoesNotMatchEmptyKey pins down the `if rel ==
+// "" {continue}` guard: without it, a Rel-failed mutant would
+// erroneously match a (degenerate) "" key in the ranges map.
+func TestFilterByDiffEmptyRelDoesNotMatchEmptyKey(t *testing.T) {
+	ranges := map[string][]LineRange{
+		"": {{Start: 1, End: 1}},
+	}
+	mutants := []mutator.Mutant{
+		// Absolute target + relative basepath → Rel returns ("", err).
+		{ID: 1, File: "/abs/a.go", Line: 1},
+	}
+	got := FilterByDiff(mutants, ranges, "rel-root")
+	if len(got) != 0 {
+		t.Errorf("Rel-failed mutant must not match a literal \"\" key; got %v", got)
+	}
+}
+
+// TestFilterByDiffContinuesAfterEmptyRel pairs with the test above:
+// with `continue → break`, a later valid mutant in the same loop would
+// be silently dropped.
+func TestFilterByDiffContinuesAfterEmptyRel(t *testing.T) {
+	ranges := map[string][]LineRange{
+		"good.go": {{Start: 1, End: 1}},
+	}
+	mutants := []mutator.Mutant{
+		{ID: 1, File: "/abs/bad.go", Line: 1},        // Rel fails → rel=""
+		{ID: 2, File: "rel-root/good.go", Line: 1},   // Rel succeeds → "good.go"
+	}
+	got := FilterByDiff(mutants, ranges, "rel-root")
+	if len(got) != 1 || got[0].ID != 2 {
+		t.Errorf("loop must continue past Rel failure; got %+v", got)
+	}
+}
+
+// TestFilterByDiffBreaksAfterFirstHunkMatch pins down the inner-loop
+// `break`: turning it into `continue` would re-append the same mutant
+// once per overlapping hunk that contains its line.
+func TestFilterByDiffBreaksAfterFirstHunkMatch(t *testing.T) {
+	ranges := map[string][]LineRange{
+		"a.go": {{Start: 1, End: 5}, {Start: 3, End: 7}}, // overlap on lines 3-5
+	}
+	mutants := []mutator.Mutant{
+		{ID: 1, File: "/repo/a.go", Line: 4}, // in both hunks
+	}
+	got := FilterByDiff(mutants, ranges, "/repo")
+	if len(got) != 1 {
+		t.Errorf("mutant in overlapping hunks must not be duplicated; got %d entries: %v", len(got), got)
 	}
 }
