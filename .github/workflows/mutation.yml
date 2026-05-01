@@ -95,14 +95,14 @@ jobs:
         run: |
           trap '' TERM
           ./gomutants -workers=2 -verbose --changed-since "origin/${BASE_REF}" \
-            -o mutation-report.json --stryker-output stryker-report.json ./internal/...
+            -o mutation-report.json --stryker-output stryker-report.json ./...
 
       - name: Run mutation testing (full tree, post-merge)
         if: github.event_name == 'push'
         run: |
           trap '' TERM
           ./gomutants -workers=2 -verbose \
-            -o mutation-report.json --stryker-output stryker-report.json ./internal/...
+            -o mutation-report.json --stryker-output stryker-report.json ./...
 
       # On --changed-since runs the absolute test_efficacy floor is no
       # longer meaningful (subset varies per PR). Gate instead on "no
@@ -133,14 +133,15 @@ jobs:
             exit 1
           fi
 
-      # Re-pinned 2026-05-01 against ./internal/...:
-      # 86.71% (633 killed, 97 lived, 69 not_viable, 0 timed_out,
-      # 28 not_covered, 827 total). The codebase grew from 593 tested
-      # mutants at the prior calibration to 730 today; pre-existing
-      # files (notably discover/diff.go, runner/worker.go,
-      # runner/pool.go) account for 70+ of the LIVED. Threshold set
-      # below the current measurement with small headroom; bump it
-      # *up* as tests improve, never silently down.
+      # The post-kill-mutants baseline is 100% efficacy across every
+      # package (./...). Anything less is a regression: either a new
+      # file landed without test coverage of its mutations, or an
+      # existing test got weakened. We gate on the absolute floor
+      # rather than a soft threshold so drift surfaces immediately on
+      # the merge that introduced it. If a future change genuinely
+      # cannot be 100%-tested (a known equivalent mutant in production
+      # code), prefer refactoring out the equivalence over lowering
+      # this number.
       - name: Check efficacy threshold (post-merge)
         if: github.event_name == 'push'
         run: |
@@ -150,14 +151,17 @@ jobs:
             exit 1
           fi
           EFFICACY=$(jq -r '.test_efficacy // empty' mutation-report.json)
+          LIVED=$(jq -r '.mutants_lived // 0' mutation-report.json)
           if [ -z "${EFFICACY}" ]; then
             echo "::error::test_efficacy missing from mutation-report.json"
             exit 1
           fi
-          THRESHOLD=86.50
-          echo "Test efficacy: ${EFFICACY}% (required: ${THRESHOLD}%)"
-          if [ "$(echo "${EFFICACY} < ${THRESHOLD}" | bc -l)" -eq 1 ]; then
-            echo "::error::Mutation test efficacy ${EFFICACY}% is below ${THRESHOLD}% threshold"
+          echo "Test efficacy: ${EFFICACY}% (required: 100%, lived=${LIVED})"
+          # Gate on lived count rather than a float comparison: efficacy
+          # rounds to 100.00% even when one mutant survives a 10000-
+          # mutant suite, which would silently let regressions through.
+          if [ "${LIVED}" -gt 0 ]; then
+            echo "::error::${LIVED} mutant(s) survived — every mutation must be killed by some test"
             exit 1
           fi
 
