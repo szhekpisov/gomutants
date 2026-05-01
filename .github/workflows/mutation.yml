@@ -9,8 +9,6 @@ concurrency:
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 jobs:
   mutation:
@@ -24,146 +22,28 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-          # --changed-since needs the merge-base with the PR base ref
-          # available locally; the default shallow clone hides it.
+          # --changed-since needs the PR base ref available locally; the
+          # action fetches it on PR events, but the rest of the merge-base
+          # chain still requires non-shallow history.
           fetch-depth: 0
 
+      # Build gomutants from this PR's source so the action exercises the
+      # in-tree mutation engine, not the published `latest`. The action
+      # detects an existing binary on PATH and skips its `go install` step
+      # when version=latest, which preserves the dogfood property without
+      # forking the action itself.
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: "1.26.1"
+          go-version-file: go.mod
+      - name: Install in-tree gomutants
+        run: go install ./...
 
-      # Dogfood: mutation-test gomutants with the in-tree gomutants build,
-      # so any regression in the mutation engine is caught by the same
-      # gate that protects the test suite.
-      - name: Build gomutants
-        run: go build -o gomutants .
-
-      # GitHub-hosted ubuntu runners are tight on memory: NumCPU parallel
-      # `go test` workers each compile ~650 mutated overlays, which is enough
-      # to push the runner host into memory pressure. The host's OOM killer
-      # then kills the runner agent itself — earlier runs showed the mutation
-      # step succeeding while the job ended in failure with all `if: always()`
-      # steps skipped (a tell-tale sign of agent-level termination).
-      #
-      # Pin workers to 2 here even though the binary defaults to NumCPU; this
-      # is a CI capacity constraint, not a recommendation for general use.
-      #
-      # `trap '' TERM` is defense-in-depth: should the runner still send a
-      # mid-run SIGTERM, gomutants catches it gracefully (writes the partial
-      # report, exits 0) but bash would otherwise queue the signal and die
-      # with 143 the instant gomutants returns. Trapping in bash keeps the
-      # script alive long enough to run the post-run gate step.
-      #
-      # Two modes:
-      #  - PRs: --changed-since limits work to touched lines (~10× faster);
-      #    gate on "no LIVED mutant in the diff".
-      #  - Push to main: full-tree run; gate on the absolute test_efficacy
-      #    floor calibrated against history (catches coverage rot in code
-      #    no PR happens to touch).
-      - name: Run mutation testing (PR, changed-since)
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          trap '' TERM
-          ./gomutants -workers=2 -verbose --changed-since "origin/${BASE_REF}" \
-            -o mutation-report.json --stryker-output stryker-report.json ./...
-
-      - name: Run mutation testing (full tree, post-merge)
-        if: github.event_name == 'push'
-        run: |
-          trap '' TERM
-          ./gomutants -workers=2 -verbose \
-            -o mutation-report.json --stryker-output stryker-report.json ./...
-
-      # On --changed-since runs the absolute test_efficacy floor is no
-      # longer meaningful (subset varies per PR). Gate instead on "no
-      # LIVED mutant on changed lines": every mutation introduced by the
-      # PR must be killed by some test.
-      - name: Gate on lived mutants (PR)
-        if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          if [ ! -s mutation-report.json ]; then
-            echo "::error::mutation-report.json missing or empty"
-            exit 1
-          fi
-          # `// 0` defaults each missing field to 0 so a partial report
-          # produces a meaningful gate decision rather than failing
-          # opaquely on `[ null -gt 0 ]`. jq itself errors on malformed
-          # JSON, which `set -e` then propagates.
-          TOTAL=$(jq -r '.mutants_total // 0' mutation-report.json)
-          KILLED=$(jq -r '.mutants_killed // 0' mutation-report.json)
-          LIVED=$(jq -r '.mutants_lived // 0' mutation-report.json)
-          NOT_VIABLE=$(jq -r '.mutants_not_viable // 0' mutation-report.json)
-          NOT_COVERED=$(jq -r '.mutants_not_covered // 0' mutation-report.json)
-          # TIMED_OUT isn't a top-level field; derive as residual.
-          TIMED_OUT=$(( TOTAL - KILLED - LIVED - NOT_VIABLE - NOT_COVERED ))
-          echo "Mutants on changed lines: total=${TOTAL} killed=${KILLED} lived=${LIVED} not_viable=${NOT_VIABLE} not_covered=${NOT_COVERED} timed_out=${TIMED_OUT}"
-          if [ "${LIVED}" -gt 0 ]; then
-            echo "::error::${LIVED} mutant(s) on changed lines survived — strengthen tests or revert"
-            exit 1
-          fi
-
-      # The post-kill-mutants baseline is 100% efficacy across every
-      # package (./...). Anything less is a regression: either a new
-      # file landed without test coverage of its mutations, or an
-      # existing test got weakened. We gate on the absolute floor
-      # rather than a soft threshold so drift surfaces immediately on
-      # the merge that introduced it. If a future change genuinely
-      # cannot be 100%-tested (a known equivalent mutant in production
-      # code), prefer refactoring out the equivalence over lowering
-      # this number.
-      - name: Check efficacy threshold (post-merge)
-        if: github.event_name == 'push'
-        run: |
-          set -euo pipefail
-          if [ ! -s mutation-report.json ]; then
-            echo "::error::mutation-report.json missing or empty"
-            exit 1
-          fi
-          EFFICACY=$(jq -r '.test_efficacy // empty' mutation-report.json)
-          LIVED=$(jq -r '.mutants_lived // 0' mutation-report.json)
-          if [ -z "${EFFICACY}" ]; then
-            echo "::error::test_efficacy missing from mutation-report.json"
-            exit 1
-          fi
-          echo "Test efficacy: ${EFFICACY}% (required: 100%, lived=${LIVED})"
-          # Gate on lived count rather than a float comparison: efficacy
-          # rounds to 100.00% even when one mutant survives a 10000-
-          # mutant suite, which would silently let regressions through.
-          if [ "${LIVED}" -gt 0 ]; then
-            echo "::error::${LIVED} mutant(s) survived — every mutation must be killed by some test"
-            exit 1
-          fi
-
-      # Push the Stryker-format report to the public dashboard so the
-      # mutation-score badge in the README reflects the latest main. Only
-      # runs on push to main: the dashboard keys reports by branch/SHA,
-      # and PR-branch uploads from --changed-since runs are partial.
-      # `if: always()` is intentionally NOT used — a failed mutation run
-      # should not push a misleading score.
-      - name: Upload to Stryker Dashboard
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          STRYKER_DASHBOARD_KEY: ${{ secrets.STRYKER_DASHBOARD_KEY }}
-        run: |
-          curl -fSs -X PUT \
-            -H "X-Api-Key: $STRYKER_DASHBOARD_KEY" \
-            -H "Content-Type: application/json" \
-            --data @stryker-report.json \
-            "https://dashboard.stryker-mutator.io/api/reports/github.com/szhekpisov/gomutants/main"
-
-      - name: Clean build cache
-        if: always()
-        run: go clean -cache
-
-      - name: Upload mutation report
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      # Dogfood the published action (pinned to main) on a --changed-since
+      # run scoped to the PR diff. threshold-efficacy defaults to "100" so
+      # any LIVED mutant on changed lines exits the step with gremlins-
+      # compat code 10. -workers=2 caps memory pressure on GitHub-hosted
+      # runners (NumCPU × parallel `go test` overlays trips the host's
+      # OOM killer otherwise).
+      - uses: szhekpisov/gomutants@main
         with:
-          name: mutation-report
-          path: |
-            mutation-report.json
-            stryker-report.json
-          retention-days: 30
+          args: -workers=2 -verbose --changed-since "origin/${{ github.base_ref }}" ./...
