@@ -33,6 +33,15 @@ inputs:
     description: Directory to run gomutants from. Must contain go.mod.
     required: false
     default: .
+  cache:
+    description: |
+      Path to the incremental-analysis cache file. Default
+      ".gomutants-cache.json" (in the working directory) reuses cached
+      outcomes between runs for unchanged mutants. Set to "off" to
+      disable caching entirely. Pair with actions/cache to persist the
+      file across CI runs.
+    required: false
+    default: .gomutants-cache.json
 
 runs:
   using: composite
@@ -72,12 +81,15 @@ runs:
         ARGS: ${{ inputs.args }}
         THRESHOLD_EFFICACY: ${{ inputs.threshold-efficacy }}
         THRESHOLD_MCOVER: ${{ inputs.threshold-mcover }}
+        CACHE: ${{ inputs.cache }}
       # --annotations=github goes first because Go's flag package stops
       # parsing flags after the first non-flag token (the package list).
-      # Empty threshold inputs disable that gate; non-empty values forward
-      # to gomutants directly. Default threshold-efficacy=100 means a
-      # surviving mutant fails the step (gremlins-compat exit code 10).
-      # $ARGS is intentionally unquoted so multi-token inputs word-split.
+      # Empty threshold/cache inputs forward as --cache= (which disables
+      # caching) or omit the gate flag entirely. Non-empty values
+      # forward to gomutants directly. Default threshold-efficacy=100
+      # means a surviving mutant fails the step (gremlins-compat exit
+      # code 10). $ARGS is intentionally unquoted so multi-token inputs
+      # word-split.
       run: |
         gate=()
         if [ -n "$THRESHOLD_EFFICACY" ]; then
@@ -86,4 +98,4 @@ runs:
         if [ -n "$THRESHOLD_MCOVER" ]; then
           gate+=("--threshold-mcover=$THRESHOLD_MCOVER")
         fi
-        gomutants --annotations=github "${gate[@]}" $ARGS
+        gomutants --annotations=github "--cache=$CACHE" "${gate[@]}" $ARGS

@@ -71,6 +71,20 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// ResolveCache materializes the cache path from the loaded config:
+// "off" disables caching (Cache=""), an empty Cache enables it at the
+// default path, and any other value passes through. Call after Load and
+// ApplyFlags so YAML and CLI inputs are merged before the default
+// kicks in.
+func (c *Config) ResolveCache() {
+	switch c.Cache {
+	case "off":
+		c.Cache = ""
+	case "":
+		c.Cache = ".gomutants-cache.json"
+	}
+}
+
 func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, coverPkg, output, disable, only, changedSince, cache string, dryRun, verbose bool) {
 	if workers > 0 {
 		c.Workers = workers
