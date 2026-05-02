@@ -11,18 +11,23 @@ import (
 )
 
 // Report is the gremlins-compatible JSON report structure.
+//
+// MutantsCached is gomutants-specific (additive, ignored by gremlins
+// consumers). It counts mutants whose status was sourced from the
+// incremental-analysis cache rather than this run's go-test invocations.
 type Report struct {
-	GoModule          string                    `json:"go_module"`
-	Files             []FileReport              `json:"files"`
-	TestEfficacy      float64                   `json:"test_efficacy"`
-	MutationsCoverage float64                   `json:"mutations_coverage"`
-	MutantsTotal      int                       `json:"mutants_total"`
-	MutantsKilled     int                       `json:"mutants_killed"`
-	MutantsLived      int                       `json:"mutants_lived"`
-	MutantsNotViable  int                       `json:"mutants_not_viable"`
-	MutantsNotCovered int                       `json:"mutants_not_covered"`
-	ElapsedTime       float64                   `json:"elapsed_time"`
-	MutatorStatistics map[string]int            `json:"mutator_statistics"`
+	GoModule          string         `json:"go_module"`
+	Files             []FileReport   `json:"files"`
+	TestEfficacy      float64        `json:"test_efficacy"`
+	MutationsCoverage float64        `json:"mutations_coverage"`
+	MutantsTotal      int            `json:"mutants_total"`
+	MutantsKilled     int            `json:"mutants_killed"`
+	MutantsLived      int            `json:"mutants_lived"`
+	MutantsNotViable  int            `json:"mutants_not_viable"`
+	MutantsNotCovered int            `json:"mutants_not_covered"`
+	MutantsCached     int            `json:"mutants_cached,omitempty"`
+	ElapsedTime       float64        `json:"elapsed_time"`
+	MutatorStatistics map[string]int `json:"mutator_statistics"`
 }
 
 // FileReport groups mutations by file.
@@ -53,6 +58,10 @@ func Generate(mutants []mutator.Mutant, goModule string, elapsed time.Duration) 
 
 	for _, m := range mutants {
 		r.MutantsTotal++
+
+		if m.FromCache {
+			r.MutantsCached++
+		}
 
 		switch m.Status {
 		case mutator.StatusKilled:

@@ -104,6 +104,9 @@ func (t *Terminal) Summary(r *Report) {
 	fmt.Fprintf(t.w, "  Not covered:  %d\n", r.MutantsNotCovered)
 	fmt.Fprintf(t.w, "  Not viable:   %d\n", r.MutantsNotViable)
 	fmt.Fprintf(t.w, "  Timed out:    %d\n", r.MutantsTotal-r.MutantsKilled-r.MutantsLived-r.MutantsNotCovered-r.MutantsNotViable)
+	if r.MutantsCached > 0 {
+		fmt.Fprintf(t.w, "  Cached:       %d  (skipped)\n", r.MutantsCached)
+	}
 	fmt.Fprintf(t.w, "  Efficacy:     %.2f%%\n", r.TestEfficacy)
 	fmt.Fprintln(t.w)
 }

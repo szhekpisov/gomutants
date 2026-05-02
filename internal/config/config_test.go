@@ -132,7 +132,7 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
-	cfg.ApplyFlags(8, 4, 15, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", true, true)
+	cfg.ApplyFlags(8, 4, 15, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", "cache.json", true, true)
 
 	if cfg.Workers != 8 {
 		t.Errorf("Workers=%d, want 8", cfg.Workers)
@@ -158,6 +158,9 @@ func TestApplyFlags(t *testing.T) {
 	if cfg.ChangedSince != "main" {
 		t.Errorf("ChangedSince=%q, want main", cfg.ChangedSince)
 	}
+	if cfg.Cache != "cache.json" {
+		t.Errorf("Cache=%q, want cache.json", cfg.Cache)
+	}
 	if !cfg.DryRun {
 		t.Error("DryRun should be true")
 	}
@@ -172,7 +175,7 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
-	cfg.ApplyFlags(0, 0, 0, "", "", "", "", "", false, false)
+	cfg.ApplyFlags(0, 0, 0, "", "", "", "", "", "", false, false)
 
 	if cfg.Workers != orig.Workers {
 		t.Errorf("Workers changed from %d to %d", orig.Workers, cfg.Workers)

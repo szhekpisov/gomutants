@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/szhekpisov/gomutants/internal/cache"
 	"github.com/szhekpisov/gomutants/internal/config"
 	"github.com/szhekpisov/gomutants/internal/coverage"
 	"github.com/szhekpisov/gomutants/internal/discover"
@@ -23,6 +25,49 @@ import (
 )
 
 const version = "0.1.0"
+
+// cacheToolVersion is the identifier stamped into the cache's
+// `tool_version` field and gated on Load to invalidate stale entries.
+//
+// We extend the user-visible version with vcs metadata from
+// runtime/debug so that local dev builds from different commits don't
+// share a key. Without this, two contributors editing mutator code
+// against the same constant version string would produce silent stale
+// skips for each other (or for themselves across rebuilds).
+//
+// Format: "<version>" for clean release builds; "<version>+<short>"
+// for committed dev builds; "<version>+<short>.dirty" when the working
+// tree has uncommitted changes; "<version>+nobuildinfo" when build
+// info is unavailable (e.g. `go run`). Computed once via sync.Once
+// would be overkill — this runs exactly twice per process at most
+// (startup + cache integration).
+func cacheToolVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version + "+nobuildinfo"
+	}
+	var rev string
+	var modified bool
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return version + "+nobuildinfo"
+	}
+	short := rev
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	if modified {
+		return version + "+" + short + ".dirty"
+	}
+	return version + "+" + short
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -70,6 +115,8 @@ var (
 	preReadFilesFunc    = discover.PreReadFiles
 	mkdirTempFunc       = os.MkdirTemp
 	getwdFunc           = os.Getwd
+	cacheLoadFunc       = cache.Load
+	cacheSaveFunc       = cache.Save
 )
 
 // phaseDurationDisplay rounds a duration to 100ms precision for display
@@ -99,6 +146,7 @@ func run(ctx context.Context, args []string) error {
 		disable            string
 		only               string
 		changedSince       string
+		cachePath          string
 		annotations        string
 		strykerOutput      string
 		thresholdEfficacy  float64
@@ -119,6 +167,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&disable, "disable", "", "comma-separated mutator types to disable")
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
+	fs.StringVar(&cachePath, "cache", "", "path to incremental-analysis cache file (e.g. .gomutants-cache.json); skips mutants whose source and tests are byte-identical to the cached run. Empty disables caching")
 	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
 	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
 	fs.Float64Var(&thresholdEfficacy, "threshold-efficacy", 0, "minimum test efficacy %% (KILLED/(KILLED+LIVED)); exit 10 if not met. 0 disables (gremlins-compat)")
@@ -151,7 +200,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, coverPkg, output, disable, only, changedSince, dryRun, verbose)
+	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose)
 
 	packages := fs.Args()
 	if len(packages) == 0 {
@@ -270,6 +319,63 @@ func run(ctx context.Context, args []string) error {
 		term.PhaseDone("done")
 	}
 
+	// 7a. Apply incremental-analysis cache (opt-in via --cache). Hits
+	// flip the mutant from Pending to its prior terminal status, which
+	// makes the runner's Pending-only filter naturally skip them.
+	var (
+		loadedCache  *cache.Cache
+		hasher       *cache.Hasher
+		testFilesFor cache.TestFilesForFn
+	)
+	if cfg.Cache != "" {
+		hasher = cache.NewHasher(srcCache)
+		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion())
+
+		// TestIndex is built from every package's directory so cross-
+		// package coverage (tests in pkg B exercising code in pkg A
+		// via -coverpkg) resolves correctly.
+		pkgDirs := make([]string, 0, len(pkgs))
+		for _, p := range pkgs {
+			pkgDirs = append(pkgDirs, p.Dir)
+		}
+		testIndex := cache.BuildTestIndex(pkgDirs)
+
+		// Resolver: prefer the per-test coverage map's covering set,
+		// mapped through the index to defining files. When the map is
+		// nil, has no entry for this mutant, or none of the covering
+		// names resolve to a known file, fall back to every _test.go
+		// in the mutant's package directory — sound but coarser.
+		testFilesFor = func(m mutator.Mutant) []string {
+			pkgDir := filepath.Dir(m.File)
+			if testMap == nil {
+				return testIndex.AllInDir(pkgDir)
+			}
+			names := testMap.TestsFor(m.CoverageFile, m.Line)
+			if len(names) == 0 {
+				return testIndex.AllInDir(pkgDir)
+			}
+			seen := make(map[string]bool, len(names))
+			var files []string
+			for _, n := range names {
+				for _, f := range testIndex.FilesFor(n) {
+					if !seen[f] {
+						seen[f] = true
+						files = append(files, f)
+					}
+				}
+			}
+			if len(files) == 0 {
+				return testIndex.AllInDir(pkgDir)
+			}
+			return files
+		}
+
+		if hits := loadedCache.Lookup(mutants, hasher, testFilesFor); hits > 0 {
+			pendingCount -= hits
+			fmt.Fprintf(stdout, "Cache: %d mutant outcomes reused from %s\n", hits, cfg.Cache)
+		}
+	}
+
 	// 8. Run mutation testing.
 	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose)
 	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, testTimeout, tmpDir, srcCache, projectDir, testMap)
@@ -278,6 +384,16 @@ func run(ctx context.Context, args []string) error {
 	// STATEMENT_REMOVE mutant. As an ExprStmt the call is the only thing
 	// driving status updates, so STATEMENT_REMOVE here visibly drops them.
 	pool.Run(ctx, mutants, term2.OnResult)
+
+	// 8a. Persist updated cache (merging this run with prior entries
+	// whose source files still match). Write failures are non-fatal:
+	// a stale or missing cache only costs speed on the next run.
+	if loadedCache != nil {
+		loadedCache.Update(mutants, hasher, projectDir, testFilesFor)
+		if err := cacheSaveFunc(loadedCache, cfg.Cache); err != nil {
+			fmt.Fprintf(stderr, "warning: writing cache to %s: %v\n", cfg.Cache, err)
+		}
+	}
 
 	// 9. Generate report.
 	totalElapsed := time.Since(coverStart)
