@@ -75,6 +75,40 @@ func (p *Profile) IsCovered(file string, line, col int) bool {
 	return false
 }
 
+// HasCoveredBlock reports whether the file has at least one block with
+// count > 0. Used to distinguish files that tests exercise (where gaps
+// in instrumentation should be treated as covered) from files no test
+// touches at all.
+func (p *Profile) HasCoveredBlock(file string) bool {
+	for _, b := range p.blocks {
+		if b.File != file {
+			continue
+		}
+		if b.Count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// IsInAnyBlock reports whether the position falls within any block —
+// covered or not. Useful for distinguishing positions the coverage tool
+// instrumented but recorded as Count==0 (real coverage gap) from
+// positions it did not instrument at all (package-level const/var
+// initializers, select-case receive expressions, gaps between adjacent
+// blocks on the same line, etc.).
+func (p *Profile) IsInAnyBlock(file string, line, col int) bool {
+	for _, b := range p.blocks {
+		if b.File != file {
+			continue
+		}
+		if inBlock(b, line, col) {
+			return true
+		}
+	}
+	return false
+}
+
 func inBlock(b Block, line, col int) bool {
 	// Check if (line, col) is within [startLine.startCol, endLine.endCol].
 	if line < b.StartLine || line > b.EndLine {

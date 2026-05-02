@@ -167,7 +167,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&disable, "disable", "", "comma-separated mutator types to disable")
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
-	fs.StringVar(&cachePath, "cache", "", "path to incremental-analysis cache file (e.g. .gomutants-cache.json); skips mutants whose source and tests are byte-identical to the cached run. Empty disables caching")
+	fs.StringVar(&cachePath, "cache", "", "path to incremental-analysis cache file; skips mutants whose source and tests are byte-identical to the cached run. Default .gomutants-cache.json. Pass --cache=off to disable")
 	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
 	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
 	fs.Float64Var(&thresholdEfficacy, "threshold-efficacy", 0, "minimum test efficacy %% (KILLED/(KILLED+LIVED)); exit 10 if not met. 0 disables (gremlins-compat)")
@@ -201,6 +201,7 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose)
+	cfg.ResolveCache()
 
 	packages := fs.Args()
 	if len(packages) == 0 {

@@ -191,6 +191,28 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	}
 }
 
+func TestResolveCache(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty resolves to default path", "", ".gomutants-cache.json"},
+		{"off disables", "off", ""},
+		{"explicit path passes through", "/tmp/x.json", "/tmp/x.json"},
+		{"relative path passes through", ".cache.json", ".cache.json"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Config{Cache: tc.in}
+			c.ResolveCache()
+			if c.Cache != tc.want {
+				t.Errorf("Cache=%q, want %q", c.Cache, tc.want)
+			}
+		})
+	}
+}
+
 func TestSplitAndTrim(t *testing.T) {
 	tests := []struct {
 		input string

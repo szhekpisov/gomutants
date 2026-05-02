@@ -247,6 +247,101 @@ func TestIsCovered(t *testing.T) {
 	}
 }
 
+func TestHasCoveredBlock(t *testing.T) {
+	profile := &Profile{
+		blocks: []Block{
+			{File: "tested.go", StartLine: 1, StartCol: 1, EndLine: 5, EndCol: 99, Count: 3},
+			{File: "tested.go", StartLine: 10, StartCol: 1, EndLine: 15, EndCol: 99, Count: 0},
+			{File: "untested.go", StartLine: 1, StartCol: 1, EndLine: 5, EndCol: 99, Count: 0},
+		},
+	}
+
+	tests := []struct {
+		file string
+		want bool
+	}{
+		{"tested.go", true},
+		{"untested.go", false},
+		{"missing.go", false},
+	}
+
+	for _, tc := range tests {
+		got := profile.HasCoveredBlock(tc.file)
+		if got != tc.want {
+			t.Errorf("HasCoveredBlock(%q) = %v, want %v", tc.file, got, tc.want)
+		}
+	}
+}
+
+// TestHasCoveredBlockContinuesPastOtherFile kills INVERT_LOOP_CTRL on
+// the `continue` after the file mismatch in HasCoveredBlock. Mutated to
+// `break`, the loop exits as soon as it sees a different file — even
+// when a later block of the target file would prove coverage exists.
+func TestHasCoveredBlockContinuesPastOtherFile(t *testing.T) {
+	profile := &Profile{
+		blocks: []Block{
+			// Different file first; only `continue` (not `break`) lets the
+			// loop reach the target file's covered block below.
+			{File: "other.go", StartLine: 1, StartCol: 1, EndLine: 5, EndCol: 99, Count: 1},
+			{File: "target.go", StartLine: 10, StartCol: 1, EndLine: 15, EndCol: 99, Count: 1},
+		},
+	}
+	if !profile.HasCoveredBlock("target.go") {
+		t.Error("HasCoveredBlock must continue past other-file blocks to find target.go's covered block")
+	}
+}
+
+func TestIsInAnyBlock(t *testing.T) {
+	profile := &Profile{
+		blocks: []Block{
+			{File: "file.go", StartLine: 1, StartCol: 1, EndLine: 5, EndCol: 99, Count: 3},
+			{File: "file.go", StartLine: 10, StartCol: 1, EndLine: 15, EndCol: 99, Count: 0},
+		},
+	}
+
+	tests := []struct {
+		name string
+		file string
+		line int
+		col  int
+		want bool
+	}{
+		{"in count>0 block", "file.go", 3, 5, true},
+		{"in count=0 block", "file.go", 12, 5, true},
+		{"between blocks", "file.go", 8, 5, false},
+		{"before any block", "file.go", 0, 0, false},
+		{"after all blocks", "file.go", 99, 1, false},
+		{"missing file", "other.go", 3, 5, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := profile.IsInAnyBlock(tc.file, tc.line, tc.col)
+			if got != tc.want {
+				t.Errorf("IsInAnyBlock(%q, %d, %d) = %v, want %v", tc.file, tc.line, tc.col, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsInAnyBlockContinuesPastOtherFile kills INVERT_LOOP_CTRL on the
+// `continue` after the file mismatch in IsInAnyBlock. Mutated to
+// `break`, the loop exits on the first non-matching file even when a
+// later block of the target file contains the position.
+func TestIsInAnyBlockContinuesPastOtherFile(t *testing.T) {
+	profile := &Profile{
+		blocks: []Block{
+			// Different file first; only `continue` lets us reach the
+			// target file's containing block.
+			{File: "other.go", StartLine: 10, StartCol: 1, EndLine: 15, EndCol: 99, Count: 1},
+			{File: "target.go", StartLine: 10, StartCol: 1, EndLine: 15, EndCol: 99, Count: 1},
+		},
+	}
+	if !profile.IsInAnyBlock("target.go", 12, 5) {
+		t.Error("IsInAnyBlock must continue past other-file blocks to find target.go's containing block")
+	}
+}
+
 func TestInBlock(t *testing.T) {
 	b := Block{StartLine: 10, StartCol: 5, EndLine: 20, EndCol: 15}
 

@@ -1065,3 +1065,169 @@ func TestFilterByCoverageStatusOnMissingEntry(t *testing.T) {
 			mutants[0].Status)
 	}
 }
+
+// TestFilterByCoverageKeepsUninstrumentedPositionInTestedFile pins down
+// the relaxation that lets us test mutants on positions Go's coverage
+// tool doesn't instrument (top-level const/var initializers,
+// select-case receive expressions, gaps between adjacent blocks). When
+// the file has at least one Count > 0 block and the position falls
+// outside every block, the mutant stays Pending.
+func TestFilterByCoverageKeepsUninstrumentedPositionInTestedFile(t *testing.T) {
+	profile := loadProfile(t, "mode: set\nmod/pkg/file.go:10.1,20.99 1 1\n")
+
+	pkgs := []Package{
+		{Dir: "/abs/pkg", ImportPath: "mod/pkg", GoFiles: []string{"file.go"}},
+	}
+	mutants := []mutator.Mutant{
+		// Outside any block, file has Count>0 block → stay Pending.
+		{ID: 1, File: "/abs/pkg/file.go", Line: 1, Col: 5, Status: mutator.StatusPending},
+		// Inside the Count>0 block → stay Pending.
+		{ID: 2, File: "/abs/pkg/file.go", Line: 12, Col: 5, Status: mutator.StatusPending},
+	}
+
+	FilterByCoverage(mutants, profile, pkgs, "mod")
+
+	if mutants[0].Status != mutator.StatusPending {
+		t.Errorf("uninstrumented position in tested file: Status=%v, want Pending", mutants[0].Status)
+	}
+	if mutants[1].Status != mutator.StatusPending {
+		t.Errorf("covered position: Status=%v, want Pending", mutants[1].Status)
+	}
+}
+
+// TestFilterByCoverageMarksUninstrumentedPositionInUntestedFile pins down
+// the other half of the relaxation: when the file has *no* Count > 0
+// block (no test reaches it), an uninstrumented position is still
+// NotCovered. Without this, a file no test touches would silently get
+// its mutants run.
+func TestFilterByCoverageMarksUninstrumentedPositionInUntestedFile(t *testing.T) {
+	profile := loadProfile(t, "mode: set\nmod/pkg/file.go:10.1,20.99 1 0\n")
+
+	pkgs := []Package{
+		{Dir: "/abs/pkg", ImportPath: "mod/pkg", GoFiles: []string{"file.go"}},
+	}
+	mutants := []mutator.Mutant{
+		{ID: 1, File: "/abs/pkg/file.go", Line: 1, Col: 5, Status: mutator.StatusPending},
+	}
+
+	FilterByCoverage(mutants, profile, pkgs, "mod")
+
+	if mutants[0].Status != mutator.StatusNotCovered {
+		t.Errorf("uninstrumented position in untested file: Status=%v, want NotCovered", mutants[0].Status)
+	}
+}
+
+// TestFilterByCoverageMarksUninstrumentedFileInTestedPackage pins down
+// the symmetric case: when a different file in the package has covered
+// blocks but the mutant's own file has none in the profile at all,
+// HasCoveredBlock(mutant.file) is false and the mutant is NotCovered.
+func TestFilterByCoverageMarksUninstrumentedFileInTestedPackage(t *testing.T) {
+	profile := loadProfile(t, "mode: set\nmod/pkg/other.go:10.1,20.99 1 1\n")
+
+	pkgs := []Package{
+		{Dir: "/abs/pkg", ImportPath: "mod/pkg", GoFiles: []string{"file.go", "other.go"}},
+	}
+	mutants := []mutator.Mutant{
+		{ID: 1, File: "/abs/pkg/file.go", Line: 1, Col: 5, Status: mutator.StatusPending},
+	}
+
+	FilterByCoverage(mutants, profile, pkgs, "mod")
+
+	if mutants[0].Status != mutator.StatusNotCovered {
+		t.Errorf("file with no profile entry: Status=%v, want NotCovered", mutants[0].Status)
+	}
+}
+
+// TestFilterByCoverageContinuesAfterCovered kills INVERT_LOOP_CTRL on
+// the `continue` after the IsCovered check in FilterByCoverage. Mutated
+// to `break`, processing stops at the first covered mutant — every
+// later mutant in the slice keeps its Pending status instead of being
+// classified.
+func TestFilterByCoverageContinuesAfterCovered(t *testing.T) {
+	profile := loadProfile(t, "mode: set\nmod/pkg/file.go:10.1,20.99 1 1\n")
+
+	pkgs := []Package{
+		{Dir: "/abs/pkg", ImportPath: "mod/pkg", GoFiles: []string{"file.go"}},
+	}
+	mutants := []mutator.Mutant{
+		// Covered — `continue` skips past this one.
+		{ID: 1, File: "/abs/pkg/file.go", Line: 12, Col: 5, Status: mutator.StatusPending},
+		// Outside any block in an untested file — must be NotCovered.
+		// `break` instead of `continue` would leave it Pending.
+		{ID: 2, File: "/missing/pkg/file.go", Line: 1, Col: 1, Status: mutator.StatusPending},
+	}
+
+	FilterByCoverage(mutants, profile, pkgs, "mod")
+
+	if mutants[1].Status != mutator.StatusNotCovered {
+		t.Errorf("mutant 2: status=%v, want NotCovered — INVERT_LOOP_CTRL on `continue` would `break` after the covered mutant and leave this Pending", mutants[1].Status)
+	}
+}
+
+// TestFilterByCoverageContinuesAfterRelaxedMatch kills INVERT_LOOP_CTRL
+// on the second `continue` (the relaxed branch). Mutated to `break`,
+// processing stops at the first uninstrumented-but-tested mutant; later
+// mutants stay Pending.
+func TestFilterByCoverageContinuesAfterRelaxedMatch(t *testing.T) {
+	profile := loadProfile(t, "mode: set\nmod/pkg/file.go:10.1,20.99 1 1\n")
+
+	pkgs := []Package{
+		{Dir: "/abs/pkg", ImportPath: "mod/pkg", GoFiles: []string{"file.go"}},
+	}
+	mutants := []mutator.Mutant{
+		// Uninstrumented (line 1 is outside the 10–20 block) but in a
+		// tested file — relaxed branch fires `continue`.
+		{ID: 1, File: "/abs/pkg/file.go", Line: 1, Col: 5, Status: mutator.StatusPending},
+		// In an untested file — must be NotCovered. `break` instead of
+		// `continue` after mutant 1 would leave this Pending.
+		{ID: 2, File: "/missing/pkg/file.go", Line: 1, Col: 1, Status: mutator.StatusPending},
+	}
+
+	FilterByCoverage(mutants, profile, pkgs, "mod")
+
+	if mutants[1].Status != mutator.StatusNotCovered {
+		t.Errorf("mutant 2: status=%v, want NotCovered — INVERT_LOOP_CTRL on relaxed-branch `continue` would `break` and leave this Pending", mutants[1].Status)
+	}
+}
+
+// TestFilterByCoverageMarksPositionInCount0Block pins the distinction
+// between uninstrumented positions (no block at all) and explicitly
+// uncovered positions (Count==0 block). The relaxation must NOT treat
+// the latter as covered — those are real test gaps. Kills
+// EXPRESSION_REMOVE on the `!profile.IsInAnyBlock(...)` operand: if
+// it's elided to `true`, a position inside a Count==0 block would slip
+// through and stay Pending instead of being marked NotCovered.
+func TestFilterByCoverageMarksPositionInCount0Block(t *testing.T) {
+	// File with both a Count>0 block (lines 10–20) AND a Count==0 block
+	// (lines 30–40). HasCoveredBlock is true; the Count==0 block is a
+	// real coverage gap.
+	profile := loadProfile(t, "mode: set\nmod/pkg/file.go:10.1,20.99 1 1\nmod/pkg/file.go:30.1,40.99 1 0\n")
+
+	pkgs := []Package{
+		{Dir: "/abs/pkg", ImportPath: "mod/pkg", GoFiles: []string{"file.go"}},
+	}
+	mutants := []mutator.Mutant{
+		// Position inside the Count==0 block — must be NotCovered.
+		{ID: 1, File: "/abs/pkg/file.go", Line: 35, Col: 5, Status: mutator.StatusPending},
+	}
+
+	FilterByCoverage(mutants, profile, pkgs, "mod")
+
+	if mutants[0].Status != mutator.StatusNotCovered {
+		t.Errorf("position in Count==0 block: Status=%v, want NotCovered (relaxation must not swallow real coverage gaps)", mutants[0].Status)
+	}
+}
+
+func loadProfile(t *testing.T, content string) *coverage.Profile {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.out")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := coverage.ParseFile(path)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	return p
+}

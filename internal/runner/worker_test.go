@@ -16,6 +16,24 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
+// TestPackageVarDefaults pins the default values of the worker's
+// package-level vars and the maxCapturedOutput const. These literals
+// live above any function body and aren't reachable by tests that
+// override them — without an explicit pin, ARITHMETIC_BASE and
+// INVERT_BITWISE mutants on the literals (e.g. `2 * 1024 * 1024 * 1024`,
+// `1 << 20`) are unkillable.
+func TestPackageVarDefaults(t *testing.T) {
+	if got, want := maxSubprocRSSBytes, int64(2*1024*1024*1024); got != want {
+		t.Errorf("maxSubprocRSSBytes = %d, want %d (2 GiB)", got, want)
+	}
+	if got, want := monitorPollInterval, 1*time.Second; got != want {
+		t.Errorf("monitorPollInterval = %v, want %v", got, want)
+	}
+	if got, want := maxCapturedOutput, 1<<20; got != want {
+		t.Errorf("maxCapturedOutput = %d, want %d (1 MiB)", got, want)
+	}
+}
+
 func TestNewWorker(t *testing.T) {
 	dir := t.TempDir()
 	cache := map[string][]byte{"/src/file.go": []byte("package p\n")}
