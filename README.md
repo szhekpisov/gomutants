@@ -71,15 +71,9 @@ Beware of small workloads though. gomutants's one-time setup cost (coverage coll
 | Single small package, mutator-matched | gomutants | **1.9 s** (1.00x) |
 | Single small package, mutator-matched | [gremlins](https://github.com/go-gremlins/gremlins) | 2.5 s (1.29x) |
 
-The `--changed-since <ref>` flag scopes a run to mutants on lines
-added or modified since the given ref. A typical PR for this repo
-finishes in **under a minute** with `gomutants --changed-since
-origin/main ./...` — fast enough to gate every pull request, without
-re-running the full mutation suite on untouched code.
+The `--changed-since <ref>` flag scopes a run to mutants on lines added or modified since the given ref. Use `gomutants --changed-since origin/main ./...` to gate every pull request without re-running the full mutation suite on untouched code.
 
-See [`benchmarks/results.md`](benchmarks/results.md) for the full
-per-scenario breakdown, methodology, hyperfine output, and caveats;
-reproduce with `bash benchmarks/run.sh`.
+See [`benchmarks/results.md`](benchmarks/results.md) for the full per-scenario breakdown, methodology, hyperfine output, and caveats; reproduce with `bash benchmarks/run.sh`.
 
 
 ### Why should I use gomutants?
