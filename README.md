@@ -61,21 +61,25 @@ $ gomutants unleash ./...
 ### Quick examples comparing tools
 
 The headline workload is [diffyml](https://github.com/szhekpisov/diffyml),
-run with a matched 11-mutator set on an Apple M1 Pro 10-core, fresh
-full-pipeline run (1030 mutants discovered, 94% efficacy). Both tools
-shell out to the same `go test` invocation; the difference is in
-discovery, dispatch, and per-mutant overhead.
+run on an Apple M1 Pro 10-core with the matched 5-mutator set
+(gremlins' defaults enabled on both sides), `workers=5`,
+`--timeout-coefficient=50`, and gomutants's per-mutant cache disabled
+(`--cache=off`) so every run measures actual mutation work. Hyperfine
+reports the mean of three runs after a warmup pass:
 
-| Tool | Workers | Time |
-| ---- | ------- | ---: |
-| **gomutants** | 5 | **342 s** (1.00x) |
-| [gremlins](https://github.com/go-gremlins/gremlins) | 5 | 410 s (1.20x) |
-| **gomutants** | 1 | **1134 s** (1.00x) |
-| [gremlins](https://github.com/go-gremlins/gremlins) | 1 | 1848 s (1.63x) |
+| Tool | Workers | Mean wall-clock | Tested mutants | Per-mutant time |
+| ---- | :-----: | --------------: | -------------: | --------------: |
+| **gomutants** | 5 | **244 s ± 41** | 773 | **316 ms** |
+| [gremlins](https://github.com/go-gremlins/gremlins) | 5 | 295 s ± 65 | 542 | 545 ms |
 
-Per-mutant time is essentially identical (1.79s vs 1.81s on diffyml at
-`-w 5`); the wall-clock difference comes from cache-locality engineering
-(see [How it works](#how-it-works)) and a tighter mutant set.
+**gomutants is ~20% faster wall-clock and ~1.7× faster per tested
+mutant.** It also generates ~40% more viable mutants from the same five
+operators (byte-level patching emits patches the AST rewriter doesn't);
+both tools land on the same efficacy (99.87% vs 99.82%), so the
+wall-clock lead would be larger if they tested the same mutant
+population. The wall-clock difference comes from cache-locality
+engineering (see [How it works](#how-it-works)) and gomutants's
+per-test coverage routing.
 
 Beware of small workloads though. gomutants's one-time setup cost
 (coverage collection, baseline measurement, per-test coverage map build)
@@ -132,16 +136,17 @@ with these specific consequences:
   binary one time and replaying it with `-test.run=<one>` per test.
   When the change is on a line covered by 3 of your 400 tests, you run
   those 3.
-* **Speed comes from doing less, not from cutting corners.** Per-mutant
-  time is within noise of gremlins (see
-  [Benchmarks](#quick-examples-comparing-tools)). The wall-clock
-  difference comes from cache-locality engineering: each child runs
-  with `GOMAXPROCS=NumCPU/workers` so a 10-worker run on a 10-core box
-  doesn't oversubscribe 100×; mutants are dispatched in `(Pkg, File,
-  Offset)` order so the first mutant in a package pays the cold compile
-  and subsequent ones reuse the build cache (a 17% wall-clock reduction
-  by itself); `-vet=off` on the inner `go test` is a 17–39% per-mutant
-  reduction on representative packages.
+* **Speed comes from doing less, not from cutting corners.** Per-test
+  coverage routing means a mutant on a line covered by 3 of your 400
+  tests runs those 3, not the entire suite. On top of that:
+  cache-locality dispatch (mutants sorted by `(Pkg, File, Offset)` so
+  the first in a package pays the cold compile and subsequent ones reuse
+  the build cache — a 17% wall-clock reduction by itself); each child
+  runs with `GOMAXPROCS=NumCPU/workers` so a 10-worker run on a 10-core
+  box doesn't oversubscribe 100×; `-vet=off` on the inner `go test` is a
+  17–39% per-mutant reduction on representative packages. End-to-end on
+  diffyml that's a ~20% wall-clock advantage over gremlins (see
+  [Quick examples comparing tools](#quick-examples-comparing-tools)).
 * **Byte-level patching, not AST rewriting.** Mutations are applied as
   byte patches through `go test -overlay`. Type parameters,
   instantiations, and the rest of Go's syntax surface — generics
