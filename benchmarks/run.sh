@@ -70,7 +70,10 @@ run_scenario() {
   local gre_json="$OUT_DIR/${label}-gremlins.json"
   local hf_json="$OUT_DIR/${label}-hyperfine.json"
 
-  local gom_cmd="\"$GOMUTANTS\" -w $WORKERS -timeout-coefficient $TIMEOUT_COEF $gom_extra -o \"$gom_json\" $gom_path"
+  # --cache=off so the benchmark measures actual mutation work; a partial cache
+  # hit on a re-run would skew gomutants in its favour vs gremlins (which has
+  # no equivalent cache).
+  local gom_cmd="\"$GOMUTANTS\" -w $WORKERS -timeout-coefficient $TIMEOUT_COEF --cache=off $gom_extra -o \"$gom_json\" $gom_path"
   local gre_cmd="\"$GREMLINS\" unleash --silent --workers $WORKERS --timeout-coefficient $TIMEOUT_COEF -o \"$gre_json\" $gre_path"
 
   # Warm-up: populate go build cache, produce a fresh JSON for counting.
