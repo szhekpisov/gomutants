@@ -1,15 +1,9 @@
-gomutants is fast, incremental, diff-scoped mutation testing for Go.
-By default, gomutants runs only the tests whose coverage actually
-touches each mutant, caches results across runs so unchanged code
-isn't re-tested, and treats `--changed-since <ref>` as a first-class
-mode that scopes a run to the lines a pull request changes. (For a
-full-tree post-merge sweep, omit the flag.) gomutants requires Go
-1.26 or newer and runs wherever the Go toolchain runs, with binary
-downloads available for every release. Output is gremlins-compatible
-JSON, so existing scripts keep working. gomutants is similar to other
-Go mutation-testing tools like
-[gremlins](https://github.com/go-gremlins/gremlins) and
-[go-mutesting](https://github.com/zimmski/go-mutesting).
+Gomutants is a mutation testing tool for Go, supporting diff-scoped
+runs, incremental caching, per-test coverage routing, and block-level
+mutators. It's a drop-in for
+[gremlins](https://github.com/go-gremlins/gremlins) — same `unleash`
+command, same gremlins-compatible JSON output, same threshold exit
+codes — so existing CI scripts keep working.
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutants/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutants)
 [![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutants)](https://goreportcard.com/report/github.com/szhekpisov/gomutants)
