@@ -43,7 +43,7 @@ $ gomutants ./...
 # Run only on lines this PR changes.
 $ gomutants --changed-since origin/main ./...
 
-# Drop-in for gremlins users:
+# Near drop-in for gremlins users:
 $ gomutants unleash ./...
 ```
 
@@ -57,7 +57,7 @@ The headline workload is [diffyml](https://github.com/szhekpisov/diffyml), run o
 | **gomutants** | 5 | **244 s ± 41** | 773 | **316 ms** |
 | [gremlins](https://github.com/go-gremlins/gremlins) | 5 | 295 s ± 65 | 542 | 545 ms |
 
-**gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant.** It also generates ~40% more viable mutants from the same five operators (byte-level patching emits patches the AST rewriter doesn't); both tools land on the same efficacy (99.87% vs 99.82%), so the wall-clock lead would be larger if they tested the same mutant population. The wall-clock difference comes from cache-locality engineering (see [How it works](#how-it-works)) and gomutants's per-test coverage routing.
+**gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant.** It also generates ~40% more viable mutants from the same five operators (byte-level patching emits patches the AST rewriter doesn't); both tools land on the same efficacy (99.87% vs 99.82%), so the wall-clock lead would be larger if they tested the same mutant population. The wall-clock difference comes from cache-locality engineering (see [How it works](#how-it-works)) and gomutants's per-test coverage routing. Note: `--cache=off` is set so a partial cache hit doesn't skew the comparison; on a typical CI re-run with the cache enabled (gomutants's default), gomutants is faster still.
 
 Beware of small workloads though. gomutants's one-time setup cost (coverage collection, baseline measurement, per-test coverage map build) only amortizes when there are many mutants to share it across:
 
@@ -93,7 +93,7 @@ A handful of cases where gomutants is the wrong choice:
 
 * **You run mutation testing manually, once in a while.** [gremlins](https://github.com/go-gremlins/gremlins) is simpler, well-supported, and faster on small workloads — gomutants's one-time setup (coverage collection, baseline measurement, per-test coverage map build) is fixed overhead that only pays off when many mutants share that cost. See [Quick examples comparing tools](#quick-examples-comparing-tools).
 * **Your test suite is thin.** Mutation testing is leverage on top of an existing test suite. If line coverage is below ~70%, fixing that is a higher-value use of time than gating on mutation efficacy.
-* **You're on Go &lt; 1.26.** gomutants doesn't ship a build for older toolchains.
+* **You're on Go < 1.26.** gomutants doesn't ship a build for older toolchains.
 * **You don't want a CI gate.** The `--changed-since` PR-scope is gomutants's centerpiece. Without it you're paying complexity for features you won't use.
 
 
