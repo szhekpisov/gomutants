@@ -1,12 +1,13 @@
-gomutants is a mutation-testing tool for Go designed to gate CI on a
-per-PR basis. By default, gomutants discovers mutants conservatively,
-runs only the tests whose coverage actually touches each mutant, and
-treats `--changed-since <ref>` as a first-class mode that scopes a run
-to the lines a pull request changes. (For a full-tree post-merge sweep,
-omit the flag.) gomutants requires Go 1.26 or newer and runs wherever
-the Go toolchain runs, with binary downloads available for every
-release. Output is gremlins-compatible JSON, so existing scripts keep
-working. gomutants is similar to other Go mutation-testing tools like
+gomutants is fast, incremental, diff-scoped mutation testing for Go.
+By default, gomutants runs only the tests whose coverage actually
+touches each mutant, caches results across runs so unchanged code
+isn't re-tested, and treats `--changed-since <ref>` as a first-class
+mode that scopes a run to the lines a pull request changes. (For a
+full-tree post-merge sweep, omit the flag.) gomutants requires Go
+1.26 or newer and runs wherever the Go toolchain runs, with binary
+downloads available for every release. Output is gremlins-compatible
+JSON, so existing scripts keep working. gomutants is similar to other
+Go mutation-testing tools like
 [gremlins](https://github.com/go-gremlins/gremlins) and
 [go-mutesting](https://github.com/zimmski/go-mutesting).
 
