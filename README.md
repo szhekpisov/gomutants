@@ -78,103 +78,30 @@ See [`benchmarks/results.md`](benchmarks/results.md) for the full per-scenario b
 
 ### Why should I use gomutants?
 
-PR-scoped mutation testing on a CI gate is a different workload than
-batch mutation testing on a developer's laptop, and the existing Go
-tools were built for the latter. gomutants is built around the former,
-with these specific consequences:
+gomutants is built for PR-scoped mutation testing as a CI gate. The
+consequences:
 
-* **Discovery is conservative, not generous.** Compile-failing mutants
-  are reported as `NOT_VIABLE` and excluded from the kill count — they
-  don't silently inflate efficacy. Address-of `&` is recognised at the
-  AST level and skipped (mutating it as bitwise AND would never
-  compile). Unary `-` is emitted by exactly one mutator
-  (`InvertNegatives`), not also by `ArithmeticBase`, so there are no
-  duplicate mutants on the same byte. The upshot: `test_efficacy =
-  killed / (killed + lived)` is a number you can gate on.
-* **`--changed-since` is the headline mode, not a flag tucked in the
-  back.** It runs `git diff --unified=0 <ref>` and keeps only mutants
-  whose line falls inside an added/modified range. Combined with the
-  per-test coverage map, a typical PR's mutation job drops from minutes
-  to under a minute — fast enough to gate every pull request. This
-  repo's own PR job uses `--changed-since` and gates on "no LIVED
-  mutant on changed lines"; the post-merge job runs the full tree
-  against an absolute efficacy floor. See
-  [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml).
-* **Per-test coverage routing.** For each mutant, gomutants runs only
-  the tests whose coverage touches the mutated line — not the entire
-  test suite. The map is built once per run by compiling each test
-  binary one time and replaying it with `-test.run=<one>` per test.
-  When the change is on a line covered by 3 of your 400 tests, you run
-  those 3.
-* **Speed comes from doing less, not from cutting corners.** Per-test
-  coverage routing means a mutant on a line covered by 3 of your 400
-  tests runs those 3, not the entire suite. On top of that:
-  cache-locality dispatch (mutants sorted by `(Pkg, File, Offset)` so
-  the first in a package pays the cold compile and subsequent ones reuse
-  the build cache — a 17% wall-clock reduction by itself); each child
-  runs with `GOMAXPROCS=NumCPU/workers` so a 10-worker run on a 10-core
-  box doesn't oversubscribe 100×; `-vet=off` on the inner `go test` is a
-  17–39% per-mutant reduction on representative packages. End-to-end on
-  diffyml that's a ~20% wall-clock advantage over gremlins (see
-  [Quick examples comparing tools](#quick-examples-comparing-tools)).
-* **Byte-level patching, not AST rewriting.** Mutations are applied as
-  byte patches through `go test -overlay`. Type parameters,
-  instantiations, and the rest of Go's syntax surface — generics
-  included — survive intact. The original source tree is never
-  modified.
-* **OOM-safe by construction.** Each `go test` child runs in its own
-  process group with a 2 GiB RSS cap. A mutation that flips a loop
-  bound or allocation size — and there are many — can balloon a test
-  binary to tens of gigabytes within seconds; gomutants `SIGKILL`s the
-  entire process group on cap breach and classifies the mutant as
-  `TIMED_OUT` instead of taking the whole job down. Output is capped at
-  1 MiB per stream so a panic-loop mutant can't fill the runner disk.
-* **16 mutators, including block-level.** Beyond the standard
-  token-level operators, gomutants ships `BRANCH_IF` / `BRANCH_ELSE` /
-  `BRANCH_CASE`, `EXPRESSION_REMOVE`, and `STATEMENT_REMOVE` —
-  block-level mutators that reshape statements and branches and surface
-  the weak-assertion test gaps that token-level mutation misses. Full
-  catalog under [Mutators](#mutators).
-* **Stryker Dashboard support out of the box.** `--stryker-output
-  report.json` writes a [mutation-testing-elements
-  v2](https://github.com/stryker-mutator/mutation-testing-elements)
-  report alongside the gremlins-format JSON — feeds the interactive
-  HTML viewer and the Stryker Dashboard score badge.
-* **gremlins-compatible JSON.** The default report format matches the
-  schema gremlins emits, so existing scripts (badge generators, dashboard
-  uploads, threshold gates) keep working.
-
-In other words, use gomutants if you want to gate every PR on mutation
-efficacy without making CI take minutes longer.
+* **Discovery is conservative.** Compile-failing mutants are reported as `NOT_VIABLE` and excluded from the kill count — they don't silently inflate efficacy. `test_efficacy = killed / (killed + lived)` is a number you can gate on.
+* **`--changed-since` is the headline mode.** It runs `git diff --unified=0 <ref>` and keeps only mutants on added/modified lines — fast enough to gate every PR without re-testing untouched code. This repo's PR job uses it to gate on "no LIVED mutant on changed lines"; the post-merge job runs the full tree. See [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml).
+* **Per-test coverage routing.** Each mutant runs only the tests whose coverage touches the mutated line — not the whole suite. On top of that: cache-locality dispatch (mutants sorted by `(Pkg, File, Offset)` so subsequent ones reuse the build cache, –17% wall-clock); per-child `GOMAXPROCS=NumCPU/workers` to avoid oversubscription; `-vet=off` on the inner `go test` (–17 to –39% per mutant). End-to-end on diffyml: ~20% wall-clock advantage over gremlins.
+* **Byte-level patching, not AST rewriting.** Mutations apply as byte patches through `go test -overlay`. Generics and the rest of Go's syntax surface survive intact; the original source tree is never modified.
+* **OOM-safe by construction.** Each `go test` child runs in its own process group with a 2 GiB RSS cap; gomutants `SIGKILL`s the group on breach and reports `TIMED_OUT` instead of taking the whole job down. Output is capped at 1 MiB per stream.
+* **16 mutators, including block-level.** Beyond the token-level operators, gomutants ships `BRANCH_IF`/`BRANCH_ELSE`/`BRANCH_CASE`, `EXPRESSION_REMOVE`, and `STATEMENT_REMOVE` — block-level mutators that surface weak-assertion test gaps that token-level mutation misses. Full catalog under [Mutators](#mutators).
 
 
 ### Why shouldn't I use gomutants?
 
 A handful of cases where gomutants is the wrong choice:
 
-* **You run mutation testing manually, once in a while.**
-  [gremlins](https://github.com/go-gremlins/gremlins) is simpler,
-  well-supported, and faster on small workloads — gomutants's one-time
-  setup (coverage collection, baseline measurement, per-test coverage
-  map build) is fixed overhead that only pays off when many mutants
-  share that cost. See
-  [Quick examples comparing tools](#quick-examples-comparing-tools).
-* **Your test suite is thin.** Mutation testing is leverage on top of
-  an existing test suite. If line coverage is below ~70%, fixing that
-  is a higher-value use of time than gating on mutation efficacy.
-* **You're on Go &lt; 1.26.** gomutants doesn't ship a build for older
-  toolchains.
-* **You don't want a CI gate.** The `--changed-since` PR-scope is
-  gomutants's centerpiece. Without it you're paying complexity for
-  features you won't use.
+* **You run mutation testing manually, once in a while.** [gremlins](https://github.com/go-gremlins/gremlins) is simpler, well-supported, and faster on small workloads — gomutants's one-time setup (coverage collection, baseline measurement, per-test coverage map build) is fixed overhead that only pays off when many mutants share that cost. See [Quick examples comparing tools](#quick-examples-comparing-tools).
+* **Your test suite is thin.** Mutation testing is leverage on top of an existing test suite. If line coverage is below ~70%, fixing that is a higher-value use of time than gating on mutation efficacy.
+* **You're on Go &lt; 1.26.** gomutants doesn't ship a build for older toolchains.
+* **You don't want a CI gate.** The `--changed-since` PR-scope is gomutants's centerpiece. Without it you're paying complexity for features you won't use.
 
 
 ### Is it really faster than gremlins?
 
-On the workloads gomutants is built for — full-module runs with many
-mutants, and PR-scoped runs that touch a small fraction of the tree —
-yes. On small one-off runs, no; see
-[the small-workload table above](#quick-examples-comparing-tools).
+On the workloads gomutants is built for — full-module runs with many mutants, and PR-scoped runs that touch a small fraction of the tree — yes. On small one-off runs, no; see [the small-workload table above](#quick-examples-comparing-tools).
 
 Summarizing, gomutants is fast at scale because:
 
