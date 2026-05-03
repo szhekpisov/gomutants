@@ -57,8 +57,7 @@ The headline workload is [diffyml](https://github.com/szhekpisov/diffyml), run o
 | **gomutants** | 5 | **244 s ± 41** | 773 | **316 ms** |
 | [gremlins](https://github.com/go-gremlins/gremlins) | 5 | 295 s ± 65 | 542 | 545 ms |
 
-**gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant.** It also generates ~40% more viable mutants from the same five operators (byte-level patching emits patches the AST rewriter doesn't); both tools land on the same efficacy (99.87% vs 99.82%), so the wall-clock lead would be larger if they tested the same mutant population. The wall-clock difference comes from cache-locality engineering (see [How it works](#how-it-works)) and gomutants's
-per-test coverage routing.
+**gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant.** It also generates ~40% more viable mutants from the same five operators (byte-level patching emits patches the AST rewriter doesn't); both tools land on the same efficacy (99.87% vs 99.82%), so the wall-clock lead would be larger if they tested the same mutant population. The wall-clock difference comes from cache-locality engineering (see [How it works](#how-it-works)) and gomutants's per-test coverage routing.
 
 Beware of small workloads though. gomutants's one-time setup cost (coverage collection, baseline measurement, per-test coverage map build) only amortizes when there are many mutants to share it across:
 
@@ -78,8 +77,7 @@ See [`benchmarks/results.md`](benchmarks/results.md) for the full per-scenario b
 
 ### Why should I use gomutants?
 
-gomutants is built for PR-scoped mutation testing as a CI gate. The
-consequences:
+gomutants is built for PR-scoped mutation testing as a CI gate. The consequences:
 
 * **Discovery is conservative.** Compile-failing mutants are reported as `NOT_VIABLE` and excluded from the kill count — they don't silently inflate efficacy. `test_efficacy = killed / (killed + lived)` is a number you can gate on.
 * **`--changed-since` is the headline mode.** It runs `git diff --unified=0 <ref>` and keeps only mutants on added/modified lines — fast enough to gate every PR without re-testing untouched code. This repo's PR job uses it to gate on "no LIVED mutant on changed lines"; the post-merge job runs the full tree. See [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml).
@@ -105,36 +103,14 @@ On the workloads gomutants is built for — full-module runs with many mutants, 
 
 Summarizing, gomutants is fast at scale because:
 
-* **Per-test coverage routing.** A mutant on a line covered by 3 of 400
-  tests runs those 3, not all 400. The coverage map is built once at
-  startup (each test binary compiled once, replayed with
-  `-test.run=<one>` per test) and reused for every mutant in that
-  package.
-* **Cache-locality dispatch.** Pending mutants are sorted by `(Pkg,
-  File, Offset)` before dispatch. The first mutant in a package pays
-  the cold `go test` compile; subsequent ones reuse the build cache for
-  deps and stdlib. This sort alone was a 17% wall-clock reduction.
-* **Bounded child concurrency.** Each `go test` child runs with
-  `GOMAXPROCS=NumCPU/workers`. Without this, `--workers=10` on a
-  10-core box would have each child also assume 10 cores, oversubscribing
-  100× and burning all the gain to context switching.
-* **`-vet=off` on the inner `go test`.** Vet runs in your CI on clean
-  source; re-running it for every mutant is wasted work. Measured 17–39%
-  per-mutant reduction on representative packages.
-* **Incremental analysis cache.** With `--cache` (on by default),
-  mutants whose source byte range and the surrounding tests are
-  byte-identical to a prior run are skipped and their previous
-  classifications reused. CI runs that touch one file pay for that file
-  only.
-* **Discovery emits fewer wasted mutants.** Conservative AST checks
-  (skipping address-of `&`, deduplicating unary `-`) and the byte-level
-  patcher mean fewer compile-failing mutants reach the test stage in
-  the first place.
+* **Per-test coverage routing.** A mutant on a line covered by 3 of 400 tests runs those 3, not all 400. The coverage map is built once at startup (each test binary compiled once, replayed with `-test.run=<one>` per test) and reused for every mutant in that package.
+* **Cache-locality dispatch.** Pending mutants are sorted by `(Pkg, File, Offset)` before dispatch. The first mutant in a package pays the cold `go test` compile; subsequent ones reuse the build cache for deps and stdlib. This sort alone was a 17% wall-clock reduction.
+* **Bounded child concurrency.** Each `go test` child runs with `GOMAXPROCS=NumCPU/workers`. Without this, `--workers=10` on a 10-core box would have each child also assume 10 cores, oversubscribing 100× and burning all the gain to context switching.
+* **`-vet=off` on the inner `go test`.** Vet runs in your CI on clean source; re-running it for every mutant is wasted work. Measured 17–39% per-mutant reduction on representative packages.
+* **Incremental analysis cache.** With `--cache` (on by default), mutants whose source byte range and the surrounding tests are byte-identical to a prior run are skipped and their previous classifications reused. CI runs that touch one file pay for that file only.
+* **Discovery emits fewer wasted mutants.** Conservative AST checks (skipping address-of `&`, deduplicating unary `-`) and the byte-level patcher mean fewer compile-failing mutants reach the test stage in the first place.
 
-PR-scoped runs are faster than gremlins for a different reason:
-gremlins has no equivalent mode, so the equivalent gremlins workflow
-runs the full module on every PR. `--changed-since` is what makes
-mutation testing tractable as a per-PR gate.
+PR-scoped runs are faster than gremlins for a different reason: gremlins has no equivalent mode, so the equivalent gremlins workflow runs the full module on every PR. `--changed-since` is what makes mutation testing tractable as a per-PR gate.
 
 
 ### Feature comparison
@@ -168,24 +144,16 @@ If you're a **Go programmer**, gomutants can be installed with `go install`:
 $ go install github.com/szhekpisov/gomutants@v0.1.0
 ```
 
-The minimum supported version of Go for gomutants is **1.26**, both for
-building gomutants itself and for the project under test (gomutants
-shells out to `go test` in your project's toolchain).
+The minimum supported version of Go for gomutants is **1.26**, both for building gomutants itself and for the project under test (gomutants shells out to `go test` in your project's toolchain).
 
-If you use **GitHub Actions**, gomutants is published as a composite
-action — see [GitHub Action](#github-action) below for the full
-configuration.
+If you use **GitHub Actions**, gomutants is published as a composite action — see [GitHub Action](#github-action) below for the full configuration.
 
-There are no platform-specific build steps; gomutants is a pure-Go
-binary that shells out to your `go` toolchain. macOS and Linux on
-amd64/arm64 are tested in CI; Windows works wherever `go` does, though
-it isn't covered by automated tests.
+There are no platform-specific build steps; gomutants is a pure-Go binary that shells out to your `go` toolchain. macOS and Linux on amd64/arm64 are tested in CI; Windows works wherever `go` does, though it isn't covered by automated tests.
 
 
 ### Building
 
-gomutants is written in Go, so you'll need a [Go installation](https://go.dev/dl/)
-in order to compile it. gomutants compiles with Go 1.26 or newer.
+gomutants is written in Go, so you'll need a [Go installation](https://go.dev/dl/) in order to compile it. gomutants compiles with Go 1.26 or newer.
 
 To build gomutants:
 
@@ -199,23 +167,15 @@ $ ./gomutants --version
 
 ### Running tests
 
-gomutants has a unit-test suite alongside an integration-test suite that
-forks gomutants subprocesses to test mutated overlays end-to-end. To
-run the full suite:
+gomutants has a unit-test suite alongside an integration-test suite that forks gomutants subprocesses to test mutated overlays end-to-end. To run the full suite:
 
 ```
 $ go test ./...
 ```
 
-The integration tests are tagged separately and take noticeably longer;
-the standard CI matrix runs them on every PR. See
-[`.github/workflows/test.yml`](.github/workflows/test.yml) for the
-exact invocation.
+The integration tests are tagged separately and take noticeably longer; the standard CI matrix runs them on every PR. See [`.github/workflows/test.yml`](.github/workflows/test.yml) for the exact invocation.
 
-To run gomutants on itself (mutation-testing the mutation-tester), use
-the workflow in [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml)
-or replicate per-package locally with `gomutants ./internal/<pkg>/`.
-The `main` package is excluded — see [Self-efficacy](#self-efficacy-gomutants-on-itself).
+To run gomutants on itself (mutation-testing the mutation-tester), use the workflow in [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml) or replicate per-package locally with `gomutants ./internal/<pkg>/`. The `main` package is excluded — see [Self-efficacy](#self-efficacy-gomutants-on-itself).
 
 
 ### GitHub Action
@@ -231,10 +191,7 @@ Surface surviving mutants as inline annotations on the PR diff:
     args: --changed-since origin/${{ github.base_ref }} ./...
 ```
 
-Each LIVED mutant on a changed line is emitted as a `::warning
-file=...,line=...::` workflow command, which GitHub renders inline on
-the "Files changed" view. The action fails if any LIVED is reported
-(override with `fail-on-lived: false`).
+Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...::` workflow command, which GitHub renders inline on the "Files changed" view. The action fails if any LIVED is reported (override with `fail-on-lived: false`).
 
 | Input | Default | Description |
 |---|---|---|
@@ -245,11 +202,7 @@ the "Files changed" view. The action fails if any LIVED is reported
 | `working-directory` | `.` | Directory containing `go.mod`. |
 | `cache` | `.gomutants-cache.json` | Path to the incremental-analysis cache file. Set to `off` to disable. Pair with [`actions/cache`](https://github.com/actions/cache) to persist across CI runs. |
 
-**Security note:** the `args` input is splatted into a shell command,
-and `version` is interpolated into `go install …@<version>`. Don't pipe
-untrusted strings (PR titles, branch names) into either. For
-supply-chain hardening, pin `version` to a specific commit SHA rather
-than `latest`.
+**Security note:** the `args` input is splatted into a shell command, and `version` is interpolated into `go install …@<version>`. Don't pipe untrusted strings (PR titles, branch names) into either. For supply-chain hardening, pin `version` to a specific commit SHA rather than `latest`.
 
 See [`action.yml`](action.yml) for the full composite definition.
 
@@ -260,15 +213,10 @@ See [`action.yml`](action.yml) for the full composite definition.
 $ gomutants --stryker-output stryker-report.json ./...
 ```
 
-Writes a [mutation-testing-elements
-v2](https://github.com/stryker-mutator/mutation-testing-elements) report
-alongside the gremlins-format JSON. The same file feeds:
+Writes a [mutation-testing-elements v2](https://github.com/stryker-mutator/mutation-testing-elements) report alongside the gremlins-format JSON. The same file feeds:
 
-* the [`<mutation-test-report-app>`](https://www.npmjs.com/package/mutation-testing-elements)
-  web component, which renders an interactive HTML view when embedded
-  in a page with `src="stryker-report.json"`.
-* the [Stryker Dashboard](https://stryker-mutator.io/docs/General/dashboard/),
-  which hosts the report and serves a mutation-score badge:
+* the [`<mutation-test-report-app>`](https://www.npmjs.com/package/mutation-testing-elements) web component, which renders an interactive HTML view when embedded in a page with `src="stryker-report.json"`.
+* the [Stryker Dashboard](https://stryker-mutator.io/docs/General/dashboard/), which hosts the report and serves a mutation-score badge:
 
 ```
 $ curl -X PUT \
@@ -278,9 +226,7 @@ $ curl -X PUT \
   "https://dashboard.stryker-mutator.io/api/reports/github.com/<org>/<repo>/<branch-or-sha>"
 ```
 
-Once registered on `dashboard.stryker-mutator.io`, your project gets a
-`mutationScoreBadge` URL you can drop in this README — the same surface
-PIT, Stryker (JS/.NET/Scala), and Infection PHP plug into.
+Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutationScoreBadge` URL you can drop in this README — the same surface PIT, Stryker (JS/.NET/Scala), and Infection PHP plug into.
 
 
 ### CLI reference
@@ -415,66 +361,39 @@ Compatible with the gremlins JSON format:
 }
 ```
 
-`test_efficacy = killed / (killed + lived)` — excludes `not_viable`,
-`not_covered`, and `timed_out`.
+`test_efficacy = killed / (killed + lived)` — excludes `not_viable`, `not_covered`, and `timed_out`.
 
 
 ### How it works
 
 1. **Resolve packages** via `go list -json`.
-2. **Collect coverage** with `go test -coverprofile`. Mutants on
-   uncovered lines are filtered upfront as `NOT_COVERED`.
-3. **Measure baseline test time** to set a sane per-mutant timeout
-   (multiplied by `--timeout-coefficient`).
-4. **Discover mutants** by walking the AST and emitting byte-level
-   patches. Address-of `&` is recognised and skipped; unary `-` is
-   emitted by exactly one mutator.
-5. **Build per-test coverage map.** Test binaries are compiled once;
-   each test runs in isolation with `-test.run=<one>` to record the
-   lines it covers.
+2. **Collect coverage** with `go test -coverprofile`. Mutants on uncovered lines are filtered upfront as `NOT_COVERED`.
+3. **Measure baseline test time** to set a sane per-mutant timeout (multiplied by `--timeout-coefficient`).
+4. **Discover mutants** by walking the AST and emitting byte-level patches. Address-of `&` is recognised and skipped; unary `-` is emitted by exactly one mutator.
+5. **Build per-test coverage map.** Test binaries are compiled once; each test runs in isolation with `-test.run=<one>` to record the lines it covers.
 6. **Test mutants** in parallel:
    * Each worker owns a stable temp source file + overlay JSON.
-   * Mutations are applied as byte-level patches; the original tree is
-     never written to.
-   * The mutant's covered tests are looked up; only those run via `go
-     test -overlay -run=<regex>`.
-   * Each `go test` child runs in its own process group with a 2 GiB
-     RSS cap; output is capped at 1 MiB per stream.
+   * Mutations are applied as byte-level patches; the original tree is never written to.
+   * The mutant's covered tests are looked up; only those run via `go test -overlay -run=<regex>`.
+   * Each `go test` child runs in its own process group with a 2 GiB RSS cap; output is capped at 1 MiB per stream.
 
 Three performance optimizations layered on top:
 
-* **`GOMAXPROCS=NumCPU/workers` per child.** Without this,
-  `--workers=10` on a 10-core box would have each child also assume 10
-  cores, oversubscribing 100×. With it, each child compiles + tests
-  within its share.
-* **Sort pending mutants by `(Pkg, File, Offset)` before dispatch.**
-  The first mutant in a package pays the cold compile; subsequent ones
-  reuse the build cache for deps and stdlib. This sort alone was a 17%
-  wall-clock reduction.
-* **`-vet=off` on the inner `go test`.** Vet runs in the user's CI on
-  clean source; re-running it for every mutant is wasted work. Measured
-  17–39% per-mutant wall-clock reduction on representative packages.
+* **`GOMAXPROCS=NumCPU/workers` per child.** Without this, `--workers=10` on a 10-core box would have each child also assume 10 cores, oversubscribing 100×. With it, each child compiles + tests within its share.
+* **Sort pending mutants by `(Pkg, File, Offset)` before dispatch.** The first mutant in a package pays the cold compile; subsequent ones reuse the build cache for deps and stdlib. This sort alone was a 17% wall-clock reduction.
+* **`-vet=off` on the inner `go test`.** Vet runs in the user's CI on clean source; re-running it for every mutant is wasted work. Measured 17–39% per-mutant wall-clock reduction on representative packages.
 
 
 ### Self-efficacy (gomutants on itself)
 
-gomutants kills **100%** of mutants in its `./internal/...` library code
-(every package at 100% efficacy). Statement coverage is also 100%. The
-CI gate fails on any surviving mutant on changed lines per PR, and on
-the full `./internal/...` tree post-merge — drift surfaces on the merge
-that introduces it.
+gomutants kills **100%** of mutants in its `./internal/...` library code (every package at 100% efficacy). Statement coverage is also 100%. The CI gate fails on any surviving mutant on changed lines per PR, and on the full `./internal/...` tree post-merge — drift surfaces on the merge that introduces it.
 
-The `main` package is excluded from mutation testing. Its mutants
-exercise the integration test suite (which forks gomutants subprocesses
-to test mutated overlays), each taking minutes; running them in CI
-under the same gate isn't tractable, and most surviving mutants are
-output-formatting drift the integration tests intentionally don't pin.
+The `main` package is excluded from mutation testing. Its mutants exercise the integration test suite (which forks gomutants subprocesses to test mutated overlays), each taking minutes; running them in CI under the same gate isn't tractable, and most surviving mutants are output-formatting drift the integration tests intentionally don't pin.
 
 
 ### Contributing
 
-Found a bug or have a feature request?
-[Open an issue](https://github.com/szhekpisov/gomutants/issues/new).
+Found a bug or have a feature request? [Open an issue](https://github.com/szhekpisov/gomutants/issues/new).
 
 
 ### License
@@ -483,5 +402,4 @@ Found a bug or have a feature request?
 
 ---
 
-If you find this project useful, please consider giving it a ⭐ — it
-helps others discover it.
+If you find this project useful, please consider giving it a ⭐ — it helps others discover it.
