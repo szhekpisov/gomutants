@@ -1,6 +1,6 @@
 Gomutants is a mutation testing tool for Go, supporting diff-scoped
 runs, incremental caching, per-test coverage routing, and block-level
-mutators. It's a drop-in for
+mutators. It's a near drop-in for
 [gremlins](https://github.com/go-gremlins/gremlins) — same `unleash`
 command, same gremlins-compatible JSON output, same threshold exit
 codes — so existing CI scripts keep working.
