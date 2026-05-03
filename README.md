@@ -136,9 +136,7 @@ PR-scoped runs are faster than gremlins for a different reason: gremlins has no 
 
 ### Installation
 
-The binary name for gomutants is `gomutants`.
-
-If you're a **Go programmer**, gomutants can be installed with `go install`:
+Gomutants can be installed with `go install`:
 
 ```
 $ go install github.com/szhekpisov/gomutants@v0.1.0
