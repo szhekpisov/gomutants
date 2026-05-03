@@ -1,9 +1,4 @@
-Gomutants is a mutation testing tool for Go, supporting diff-scoped
-runs, incremental caching, per-test coverage routing, and block-level
-mutators. It's a near drop-in for
-[gremlins](https://github.com/go-gremlins/gremlins) — same `unleash`
-command, same gremlins-compatible JSON output, same threshold exit
-codes — so existing CI scripts keep working.
+Gomutants is a mutation testing tool for Go, supporting diff-scoped runs, incremental caching, per-test coverage routing, and block-level mutators. It's a near drop-in for [gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` command, same gremlins-compatible JSON output, same threshold exit codes — so existing CI scripts keep working.
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutants/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutants)
 [![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutants)](https://goreportcard.com/report/github.com/szhekpisov/gomutants)
@@ -45,7 +40,7 @@ $ go install github.com/szhekpisov/gomutants@v0.1.0
 # Run on the whole module.
 $ gomutants ./...
 
-# Run only on lines this PR changes — typically under a minute on a hosted runner.
+# Run only on lines this PR changes.
 $ gomutants --changed-since origin/main ./...
 
 # Drop-in for gremlins users:
@@ -55,30 +50,17 @@ $ gomutants unleash ./...
 
 ### Quick examples comparing tools
 
-The headline workload is [diffyml](https://github.com/szhekpisov/diffyml),
-run on an Apple M1 Pro 10-core with the matched 5-mutator set
-(gremlins' defaults enabled on both sides), `workers=5`,
-`--timeout-coefficient=50`, and gomutants's per-mutant cache disabled
-(`--cache=off`) so every run measures actual mutation work. Hyperfine
-reports the mean of three runs after a warmup pass:
+The headline workload is [diffyml](https://github.com/szhekpisov/diffyml), run on an Apple M1 Pro 10-core with the matched 5-mutator set (gremlins' defaults enabled on both sides), `workers=5`, `--timeout-coefficient=50`, and gomutants's per-mutant cache disabled (`--cache=off`) so every run measures actual mutation work. Hyperfine reports the mean of three runs after a warmup pass:
 
 | Tool | Workers | Mean wall-clock | Tested mutants | Per-mutant time |
 | ---- | :-----: | --------------: | -------------: | --------------: |
 | **gomutants** | 5 | **244 s ± 41** | 773 | **316 ms** |
 | [gremlins](https://github.com/go-gremlins/gremlins) | 5 | 295 s ± 65 | 542 | 545 ms |
 
-**gomutants is ~20% faster wall-clock and ~1.7× faster per tested
-mutant.** It also generates ~40% more viable mutants from the same five
-operators (byte-level patching emits patches the AST rewriter doesn't);
-both tools land on the same efficacy (99.87% vs 99.82%), so the
-wall-clock lead would be larger if they tested the same mutant
-population. The wall-clock difference comes from cache-locality
-engineering (see [How it works](#how-it-works)) and gomutants's
+**gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant.** It also generates ~40% more viable mutants from the same five operators (byte-level patching emits patches the AST rewriter doesn't); both tools land on the same efficacy (99.87% vs 99.82%), so the wall-clock lead would be larger if they tested the same mutant population. The wall-clock difference comes from cache-locality engineering (see [How it works](#how-it-works)) and gomutants's
 per-test coverage routing.
 
-Beware of small workloads though. gomutants's one-time setup cost
-(coverage collection, baseline measurement, per-test coverage map build)
-only amortizes when there are many mutants to share it across:
+Beware of small workloads though. gomutants's one-time setup cost (coverage collection, baseline measurement, per-test coverage map build) only amortizes when there are many mutants to share it across:
 
 | Workload | Tool | Time |
 | -------- | ---- | ---: |
@@ -89,12 +71,11 @@ only amortizes when there are many mutants to share it across:
 | Single small package, mutator-matched | gomutants | **1.9 s** (1.00x) |
 | Single small package, mutator-matched | [gremlins](https://github.com/go-gremlins/gremlins) | 2.5 s (1.29x) |
 
-In the PR-scoped mode that gomutants is built around, the comparison
-becomes lopsided in a different way: gremlins doesn't have a
-`--changed-since` mode, so the equivalent gremlins workflow runs the
-full module on every PR. On a typical PR for this repo, `gomutants
---changed-since origin/main ./...` finishes in **under a minute** while
-the equivalent full-tree gremlins run takes minutes.
+The `--changed-since <ref>` flag scopes a run to mutants on lines
+added or modified since the given ref. A typical PR for this repo
+finishes in **under a minute** with `gomutants --changed-since
+origin/main ./...` — fast enough to gate every pull request, without
+re-running the full mutation suite on untouched code.
 
 See [`benchmarks/results.md`](benchmarks/results.md) for the full
 per-scenario breakdown, methodology, hyperfine output, and caveats;
