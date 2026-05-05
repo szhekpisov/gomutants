@@ -12,9 +12,12 @@ import (
 
 // Report is the gremlins-compatible JSON report structure.
 //
-// MutantsCached is gomutants-specific (additive, ignored by gremlins
-// consumers). It counts mutants whose status was sourced from the
-// incremental-analysis cache rather than this run's go-test invocations.
+// MutantsCached and MutantsSuppressed are gomutants-specific (additive,
+// ignored by gremlins consumers). MutantsCached counts mutants whose
+// status was sourced from the incremental-analysis cache.
+// MutantsSuppressed counts mutants dropped by `// gomutants:disable*`
+// directives — these don't appear in Files[].Mutations and are excluded
+// from every other count.
 type Report struct {
 	GoModule          string         `json:"go_module"`
 	Files             []FileReport   `json:"files"`
@@ -26,6 +29,7 @@ type Report struct {
 	MutantsNotViable  int            `json:"mutants_not_viable"`
 	MutantsNotCovered int            `json:"mutants_not_covered"`
 	MutantsCached     int            `json:"mutants_cached,omitempty"`
+	MutantsSuppressed int            `json:"mutants_suppressed,omitempty"`
 	ElapsedTime       float64        `json:"elapsed_time"`
 	MutatorStatistics map[string]int `json:"mutator_statistics"`
 }
@@ -46,12 +50,16 @@ type MutationReport struct {
 	Replacement string `json:"replacement,omitempty"`
 }
 
-// Generate builds a Report from the list of mutants.
-func Generate(mutants []mutator.Mutant, goModule string, elapsed time.Duration) *Report {
+// Generate builds a Report from the list of mutants. suppressedCount
+// is the number of mutants dropped by `// gomutants:disable*` directives
+// before this point — they are not in `mutants` and contribute to no
+// count except `MutantsSuppressed`.
+func Generate(mutants []mutator.Mutant, goModule string, elapsed time.Duration, suppressedCount int) *Report {
 	r := &Report{
 		GoModule:          goModule,
 		ElapsedTime:       elapsed.Seconds(),
 		MutatorStatistics: make(map[string]int),
+		MutantsSuppressed: suppressedCount,
 	}
 
 	fileMap := make(map[string][]MutationReport)

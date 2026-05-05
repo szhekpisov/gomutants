@@ -340,6 +340,49 @@ Mutant statuses:
 | TIMED OUT | Test execution exceeded the per-mutant timeout |
 
 
+### Inline ignore directives
+
+Annotate Go source with `// gomutants:disable*` comments to silence specific mutants. Suppressed mutants are dropped from the run entirely — they don't appear in any status bucket and don't affect `test_efficacy` or `mutations_coverage`. The aggregate count surfaces as `mutants_suppressed` in the JSON report and on the terminal summary.
+
+Four forms:
+
+```go
+// Same line — suppress every (or one) mutator on the line of the directive.
+return a + b // gomutants:disable
+return a + b // gomutants:disable ARITHMETIC_BASE reason="commutative"
+return a + b // gomutants:disable ARITHMETIC_BASE,INVERT_NEGATIVES
+
+// Next line — suppress mutators on the first non-blank, non-comment line that follows.
+// gomutants:disable-next-line CONDITIONALS_NEGATION reason="branch always taken in prod"
+if debugMode { ... }
+
+// Function — when placed as the doc-comment of a func, suppresses every mutant in the body.
+// gomutants:disable-func reason="generated code"
+func gen() { ... }
+
+// Regexp — anywhere in the file; suppresses mutants on lines whose source text matches.
+// gomutants:disable-regexp ^\s*log\. reason="logging is not behaviour"
+```
+
+Grammar:
+
+```
+DIRECTIVE  = "// gomutants:" KIND [ WS PATTERN ] [ WS MUTATORS ] [ WS "reason=" QUOTED ]
+KIND       = "disable" | "disable-next-line" | "disable-func" | "disable-regexp"
+PATTERN    = present only for "disable-regexp"; first whitespace-delimited token after the kind, RE2 syntax
+MUTATORS   = ( MUTATOR ("," MUTATOR)* ) | "*"   // upper-case mutator type names; "*" = all
+QUOTED     = double-quoted string with standard Go escape handling
+```
+
+Defaults and edge cases:
+- Omitting `MUTATORS` (or supplying `*`) suppresses every mutator at the directive's target.
+- `reason="..."` is optional; recommended for self-documentation. Reasons surface to stderr under `--verbose`.
+- Unknown mutator name → warning to stderr, that name is dropped, the rest of the directive still applies. Forward-compatible across mutator renames.
+- `disable-func` placed on a non-function comment → warning, directive ignored.
+- `disable-regexp` with an invalid pattern → warning, directive ignored.
+- Patterns with whitespace are not supported in v1; use `\s` instead.
+
+
 ### JSON report
 
 Compatible with the gremlins JSON format:
@@ -354,12 +397,13 @@ Compatible with the gremlins JSON format:
   "mutants_lived": 0,
   "mutants_not_viable": 0,
   "mutants_not_covered": 20,
+  "mutants_suppressed": 5,
   "elapsed_time": 159.84,
   "files": [...]
 }
 ```
 
-`test_efficacy = killed / (killed + lived)` — excludes `not_viable`, `not_covered`, and `timed_out`.
+`test_efficacy = killed / (killed + lived)` — excludes `not_viable`, `not_covered`, and `timed_out`. `mutants_suppressed` is omitted when zero; it counts mutants dropped by `// gomutants:disable*` directives and is excluded from every other count.
 
 
 ### How it works

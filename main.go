@@ -281,6 +281,21 @@ func run(ctx context.Context, args []string) error {
 	}
 	discover.FilterByCoverage(mutants, profile, pkgs, goModule)
 
+	mutants, suppressed, err := discover.FilterByDirectives(fset, mutants)
+	if err != nil {
+		return fmt.Errorf("applying directives: %w", err)
+	}
+	if cfg.Verbose {
+		for _, s := range suppressed {
+			reason := s.Reason
+			if reason == "" {
+				reason = "no reason"
+			}
+			fmt.Fprintf(stderr, "suppressed %s at %s:%d (%s)\n",
+				s.Mutant.Type, s.Mutant.RelFile, s.Mutant.Line, reason)
+		}
+	}
+
 	pendingCount := 0
 	notCoveredCount := 0
 	for _, m := range mutants {
@@ -398,7 +413,7 @@ func run(ctx context.Context, args []string) error {
 
 	// 9. Generate report.
 	totalElapsed := time.Since(coverStart)
-	r := report.Generate(mutants, goModule, totalElapsed)
+	r := report.Generate(mutants, goModule, totalElapsed, len(suppressed))
 	term2.Summary(r)
 
 	if err := report.WriteJSON(r, cfg.Output); err != nil {

@@ -107,6 +107,9 @@ func (t *Terminal) Summary(r *Report) {
 	if r.MutantsCached > 0 {
 		fmt.Fprintf(t.w, "  Cached:       %d  (skipped)\n", r.MutantsCached)
 	}
+	if r.MutantsSuppressed > 0 {
+		fmt.Fprintf(t.w, "  Suppressed:   %d  (directives)\n", r.MutantsSuppressed)
+	}
 	fmt.Fprintf(t.w, "  Efficacy:     %.2f%%\n", r.TestEfficacy)
 	fmt.Fprintln(t.w)
 }

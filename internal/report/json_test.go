@@ -20,7 +20,7 @@ func TestGenerate(t *testing.T) {
 		{ID: 5, Type: mutator.BranchElse, RelFile: "a.go", Line: 30, Col: 1, Status: mutator.StatusNotViable},
 	}
 
-	r := Generate(mutants, "example.com/mod", 120*time.Second)
+	r := Generate(mutants, "example.com/mod", 120*time.Second, 0)
 
 	if r.GoModule != "example.com/mod" {
 		t.Errorf("GoModule=%q", r.GoModule)
@@ -87,7 +87,7 @@ func TestGenerate(t *testing.T) {
 }
 
 func TestGenerateEmpty(t *testing.T) {
-	r := Generate(nil, "example.com/mod", 0)
+	r := Generate(nil, "example.com/mod", 0, 0)
 	if r.MutantsTotal != 0 {
 		t.Errorf("Total=%d, want 0", r.MutantsTotal)
 	}
@@ -107,7 +107,7 @@ func TestGenerateCarriesOriginalAndReplacement(t *testing.T) {
 			Status: mutator.StatusLived,
 		},
 	}
-	r := Generate(mutants, "mod", time.Second)
+	r := Generate(mutants, "mod", time.Second, 0)
 	if len(r.Files) != 1 || len(r.Files[0].Mutations) != 1 {
 		t.Fatalf("expected 1 mutation, got files=%v", r.Files)
 	}
@@ -134,7 +134,7 @@ func TestGenerateOmitsEmptyOriginalAndReplacement(t *testing.T) {
 	mutants := []mutator.Mutant{
 		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
 	}
-	r := Generate(mutants, "mod", time.Second)
+	r := Generate(mutants, "mod", time.Second, 0)
 	data, err := json.Marshal(r)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -149,7 +149,7 @@ func TestGenerateAllKilled(t *testing.T) {
 		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
 		{ID: 2, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 2, Col: 1, Status: mutator.StatusKilled},
 	}
-	r := Generate(mutants, "mod", time.Second)
+	r := Generate(mutants, "mod", time.Second, 0)
 	if r.TestEfficacy != 100 {
 		t.Errorf("Efficacy=%f, want 100", r.TestEfficacy)
 	}
@@ -164,7 +164,7 @@ func TestGenerateCountsMutantsCached(t *testing.T) {
 		{ID: 2, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 2, Col: 1, Status: mutator.StatusLived, FromCache: true},
 		{ID: 3, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 3, Col: 1, Status: mutator.StatusKilled},
 	}
-	r := Generate(mutants, "mod", time.Second)
+	r := Generate(mutants, "mod", time.Second, 0)
 	if r.MutantsCached != 2 {
 		t.Errorf("MutantsCached=%d, want 2", r.MutantsCached)
 	}
@@ -173,11 +173,45 @@ func TestGenerateCountsMutantsCached(t *testing.T) {
 	}
 }
 
+func TestGenerateRecordsMutantsSuppressed(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
+	}
+	r := Generate(mutants, "mod", time.Second, 4)
+	if r.MutantsSuppressed != 4 {
+		t.Errorf("MutantsSuppressed=%d, want 4", r.MutantsSuppressed)
+	}
+	if r.MutantsTotal != 1 {
+		t.Errorf("MutantsTotal=%d, want 1 (suppressed must not roll into total)", r.MutantsTotal)
+	}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"mutants_suppressed":4`) {
+		t.Errorf("expected mutants_suppressed:4 in JSON, got: %s", data)
+	}
+}
+
+func TestGenerateOmitsMutantsSuppressedWhenZero(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
+	}
+	r := Generate(mutants, "mod", time.Second, 0)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), `"mutants_suppressed"`) {
+		t.Errorf("mutants_suppressed should be omitted when 0, got: %s", data)
+	}
+}
+
 func TestGenerateOmitsMutantsCachedWhenZero(t *testing.T) {
 	mutants := []mutator.Mutant{
 		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
 	}
-	r := Generate(mutants, "mod", time.Second)
+	r := Generate(mutants, "mod", time.Second, 0)
 	data, err := json.Marshal(r)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
