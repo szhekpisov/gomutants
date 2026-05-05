@@ -188,9 +188,52 @@ func TestNextNonCommentLine(t *testing.T) {
 	if got := nextNonCommentLine(lines, 3); got != 6 {
 		t.Errorf("nextNonCommentLine(_, 3) = %d, want 6", got)
 	}
-	// Off the end falls back to directiveLine+1.
-	if got := nextNonCommentLine(lines, 6); got != 7 {
-		t.Errorf("nextNonCommentLine off-end = %d, want 7", got)
+	// Off the end returns 0 (sentinel for "no following code").
+	if got := nextNonCommentLine(lines, 6); got != 0 {
+		t.Errorf("nextNonCommentLine off-end = %d, want 0", got)
+	}
+}
+
+func TestFilterNextLineAtEOFWarns(t *testing.T) {
+	// Directive sits on the last meaningful line with no code after it —
+	// should emit a warning and not suppress anything.
+	src := `package p
+
+func F(a, b int) int { return a + b }
+
+// gomutants:disable-next-line
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	var warn bytes.Buffer
+	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("expected no suppressions; got %d", len(suppressed))
+	}
+	if len(kept) != len(mutants) {
+		t.Errorf("expected all mutants to survive; got kept=%d in=%d", len(kept), len(mutants))
+	}
+	if !strings.Contains(warn.String(), "no following code") {
+		t.Errorf("expected EOF warning; got %q", warn.String())
+	}
+}
+
+func TestParseDirectiveRegexpUnknownMutatorHintsWhitespace(t *testing.T) {
+	// `disable-regexp foo bar` — `bar` becomes the mutator name; the
+	// warning should hint that whitespace is unsupported in patterns.
+	var buf bytes.Buffer
+	_, ok := parseDirective("gomutants:disable-regexp foo bar", 5, "/x.go", "x.go", &buf)
+	if !ok {
+		t.Fatalf("expected directive to parse; warn=%q", buf.String())
+	}
+	if !strings.Contains(buf.String(), `unknown mutator "bar"`) {
+		t.Errorf("expected unknown-mutator warning; got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), `cannot contain whitespace`) {
+		t.Errorf("expected whitespace hint in regex-context warning; got %q", buf.String())
 	}
 }
 

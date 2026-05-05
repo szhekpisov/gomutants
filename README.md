@@ -377,10 +377,12 @@ QUOTED     = double-quoted string with standard Go escape handling
 Defaults and edge cases:
 - Omitting `MUTATORS` (or supplying `*`) suppresses every mutator at the directive's target.
 - `reason="..."` is optional; recommended for self-documentation. Reasons surface to stderr under `--verbose`.
-- Unknown mutator name → warning to stderr, that name is dropped, the rest of the directive still applies. Forward-compatible across mutator renames.
+- Unknown mutator name → warning to stderr, that name is dropped, the rest of the directive still applies. If *every* named mutator is unknown, the directive falls back to suppressing all mutators so the warning is visible but intent is preserved. Forward-compatible across mutator renames.
 - `disable-func` placed on a non-function comment → warning, directive ignored.
 - `disable-regexp` with an invalid pattern → warning, directive ignored.
-- Patterns with whitespace are not supported in v1; use `\s` instead.
+- `disable-next-line` on the last line of a file (or with only blanks/comments after it) → warning, directive ignored.
+- Patterns with whitespace are not supported in v1; use `\s` instead. The trailing tokens after the pattern are treated as the mutator list, which usually surfaces as an "unknown mutator" warning that hints at the cause.
+- Multiple `// gomutants:` directives on a single physical line are not supported (Go treats them as one comment). Combine with a comma list (`disable A,B`) or `*` instead.
 
 
 ### JSON report

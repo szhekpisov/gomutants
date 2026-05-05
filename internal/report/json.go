@@ -17,7 +17,8 @@ import (
 // status was sourced from the incremental-analysis cache.
 // MutantsSuppressed counts mutants dropped by `// gomutants:disable*`
 // directives — these don't appear in Files[].Mutations and are excluded
-// from every other count.
+// from MutantsTotal and from the TestEfficacy and MutationsCoverage
+// denominators.
 type Report struct {
 	GoModule          string         `json:"go_module"`
 	Files             []FileReport   `json:"files"`

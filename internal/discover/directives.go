@@ -55,6 +55,9 @@ type Suppression struct {
 // suppressions for reporting. Malformed directives and unknown mutator
 // names are written to os.Stderr and the offending directive (or name)
 // is dropped.
+//
+// Not idempotent: warnings are emitted on each call. Call once per run,
+// after all other discovery filters have run.
 func FilterByDirectives(fset *token.FileSet, mutants []mutator.Mutant) ([]mutator.Mutant, []Suppression, error) {
 	return filterByDirectives(fset, mutants, os.Stderr)
 }
@@ -134,12 +137,16 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 		funcRangeByDocPos[fd.Doc.Pos()] = [2]int{startLine, endLine}
 	}
 
-	lines := strings.Split(string(src), "\n")
 	idx := &fileIndex{
 		sameLine: make(map[int][]Directive),
 		nextLine: make(map[int][]Directive),
-		lines:    lines,
 	}
+
+	type pendingNextLine struct {
+		d          Directive
+		sourceLine int
+	}
+	var pending []pendingNextLine
 
 	for _, cg := range file.Comments {
 		funcRange, isFuncDoc := funcRangeByDocPos[cg.Pos()]
@@ -160,8 +167,7 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 			case DirectiveSameLine:
 				idx.sameLine[line] = append(idx.sameLine[line], d)
 			case DirectiveNextLine:
-				target := nextNonCommentLine(lines, line)
-				idx.nextLine[target] = append(idx.nextLine[target], d)
+				pending = append(pending, pendingNextLine{d, line})
 			case DirectiveFunc:
 				if !isFuncDoc {
 					fmt.Fprintf(warn, "gomutants: %s:%d: disable-func not on a function declaration (skipped)\n", relPath, line)
@@ -174,6 +180,21 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 				idx.regexps = append(idx.regexps, d)
 			}
 		}
+	}
+
+	// Only materialise the line array if we actually need to scan source
+	// text — for files with only same-line and disable-func directives,
+	// this skips the allocation entirely.
+	if len(pending) > 0 || len(idx.regexps) > 0 {
+		idx.lines = strings.Split(string(src), "\n")
+	}
+	for _, p := range pending {
+		target := nextNonCommentLine(idx.lines, p.sourceLine)
+		if target == 0 {
+			fmt.Fprintf(warn, "gomutants: %s:%d: disable-next-line has no following code (skipped)\n", relPath, p.sourceLine)
+			continue
+		}
+		idx.nextLine[target] = append(idx.nextLine[target], p.d)
 	}
 	return idx, nil
 }
@@ -208,6 +229,9 @@ func matchMutant(idx *fileIndex, m mutator.Mutant) (Directive, bool) {
 	return Directive{}, false
 }
 
+// directiveMatchesType reports whether a directive's mutator filter
+// applies to the given mutator type. Empty/nil Mutators means "all
+// mutators" (the result of either omitting the list or supplying "*").
 func directiveMatchesType(d Directive, t mutator.MutationType) bool {
 	if len(d.Mutators) == 0 {
 		return true
@@ -273,7 +297,11 @@ func parseDirective(text string, line int, path, relPath string, warn io.Writer)
 				continue
 			}
 			if !isKnownMutator(name) {
-				fmt.Fprintf(warn, "gomutants: %s:%d: unknown mutator %q in directive (skipped)\n", relPath, line, name)
+				if d.Kind == DirectiveRegexp {
+					fmt.Fprintf(warn, "gomutants: %s:%d: unknown mutator %q in disable-regexp directive (note: patterns cannot contain whitespace; use \\s) (skipped)\n", relPath, line, name)
+				} else {
+					fmt.Fprintf(warn, "gomutants: %s:%d: unknown mutator %q in directive (skipped)\n", relPath, line, name)
+				}
 				continue
 			}
 			d.Mutators[mutator.MutationType(name)] = struct{}{}
@@ -352,8 +380,9 @@ func scanQuotedEnd(s string) int {
 }
 
 // nextNonCommentLine returns the smallest line number > directiveLine
-// whose source line is neither blank nor a `//` comment. Falls back to
-// directiveLine+1 if every following line is blank or comment-only.
+// whose source line is neither blank nor a `//` comment. Returns 0 if
+// every following line is blank or comment-only (i.e. the directive has
+// no code to apply to).
 func nextNonCommentLine(lines []string, directiveLine int) int {
 	for l := directiveLine + 1; l <= len(lines); l++ {
 		trimmed := strings.TrimSpace(lines[l-1])
@@ -362,7 +391,7 @@ func nextNonCommentLine(lines []string, directiveLine int) int {
 		}
 		return l
 	}
-	return directiveLine + 1
+	return 0
 }
 
 // knownMutatorTypes is the canonical set of registered mutator type
