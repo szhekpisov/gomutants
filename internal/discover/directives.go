@@ -15,6 +15,15 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
+// directivePrefix is the namespace marker every directive comment must
+// carry. Defined once so the fast-path byte scan and the per-comment
+// parse share one source of truth.
+const directivePrefix = "gomutants:"
+
+var directivePrefixBytes = []byte(directivePrefix)
+
+// directiveKind classifies how a `// gomutants:disable*` directive maps
+// to source positions.
 type directiveKind int
 
 const (
@@ -110,9 +119,7 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
-	// Skip the AST round-trip for files that don't mention us at all —
-	// the common case for any non-trivially-sized repo.
-	if !bytes.Contains(src, []byte("gomutants:")) {
+	if !bytes.Contains(src, directivePrefixBytes) {
 		return &fileIndex{}, nil
 	}
 	// ParseComments is required so funcDecl.Doc is populated and we can
@@ -154,7 +161,7 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 				continue
 			}
 			text := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
-			if !strings.HasPrefix(text, "gomutants:") {
+			if !strings.HasPrefix(text, directivePrefix) {
 				continue
 			}
 			line := fset.Position(c.Pos()).Line
@@ -244,7 +251,7 @@ func directiveMatchesType(d directive, t mutator.MutationType) bool {
 // already been verified by the caller; this function consumes from the
 // kind onward.
 func parseDirective(text string, line int, relPath string, warn io.Writer) (directive, bool) {
-	rest := strings.TrimPrefix(text, "gomutants:")
+	rest := strings.TrimPrefix(text, directivePrefix)
 	kindStr, rest := splitFirstWord(rest)
 
 	var kind directiveKind

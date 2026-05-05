@@ -74,7 +74,7 @@ func TestSplitMutatorsAndReason(t *testing.T) {
 	}
 }
 
-func TestParsedirectiveKinds(t *testing.T) {
+func TestParseDirectiveKinds(t *testing.T) {
 	cases := []struct {
 		text     string
 		wantKind directiveKind
@@ -144,7 +144,7 @@ func TestParseDirectiveMalformedReason(t *testing.T) {
 	}
 }
 
-func TestParsedirectiveRegexpMissingPattern(t *testing.T) {
+func TestParseDirectiveRegexpMissingPattern(t *testing.T) {
 	var buf bytes.Buffer
 	_, ok := parseDirective("gomutants:disable-regexp", 5, "x.go", &buf)
 	if ok {
@@ -155,7 +155,7 @@ func TestParsedirectiveRegexpMissingPattern(t *testing.T) {
 	}
 }
 
-func TestParsedirectiveRegexpInvalidPattern(t *testing.T) {
+func TestParseDirectiveRegexpInvalidPattern(t *testing.T) {
 	var buf bytes.Buffer
 	_, ok := parseDirective(`gomutants:disable-regexp [unclosed`, 5, "x.go", &buf)
 	if ok {
@@ -221,7 +221,7 @@ func F(a, b int) int { return a + b }
 	}
 }
 
-func TestParsedirectiveRegexpUnknownMutatorHintsWhitespace(t *testing.T) {
+func TestParseDirectiveRegexpUnknownMutatorHintsWhitespace(t *testing.T) {
 	// `disable-regexp foo bar` — `bar` becomes the mutator name; the
 	// warning should hint that whitespace is unsupported in patterns.
 	var buf bytes.Buffer
