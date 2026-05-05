@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -14,27 +15,20 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
-// DirectiveKind classifies how a `// gomutants:disable*` directive maps
-// to source positions.
-type DirectiveKind int
+type directiveKind int
 
 const (
-	DirectiveSameLine DirectiveKind = iota
-	DirectiveNextLine
-	DirectiveFunc
-	DirectiveRegexp
+	directiveSameLine directiveKind = iota
+	directiveNextLine
+	directiveFunc
+	directiveRegexp
 )
 
-// Directive is a parsed `// gomutants:disable*` source annotation.
-//
-// Mutators is the set of mutator type names a directive applies to;
-// nil/empty means "all mutators" (also the result of an explicit "*").
-// FuncStart/FuncEnd are the line range of the function body (only set
-// for DirectiveFunc). Regexp is the compiled pattern (only set for
-// DirectiveRegexp).
-type Directive struct {
-	File      string
-	Kind      DirectiveKind
+// directive is a parsed `// gomutants:disable*` source annotation.
+// Mutators nil/empty means "all mutators". FuncStart/FuncEnd are set
+// only for directiveFunc; Regexp only for directiveRegexp.
+type directive struct {
+	Kind      directiveKind
 	Mutators  map[mutator.MutationType]struct{}
 	Reason    string
 	Line      int
@@ -104,10 +98,10 @@ func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, warn io.W
 // each mutant lookup is O(1) for line-scoped directives and O(F+R) for
 // the small per-file slices of func-scope and regexp directives.
 type fileIndex struct {
-	sameLine map[int][]Directive
-	nextLine map[int][]Directive
-	funcs    []Directive
-	regexps  []Directive
+	sameLine map[int][]directive
+	nextLine map[int][]directive
+	funcs    []directive
+	regexps  []directive
 	lines    []string
 }
 
@@ -115,6 +109,11 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	// Skip the AST round-trip for files that don't mention us at all —
+	// the common case for any non-trivially-sized repo.
+	if !bytes.Contains(src, []byte("gomutants:")) {
+		return &fileIndex{}, nil
 	}
 	// ParseComments is required so funcDecl.Doc is populated and we can
 	// distinguish a comment that sits on a function declaration from one
@@ -138,12 +137,12 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	}
 
 	idx := &fileIndex{
-		sameLine: make(map[int][]Directive),
-		nextLine: make(map[int][]Directive),
+		sameLine: make(map[int][]directive),
+		nextLine: make(map[int][]directive),
 	}
 
 	type pendingNextLine struct {
-		d          Directive
+		d          directive
 		sourceLine int
 	}
 	var pending []pendingNextLine
@@ -159,16 +158,16 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 				continue
 			}
 			line := fset.Position(c.Pos()).Line
-			d, parsedOK := parseDirective(text, line, path, relPath, warn)
+			d, parsedOK := parseDirective(text, line, relPath, warn)
 			if !parsedOK {
 				continue
 			}
 			switch d.Kind {
-			case DirectiveSameLine:
+			case directiveSameLine:
 				idx.sameLine[line] = append(idx.sameLine[line], d)
-			case DirectiveNextLine:
+			case directiveNextLine:
 				pending = append(pending, pendingNextLine{d, line})
-			case DirectiveFunc:
+			case directiveFunc:
 				if !isFuncDoc {
 					fmt.Fprintf(warn, "gomutants: %s:%d: disable-func not on a function declaration (skipped)\n", relPath, line)
 					continue
@@ -176,7 +175,7 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 				d.FuncStart = funcRange[0]
 				d.FuncEnd = funcRange[1]
 				idx.funcs = append(idx.funcs, d)
-			case DirectiveRegexp:
+			case directiveRegexp:
 				idx.regexps = append(idx.regexps, d)
 			}
 		}
@@ -199,7 +198,7 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	return idx, nil
 }
 
-func matchMutant(idx *fileIndex, m mutator.Mutant) (Directive, bool) {
+func matchMutant(idx *fileIndex, m mutator.Mutant) (directive, bool) {
 	for _, d := range idx.sameLine[m.Line] {
 		if directiveMatchesType(d, m.Type) {
 			return d, true
@@ -226,13 +225,13 @@ func matchMutant(idx *fileIndex, m mutator.Mutant) (Directive, bool) {
 			return d, true
 		}
 	}
-	return Directive{}, false
+	return directive{}, false
 }
 
 // directiveMatchesType reports whether a directive's mutator filter
 // applies to the given mutator type. Empty/nil Mutators means "all
 // mutators" (the result of either omitting the list or supplying "*").
-func directiveMatchesType(d Directive, t mutator.MutationType) bool {
+func directiveMatchesType(d directive, t mutator.MutationType) bool {
 	if len(d.Mutators) == 0 {
 		return true
 	}
@@ -244,39 +243,39 @@ func directiveMatchesType(d Directive, t mutator.MutationType) bool {
 // "disable ARITHMETIC_BASE reason=\"foo\"". The leading "gomutants:" has
 // already been verified by the caller; this function consumes from the
 // kind onward.
-func parseDirective(text string, line int, path, relPath string, warn io.Writer) (Directive, bool) {
+func parseDirective(text string, line int, relPath string, warn io.Writer) (directive, bool) {
 	rest := strings.TrimPrefix(text, "gomutants:")
 	kindStr, rest := splitFirstWord(rest)
 
-	var kind DirectiveKind
+	var kind directiveKind
 	switch kindStr {
 	case "disable":
-		kind = DirectiveSameLine
+		kind = directiveSameLine
 	case "disable-next-line":
-		kind = DirectiveNextLine
+		kind = directiveNextLine
 	case "disable-func":
-		kind = DirectiveFunc
+		kind = directiveFunc
 	case "disable-regexp":
-		kind = DirectiveRegexp
+		kind = directiveRegexp
 	default:
 		// Unrecognised kind under the gomutants: namespace. Silent so a
 		// future kind added in a newer release doesn't break older
 		// runs.
-		return Directive{}, false
+		return directive{}, false
 	}
 
-	d := Directive{File: path, Kind: kind, Line: line}
+	d := directive{Kind: kind, Line: line}
 
-	if kind == DirectiveRegexp {
+	if kind == directiveRegexp {
 		patStr, after := splitFirstWord(rest)
 		if patStr == "" {
 			fmt.Fprintf(warn, "gomutants: %s:%d: disable-regexp missing pattern (skipped)\n", relPath, line)
-			return Directive{}, false
+			return directive{}, false
 		}
 		re, err := regexp.Compile(patStr)
 		if err != nil {
 			fmt.Fprintf(warn, "gomutants: %s:%d: disable-regexp invalid pattern %q: %v (skipped)\n", relPath, line, patStr, err)
-			return Directive{}, false
+			return directive{}, false
 		}
 		d.Regexp = re
 		rest = after
@@ -285,7 +284,7 @@ func parseDirective(text string, line int, path, relPath string, warn io.Writer)
 	mutatorsStr, reasonStr, ok := splitMutatorsAndReason(rest)
 	if !ok {
 		fmt.Fprintf(warn, "gomutants: %s:%d: malformed reason= (skipped)\n", relPath, line)
-		return Directive{}, false
+		return directive{}, false
 	}
 	d.Reason = reasonStr
 
@@ -297,7 +296,7 @@ func parseDirective(text string, line int, path, relPath string, warn io.Writer)
 				continue
 			}
 			if !isKnownMutator(name) {
-				if d.Kind == DirectiveRegexp {
+				if d.Kind == directiveRegexp {
 					fmt.Fprintf(warn, "gomutants: %s:%d: unknown mutator %q in disable-regexp directive (note: patterns cannot contain whitespace; use \\s) (skipped)\n", relPath, line, name)
 				} else {
 					fmt.Fprintf(warn, "gomutants: %s:%d: unknown mutator %q in directive (skipped)\n", relPath, line, name)

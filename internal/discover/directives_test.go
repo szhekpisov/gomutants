@@ -74,24 +74,24 @@ func TestSplitMutatorsAndReason(t *testing.T) {
 	}
 }
 
-func TestParseDirectiveKinds(t *testing.T) {
+func TestParsedirectiveKinds(t *testing.T) {
 	cases := []struct {
 		text     string
-		wantKind DirectiveKind
+		wantKind directiveKind
 		wantOK   bool
 	}{
-		{"gomutants:disable", DirectiveSameLine, true},
-		{"gomutants:disable-next-line", DirectiveNextLine, true},
-		{"gomutants:disable-func", DirectiveFunc, true},
-		{"gomutants:disable-regexp ^foo", DirectiveRegexp, true},
-		{"gomutants:disable ARITHMETIC_BASE", DirectiveSameLine, true},
-		{"gomutants:disable *", DirectiveSameLine, true},
+		{"gomutants:disable", directiveSameLine, true},
+		{"gomutants:disable-next-line", directiveNextLine, true},
+		{"gomutants:disable-func", directiveFunc, true},
+		{"gomutants:disable-regexp ^foo", directiveRegexp, true},
+		{"gomutants:disable ARITHMETIC_BASE", directiveSameLine, true},
+		{"gomutants:disable *", directiveSameLine, true},
 		{"gomutants:disable-future-thing", 0, false}, // unknown kind: silently ignored
 	}
 	for _, c := range cases {
 		t.Run(c.text, func(t *testing.T) {
 			var buf bytes.Buffer
-			d, ok := parseDirective(c.text, 1, "/x.go", "x.go", &buf)
+			d, ok := parseDirective(c.text, 1, "x.go", &buf)
 			if ok != c.wantOK {
 				t.Fatalf("ok=%v, want %v (warn=%q)", ok, c.wantOK, buf.String())
 			}
@@ -104,7 +104,7 @@ func TestParseDirectiveKinds(t *testing.T) {
 
 func TestParseDirectiveUnknownMutatorWarns(t *testing.T) {
 	var buf bytes.Buffer
-	d, ok := parseDirective("gomutants:disable ARITHMETIC_BASE,NOT_A_MUTATOR", 5, "/x.go", "x.go", &buf)
+	d, ok := parseDirective("gomutants:disable ARITHMETIC_BASE,NOT_A_MUTATOR", 5, "x.go", &buf)
 	if !ok {
 		t.Fatalf("expected directive to parse")
 	}
@@ -124,7 +124,7 @@ func TestParseDirectiveAllUnknownFallsBackToAll(t *testing.T) {
 	// rather than silently matching nothing — surfaces the warning while
 	// keeping intent ("ignore here") intact.
 	var buf bytes.Buffer
-	d, ok := parseDirective("gomutants:disable BOGUS,ALSO_BOGUS", 5, "/x.go", "x.go", &buf)
+	d, ok := parseDirective("gomutants:disable BOGUS,ALSO_BOGUS", 5, "x.go", &buf)
 	if !ok {
 		t.Fatalf("expected directive to parse")
 	}
@@ -135,7 +135,7 @@ func TestParseDirectiveAllUnknownFallsBackToAll(t *testing.T) {
 
 func TestParseDirectiveMalformedReason(t *testing.T) {
 	var buf bytes.Buffer
-	_, ok := parseDirective(`gomutants:disable reason="unterminated`, 5, "/x.go", "x.go", &buf)
+	_, ok := parseDirective(`gomutants:disable reason="unterminated`, 5, "x.go", &buf)
 	if ok {
 		t.Fatalf("expected malformed reason to drop directive")
 	}
@@ -144,9 +144,9 @@ func TestParseDirectiveMalformedReason(t *testing.T) {
 	}
 }
 
-func TestParseDirectiveRegexpMissingPattern(t *testing.T) {
+func TestParsedirectiveRegexpMissingPattern(t *testing.T) {
 	var buf bytes.Buffer
-	_, ok := parseDirective("gomutants:disable-regexp", 5, "/x.go", "x.go", &buf)
+	_, ok := parseDirective("gomutants:disable-regexp", 5, "x.go", &buf)
 	if ok {
 		t.Fatalf("expected missing pattern to drop directive")
 	}
@@ -155,9 +155,9 @@ func TestParseDirectiveRegexpMissingPattern(t *testing.T) {
 	}
 }
 
-func TestParseDirectiveRegexpInvalidPattern(t *testing.T) {
+func TestParsedirectiveRegexpInvalidPattern(t *testing.T) {
 	var buf bytes.Buffer
-	_, ok := parseDirective(`gomutants:disable-regexp [unclosed`, 5, "/x.go", "x.go", &buf)
+	_, ok := parseDirective(`gomutants:disable-regexp [unclosed`, 5, "x.go", &buf)
 	if ok {
 		t.Fatalf("expected invalid pattern to drop directive")
 	}
@@ -167,7 +167,7 @@ func TestParseDirectiveRegexpInvalidPattern(t *testing.T) {
 }
 
 func TestParseDirectiveReasonRoundTrips(t *testing.T) {
-	d, ok := parseDirective(`gomutants:disable reason="commutative \"add\""`, 5, "/x.go", "x.go", &bytes.Buffer{})
+	d, ok := parseDirective(`gomutants:disable reason="commutative \"add\""`, 5, "x.go", &bytes.Buffer{})
 	if !ok {
 		t.Fatalf("expected directive to parse")
 	}
@@ -221,11 +221,11 @@ func F(a, b int) int { return a + b }
 	}
 }
 
-func TestParseDirectiveRegexpUnknownMutatorHintsWhitespace(t *testing.T) {
+func TestParsedirectiveRegexpUnknownMutatorHintsWhitespace(t *testing.T) {
 	// `disable-regexp foo bar` — `bar` becomes the mutator name; the
 	// warning should hint that whitespace is unsupported in patterns.
 	var buf bytes.Buffer
-	_, ok := parseDirective("gomutants:disable-regexp foo bar", 5, "/x.go", "x.go", &buf)
+	_, ok := parseDirective("gomutants:disable-regexp foo bar", 5, "x.go", &buf)
 	if !ok {
 		t.Fatalf("expected directive to parse; warn=%q", buf.String())
 	}
