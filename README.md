@@ -371,7 +371,7 @@ DIRECTIVE  = "// gomutants:" KIND [ WS PATTERN ] [ WS MUTATORS ] [ WS "reason=" 
 KIND       = "disable" | "disable-next-line" | "disable-func" | "disable-regexp"
 PATTERN    = present only for "disable-regexp"; first whitespace-delimited token after the kind, RE2 syntax
 MUTATORS   = ( MUTATOR ("," MUTATOR)* ) | "*"   // upper-case mutator type names; "*" = all
-QUOTED     = double-quoted string with standard Go escape handling
+QUOTED     = any Go-quoted string ("...", `...`, or 'c') with standard escape handling
 ```
 
 Defaults and edge cases:

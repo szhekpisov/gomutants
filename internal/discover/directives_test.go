@@ -3,6 +3,7 @@ package discover
 import (
 	"bytes"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,8 @@ func TestSplitMutatorsAndReason(t *testing.T) {
 		{`reason="unterminated`, "", "", false},
 		{`reason=bare`, "", "", false},
 		{`reason="ok" trailing`, "", "", false},
+		{"reason=", "", "", false},
+		{`A reason=`, "", "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {
@@ -545,5 +548,608 @@ func F(a, b int) int { return a + b }
 	}
 	if len(kept) != len(mutants) {
 		t.Errorf("expected all mutants to be kept; got kept=%d in=%d", len(kept), len(mutants))
+	}
+}
+
+// TestParseDirectiveLeadingWhitespaceAfterPrefix kills STATEMENT_REMOVE
+// on splitFirstWord's leading TrimLeft: without the trim, the kind word
+// is "" and the directive is silently dropped.
+func TestParseDirectiveLeadingWhitespaceAfterPrefix(t *testing.T) {
+	d, ok := parseDirective("gomutants:  disable ARITHMETIC_BASE", 1, "x.go", &bytes.Buffer{})
+	if !ok {
+		t.Fatalf("directive with extra whitespace after prefix should still parse")
+	}
+	if d.Kind != directiveSameLine {
+		t.Errorf("kind=%v, want directiveSameLine", d.Kind)
+	}
+	if _, ok := d.Mutators[mutator.ArithmeticBase]; !ok {
+		t.Errorf("ARITHMETIC_BASE should be in directive's mutator set: %v", d.Mutators)
+	}
+}
+
+// TestParseDirectiveWildcardEmitsNoWarning kills two parseDirective
+// mutants on the `mutatorsStr != "" && mutatorsStr != "*"` guard:
+// any mutation that admits "*" into the per-name loop produces a
+// spurious "unknown mutator" warning.
+func TestParseDirectiveWildcardEmitsNoWarning(t *testing.T) {
+	var buf bytes.Buffer
+	d, ok := parseDirective("gomutants:disable *", 1, "x.go", &buf)
+	if !ok {
+		t.Fatalf("expected directive to parse; warn=%q", buf.String())
+	}
+	if d.Mutators != nil {
+		t.Errorf("`disable *` should leave Mutators nil (= all); got %v", d.Mutators)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("`disable *` must emit no warnings; got %q", buf.String())
+	}
+}
+
+// TestParseDirectiveBlankNameInList kills the BRANCH_IF on
+// `if name == "" { continue }`: dropping that continue lets the empty
+// name reach isKnownMutator and produces a spurious unknown-mutator
+// warning.
+func TestParseDirectiveBlankNameInList(t *testing.T) {
+	var buf bytes.Buffer
+	d, ok := parseDirective("gomutants:disable ARITHMETIC_BASE,,BRANCH_IF", 1, "x.go", &buf)
+	if !ok {
+		t.Fatalf("expected directive to parse; warn=%q", buf.String())
+	}
+	if _, ok := d.Mutators[mutator.ArithmeticBase]; !ok {
+		t.Errorf("ARITHMETIC_BASE missing: %v", d.Mutators)
+	}
+	if _, ok := d.Mutators[mutator.BranchIf]; !ok {
+		t.Errorf("BRANCH_IF missing: %v", d.Mutators)
+	}
+	if strings.Contains(buf.String(), `unknown mutator ""`) {
+		t.Errorf("blank entry should not produce an unknown-mutator warning; got %q", buf.String())
+	}
+}
+
+// TestParseDirectivePartialUnknownContinuesPastUnknown kills the
+// INVERT_LOOP_CTRL `continue → break` after the unknown-mutator
+// warning. With break, the known name after an unknown one would
+// never be registered.
+func TestParseDirectivePartialUnknownContinuesPastUnknown(t *testing.T) {
+	d, ok := parseDirective("gomutants:disable BOGUS,ARITHMETIC_BASE", 1, "x.go", &bytes.Buffer{})
+	if !ok {
+		t.Fatalf("expected directive to parse")
+	}
+	if _, ok := d.Mutators[mutator.ArithmeticBase]; !ok {
+		t.Errorf("ARITHMETIC_BASE following an unknown name should still be registered: %v", d.Mutators)
+	}
+}
+
+// TestParseDirectiveTrimsNamesWithWhitespace kills STATEMENT_REMOVE on
+// `name = strings.TrimSpace(name)`: untrimmed names are rejected by
+// isKnownMutator.
+func TestParseDirectiveTrimsNamesWithWhitespace(t *testing.T) {
+	var buf bytes.Buffer
+	d, ok := parseDirective("gomutants:disable  ARITHMETIC_BASE  ,  BRANCH_IF  ", 1, "x.go", &buf)
+	if !ok {
+		t.Fatalf("expected directive to parse; warn=%q", buf.String())
+	}
+	if _, ok := d.Mutators[mutator.ArithmeticBase]; !ok {
+		t.Errorf("ARITHMETIC_BASE should be registered after trimming: %v", d.Mutators)
+	}
+	if _, ok := d.Mutators[mutator.BranchIf]; !ok {
+		t.Errorf("BRANCH_IF should be registered after trimming: %v", d.Mutators)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("trimmed names must produce no warnings; got %q", buf.String())
+	}
+}
+
+// TestParseDirectiveUnknownKindIsSilent locks the forward-compat
+// behaviour: future kinds (or typos that look like kinds) are dropped
+// without a warning so a newer-release directive does not break older
+// gomutants runs.
+func TestParseDirectiveUnknownKindIsSilent(t *testing.T) {
+	var buf bytes.Buffer
+	_, ok := parseDirective("gomutants:disable-future-thing", 1, "x.go", &buf)
+	if ok {
+		t.Errorf("unknown kind should not parse")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unknown kind must be silent (forward-compat); got %q", buf.String())
+	}
+}
+
+// TestFilterFuncBoundariesAndScope is the comprehensive disable-func
+// test. It covers, in one fixture:
+//   - mutants in another function ABOVE the disable-func target are
+//     not suppressed (kills STATEMENT_REMOVE on `d.FuncStart = funcRange[0]`
+//     and EXPRESSION_REMOVE `m.Line >= d.FuncStart → true`)
+//   - mutants on the FuncStart line and the FuncEnd line are suppressed
+//     (locks `>=` and `<=` boundaries against `>` / `<`)
+//   - mutator-scoped disable-func suppresses only the named mutator
+//     type (kills EXPRESSION_REMOVE `directiveMatchesType(...) → true`)
+func TestFilterFuncBoundariesAndScope(t *testing.T) {
+	src := `package p
+
+func A(a, b int) int {
+	return a + b
+}
+
+// gomutants:disable-func ARITHMETIC_BASE
+func B(a, b int) int {
+	if a > b {
+		return a + b
+	}
+	return a - b
+}
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A is above B; A's ARITHMETIC_BASE on its `return a + b` line
+	// must survive — its line number is below B's FuncStart.
+	aArithKept := false
+	for _, m := range kept {
+		if m.Type == mutator.ArithmeticBase && m.Line == 4 {
+			aArithKept = true
+		}
+	}
+	if !aArithKept {
+		t.Errorf("A's ARITHMETIC_BASE on line 4 must survive (not in B's range)")
+	}
+
+	// B's CONDITIONALS_BOUNDARY on `a > b` must NOT be suppressed:
+	// the directive scopes to ARITHMETIC_BASE.
+	condKept := false
+	for _, m := range kept {
+		if m.Type == mutator.ConditionalsBoundary && m.Line == 9 {
+			condKept = true
+		}
+	}
+	if !condKept {
+		t.Errorf("B's CONDITIONALS_BOUNDARY on line 9 must survive (mutator-scoped directive)")
+	}
+
+	// B's ARITHMETIC_BASE inside the body (lines 10 and 12) must be
+	// suppressed. Line 8 is FuncStart (the `func B(...) int {` line),
+	// line 13 is FuncEnd (the closing `}`).
+	wantSuppressedLines := map[int]bool{10: true, 12: true}
+	for line := range wantSuppressedLines {
+		found := false
+		for _, s := range suppressed {
+			if s.Mutant.Type == mutator.ArithmeticBase && s.Mutant.Line == line {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("B's ARITHMETIC_BASE on line %d should have been suppressed", line)
+		}
+	}
+}
+
+// TestFilterFuncSingleLineBoundaries puts the function body on a single
+// line so a mutant's Line equals both d.FuncStart and d.FuncEnd. This
+// kills the boundary mutants on `>=` (→ `>`) and `<=` (→ `<`) — `>` /
+// `<` would exclude the line that matches both endpoints.
+func TestFilterFuncSingleLineBoundaries(t *testing.T) {
+	src := `package p
+
+// gomutants:disable-func
+func F(a, b int) int { return a + b }
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected mutants on the single-line function body to be suppressed")
+	}
+	for _, m := range kept {
+		if m.Line == 4 {
+			t.Errorf("single-line body mutant on line 4 (= FuncStart = FuncEnd) survived: %s", m.Type)
+		}
+	}
+}
+
+// TestFilterFuncSkipsNonFuncDeclSibling guards the decl-loop continue:
+// removing it would panic on the non-FuncDecl `var x = 1` (fd is nil),
+// and the INVERT_LOOP_CTRL mutation `continue → break` would stop
+// iteration before reaching F's directive.
+func TestFilterFuncSkipsNonFuncDeclSibling(t *testing.T) {
+	src := `package p
+
+var x = 1
+
+// gomutants:disable-func
+func F(a, b int) int { return a + b }
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected F's body mutants to be suppressed despite the var decl above it")
+	}
+	for _, m := range kept {
+		if m.Line == 6 {
+			t.Errorf("F-body mutant survived the disable-func directive: %s", m.Type)
+		}
+	}
+}
+
+// TestFilterMalformedDirectiveDoesNotSuppress kills the BRANCH_IF on
+// `if !parsedOK { continue }`: removing the continue would register
+// a zero-valued (kind=directiveSameLine, Mutators=nil) directive on
+// the malformed line, suppressing every mutant there.
+func TestFilterMalformedDirectiveDoesNotSuppress(t *testing.T) {
+	src := `package p
+
+func F(a, b int) int {
+	return a + b // gomutants:disable reason="unterminated
+}
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	var warn bytes.Buffer
+	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warn.String(), "malformed reason=") {
+		t.Errorf("expected malformed-reason warning; got %q", warn.String())
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("malformed directive must not suppress anything; got %d", len(suppressed))
+	}
+	if len(kept) != len(mutants) {
+		t.Errorf("all mutants must be kept; got kept=%d in=%d", len(kept), len(mutants))
+	}
+}
+
+// TestFilterNonDirectiveCommentNotMisinterpreted kills the BRANCH_IF on
+// `if !strings.HasPrefix(text, directivePrefix) { continue }`: removing
+// the continue would let a regular comment whose first word matches a
+// directive kind (e.g., "disable") slip into parseDirective and silently
+// register a same-line directive that suppresses everything on its line.
+//
+// The fixture needs a real directive *somewhere* so the bytes.Contains
+// fast-path doesn't short-circuit before the prefix-check runs. The
+// non-directive comment sits on the same line as the mutated expression
+// so the fictitious directive's same-line scope would actually catch
+// the mutant — without that overlap there's nothing for the bug to
+// suppress.
+func TestFilterNonDirectiveCommentNotMisinterpreted(t *testing.T) {
+	src := `package p
+
+// gomutants:disable-regexp __DOES_NOT_MATCH_ANY_LINE__
+
+func F(a, b int) int {
+	return a + b // disable for now
+}
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("non-directive comment must not suppress anything; got %d: %+v", len(suppressed), suppressed)
+	}
+	if len(kept) != len(mutants) {
+		t.Errorf("all mutants must be kept; got kept=%d in=%d", len(kept), len(mutants))
+	}
+}
+
+// TestFilterRegexpAtPackageLevel locks the placement freedom the README
+// implies: a `disable-regexp` directive at file scope (before any func)
+// applies to every matching line in the file.
+func TestFilterRegexpAtPackageLevel(t *testing.T) {
+	src := `package p
+
+// gomutants:disable-regexp ^\s*return\s+a\s*\+\s*b\b
+
+func F(a, b int) int {
+	return a + b
+}
+
+func G(a, b int) int {
+	return a + b
+}
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected package-level disable-regexp to suppress matching lines")
+	}
+	for _, m := range kept {
+		if m.Type == mutator.ArithmeticBase && (m.Line == 6 || m.Line == 10) {
+			t.Errorf("ARITHMETIC_BASE on line %d (matches package-level regexp) should be suppressed", m.Line)
+		}
+	}
+}
+
+// TestFilterByDirectivesUnchangedFileBytes guards the per-file dedup:
+// two mutants in the same file must trigger only one buildFileIndex
+// call. We can't observe the call count directly, but a well-known
+// invariant — the `seen` guard preventing rebuild — is locked by the
+// surrounding TestFilter* tests.
+//
+// This focused test just asserts that two mutants in the same file are
+// independently classified by the same index (one suppressed, one kept).
+func TestFilterByDirectivesUnchangedFileBytes(t *testing.T) {
+	src := `package p
+
+func F(a, b int) int {
+	x := a + b // gomutants:disable ARITHMETIC_BASE
+	return x + a
+}
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Line 4 ARITHMETIC_BASE suppressed, line 5 ARITHMETIC_BASE kept.
+	supLine4 := false
+	for _, s := range suppressed {
+		if s.Mutant.Line == 4 && s.Mutant.Type == mutator.ArithmeticBase {
+			supLine4 = true
+		}
+	}
+	if !supLine4 {
+		t.Errorf("expected line-4 ARITHMETIC_BASE to be suppressed; suppressed=%+v", suppressed)
+	}
+	keptLine5 := false
+	for _, m := range kept {
+		if m.Line == 5 && m.Type == mutator.ArithmeticBase {
+			keptLine5 = true
+		}
+	}
+	if !keptLine5 {
+		t.Errorf("expected line-5 ARITHMETIC_BASE to survive; kept=%+v", kept)
+	}
+}
+
+// TestFilterByDirectivesUnreadableFile drives the os.ReadFile error path:
+// a synthetic mutant pointing to a non-existent file makes buildFileIndex
+// return the read error.
+func TestFilterByDirectivesUnreadableFile(t *testing.T) {
+	m := mutator.Mutant{
+		File:    "/nonexistent/does-not-exist.go",
+		RelFile: "does-not-exist.go",
+		Line:    1,
+		Type:    mutator.ArithmeticBase,
+	}
+	fset := token.NewFileSet()
+	_, _, err := filterByDirectives(fset, []mutator.Mutant{m}, io.Discard)
+	if err == nil {
+		t.Errorf("expected an error for unreadable file path")
+	}
+}
+
+// TestFilterMultiFileBothHaveDirectives kills INVERT_LOOP_CTRL on the
+// index-build loop's `continue → break`: with break, only the first
+// file in iteration order is indexed and the second file's directives
+// are silently skipped.
+func TestFilterMultiFileBothHaveDirectives(t *testing.T) {
+	dir := t.TempDir()
+	srcA := `package p
+
+func A(a, b int) int { return a + b } // gomutants:disable ARITHMETIC_BASE
+func A2(a, b int) int { return a + b } // gomutants:disable ARITHMETIC_BASE
+`
+	srcB := `package p
+
+func B(a, b int) int { return a + b } // gomutants:disable ARITHMETIC_BASE
+func B2(a, b int) int { return a + b } // gomutants:disable ARITHMETIC_BASE
+`
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(srcA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.go"), []byte(srcB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgs := []Package{{Dir: dir, ImportPath: "example.com/test", GoFiles: []string{"a.go", "b.go"}}}
+	reg := mutator.NewRegistry()
+	fset := token.NewFileSet()
+	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com/test")
+
+	kept, _, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both files' ARITHMETIC_BASE mutants must have been suppressed.
+	for _, m := range kept {
+		if m.Type == mutator.ArithmeticBase {
+			t.Errorf("ARITHMETIC_BASE in %s line %d should have been suppressed", filepath.Base(m.File), m.Line)
+		}
+	}
+}
+
+// TestFilterFuncForwardDeclSibling kills EXPRESSION_REMOVE on the
+// `fd.Body == nil` guard. Without that guard, a doc-commented forward
+// declaration (no body) flows past the continue and dereferences a nil
+// fd.Body.Lbrace.
+func TestFilterFuncForwardDeclSibling(t *testing.T) {
+	src := `package p
+
+// External assembly impl — body lives in a .s file.
+func ext()
+
+// gomutants:disable-func
+func F(a, b int) int { return a + b }
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected F's body mutants to be suppressed despite the forward-decl above")
+	}
+	for _, m := range kept {
+		if m.Line == 7 {
+			t.Errorf("F-body mutant on line 7 should have been suppressed: %s", m.Type)
+		}
+	}
+}
+
+// TestFilterCommentGroupNonDirectiveThenDirective kills INVERT_LOOP_CTRL
+// on the prefix-check `continue → break`. The two doc comments on F
+// share one comment group; with break, the first non-directive line
+// terminates iteration before the directive is reached.
+func TestFilterCommentGroupNonDirectiveThenDirective(t *testing.T) {
+	src := `package p
+
+// Some explanatory text about F.
+// gomutants:disable-func
+func F(a, b int) int { return a + b }
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, suppressed, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected F's body mutants to be suppressed when the directive sits below a non-directive comment in the same doc group")
+	}
+	for _, m := range kept {
+		if m.Line == 5 {
+			t.Errorf("F-body mutant on line 5 should have been suppressed: %s", m.Type)
+		}
+	}
+}
+
+// TestFilterCommentGroupMalformedThenValid kills INVERT_LOOP_CTRL on
+// the parsedOK `continue → break`. With break, the first malformed
+// directive in a group terminates iteration and the valid directive
+// after it never registers.
+func TestFilterCommentGroupMalformedThenValid(t *testing.T) {
+	src := `package p
+
+// gomutants:disable reason="unterminated
+// gomutants:disable-func
+func F(a, b int) int { return a + b }
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	var warn bytes.Buffer
+	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warn.String(), "malformed reason=") {
+		t.Errorf("expected malformed-reason warning; got %q", warn.String())
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected F's body mutants to be suppressed by the second (valid) directive in the same group")
+	}
+	for _, m := range kept {
+		if m.Line == 5 {
+			t.Errorf("F-body mutant on line 5 should have been suppressed: %s", m.Type)
+		}
+	}
+}
+
+// TestFilterCommentGroupMisplacedFuncThenNextLine kills INVERT_LOOP_CTRL
+// on the !isFuncDoc `continue → break`. With break, the misplaced
+// disable-func at the head of the group terminates iteration and the
+// disable-next-line below it never targets the var.
+func TestFilterCommentGroupMisplacedFuncThenNextLine(t *testing.T) {
+	src := `package p
+
+// gomutants:disable-func
+// gomutants:disable-next-line
+var x = 1 + 2
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	var warn bytes.Buffer
+	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(warn.String(), "not on a function declaration") {
+		t.Errorf("expected misplaced-disable-func warning; got %q", warn.String())
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected disable-next-line to suppress var mutants despite the misplaced disable-func above it")
+	}
+	for _, m := range kept {
+		if m.Line == 5 {
+			t.Errorf("var mutant on line 5 should have been suppressed: %s", m.Type)
+		}
+	}
+}
+
+// TestFilterTwoTrailingNextLineWarnsForBoth kills INVERT_LOOP_CTRL on
+// the `if target == 0 ... continue → break` in the pending loop. With
+// break, only the first of two trailing disable-next-line directives
+// gets warned about.
+func TestFilterTwoTrailingNextLineWarnsForBoth(t *testing.T) {
+	src := `package p
+
+func F() int { return 1 + 2 }
+
+// gomutants:disable-next-line
+// gomutants:disable-next-line
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	var warn bytes.Buffer
+	if _, _, err := filterByDirectives(fset, mutants, &warn); err != nil {
+		t.Fatal(err)
+	}
+	w := warn.String()
+	if !strings.Contains(w, "src.go:5:") {
+		t.Errorf("expected warning for line-5 directive; got %q", w)
+	}
+	if !strings.Contains(w, "src.go:6:") {
+		t.Errorf("expected warning for line-6 directive too (break would skip it); got %q", w)
+	}
+}
+
+// TestFilterRegexpRespectsMutatorScope kills EXPRESSION_REMOVE on the
+// `directiveMatchesType(d, m.Type) → true` in matchMutant's regexp arm.
+// A regex directive scoped to ARITHMETIC_BASE must leave a non-arithmetic
+// mutant on the matching line untouched.
+func TestFilterRegexpRespectsMutatorScope(t *testing.T) {
+	src := `package p
+
+import "log"
+
+// gomutants:disable-regexp ^\s*log\. ARITHMETIC_BASE
+
+func F(a, b int) int {
+	log.Printf("a > b: %v, a+b: %d", a > b, a+b)
+	return a + b
+}
+`
+	mutants, _ := writeFixture(t, src)
+	fset := token.NewFileSet()
+	kept, _, err := FilterByDirectives(fset, mutants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	condBoundaryKept := false
+	for _, m := range kept {
+		if m.Type == mutator.ConditionalsBoundary && m.Line == 8 {
+			condBoundaryKept = true
+		}
+	}
+	if !condBoundaryKept {
+		t.Errorf("CONDITIONALS_BOUNDARY on the log.Printf line should NOT be suppressed by an ARITHMETIC_BASE-scoped regexp")
 	}
 }

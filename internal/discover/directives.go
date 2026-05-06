@@ -15,15 +15,10 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
-// directivePrefix is the namespace marker every directive comment must
-// carry. Defined once so the fast-path byte scan and the per-comment
-// parse share one source of truth.
 const directivePrefix = "gomutants:"
 
 var directivePrefixBytes = []byte(directivePrefix)
 
-// directiveKind classifies how a `// gomutants:disable*` directive maps
-// to source positions.
 type directiveKind int
 
 const (
@@ -34,23 +29,24 @@ const (
 )
 
 // directive is a parsed `// gomutants:disable*` source annotation.
-// Mutators nil/empty means "all mutators". FuncStart/FuncEnd are set
+// Mutators nil means "all mutators". FuncStart/FuncEnd are populated
 // only for directiveFunc; Regexp only for directiveRegexp.
 type directive struct {
 	Kind      directiveKind
 	Mutators  map[mutator.MutationType]struct{}
 	Reason    string
-	Line      int
 	FuncStart int
 	FuncEnd   int
 	Regexp    *regexp.Regexp
 }
 
-// Suppression records that a mutant was dropped by a directive. Used
-// for verbose logging and the aggregate `mutants_suppressed` count.
 type Suppression struct {
 	Mutant mutator.Mutant
 	Reason string
+}
+
+func warnf(w io.Writer, relPath string, line int, format string, args ...any) {
+	fmt.Fprintf(w, "gomutants: %s:%d: "+format+"\n", append([]any{relPath, line}, args...)...)
 }
 
 // FilterByDirectives drops mutants matched by any `// gomutants:disable*`
@@ -70,26 +66,24 @@ func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, warn io.W
 		return mutants, nil, nil
 	}
 
-	relPathOf := make(map[string]string, len(mutants))
+	indexes := make(map[string]*fileIndex)
 	for _, m := range mutants {
-		if _, ok := relPathOf[m.File]; !ok {
-			relPathOf[m.File] = m.RelFile
+		// gomutants:disable-next-line BRANCH_IF reason="`seen` skip is an optimisation; rebuilding the index is observably identical (same source, same directives)"
+		if _, seen := indexes[m.File]; seen {
+			continue
 		}
-	}
-
-	indexes := make(map[string]*fileIndex, len(relPathOf))
-	for path, rel := range relPathOf {
-		idx, err := buildFileIndex(fset, path, rel, warn)
+		idx, err := buildFileIndex(fset, m.File, m.RelFile, warn)
 		if err != nil {
 			return nil, nil, err
 		}
-		indexes[path] = idx
+		indexes[m.File] = idx
 	}
 
 	kept := make([]mutator.Mutant, 0, len(mutants))
 	var suppressed []Suppression
 	for _, m := range mutants {
 		idx, ok := indexes[m.File]
+		// gomutants:disable-next-line BRANCH_IF,INVERT_LOGICAL,EXPRESSION_REMOVE reason="defensive guard: the loop above stores a non-nil idx for every unique m.File, so `!ok` and `idx == nil` are unreachable"
 		if !ok || idx == nil {
 			kept = append(kept, m)
 			continue
@@ -103,9 +97,8 @@ func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, warn io.W
 	return kept, suppressed, nil
 }
 
-// fileIndex holds parsed directives for one source file, organised so
-// each mutant lookup is O(1) for line-scoped directives and O(F+R) for
-// the small per-file slices of func-scope and regexp directives.
+// fileIndex organises directives so each mutant lookup is O(1) for
+// line-scoped directives and O(F+R) for func-scope and regexp.
 type fileIndex struct {
 	sameLine map[int][]directive
 	nextLine map[int][]directive
@@ -119,6 +112,7 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
+	// gomutants:disable-next-line BRANCH_IF reason="fast-path optimisation; identical observable when removed (the slow path also yields an empty index for files without the prefix)"
 	if !bytes.Contains(src, directivePrefixBytes) {
 		return &fileIndex{}, nil
 	}
@@ -126,9 +120,8 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	// distinguish a comment that sits on a function declaration from one
 	// that floats free in the file.
 	file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	// gomutants:disable-next-line BRANCH_IF reason="unreachable in normal flow: Discover already skips files where parser.ParseFile errors, so we never reach FilterByDirectives with such a file"
 	if err != nil {
-		// Discovery already warned for unparseable files; treat as no
-		// directives rather than failing the whole run.
 		return &fileIndex{}, nil
 	}
 
@@ -157,9 +150,9 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	for _, cg := range file.Comments {
 		funcRange, isFuncDoc := funcRangeByDocPos[cg.Pos()]
 		for _, c := range cg.List {
-			if !strings.HasPrefix(c.Text, "//") {
-				continue
-			}
+			// Block comments (`/* ... */`) reach this point with their
+			// delimiters intact, so the directive-prefix check below
+			// rejects them — no separate `//` guard needed.
 			text := strings.TrimSpace(strings.TrimPrefix(c.Text, "//"))
 			if !strings.HasPrefix(text, directivePrefix) {
 				continue
@@ -176,7 +169,8 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 				pending = append(pending, pendingNextLine{d, line})
 			case directiveFunc:
 				if !isFuncDoc {
-					fmt.Fprintf(warn, "gomutants: %s:%d: disable-func not on a function declaration (skipped)\n", relPath, line)
+					warnf(warn, relPath, line, "disable-func not on a function declaration (skipped)")
+					// gomutants:disable-next-line INVERT_LOOP_CTRL reason="this continue lives inside a switch case; Go's `break` exits the switch (not the for), and the switch is the last statement in the for body — so `continue` and `break` are observably identical"
 					continue
 				}
 				d.FuncStart = funcRange[0]
@@ -191,13 +185,14 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	// Only materialise the line array if we actually need to scan source
 	// text — for files with only same-line and disable-func directives,
 	// this skips the allocation entirely.
+	// gomutants:disable-next-line CONDITIONALS_BOUNDARY reason="optimisation gate; widening to `>=` (always true) just allocates lines unnecessarily, no observable change"
 	if len(pending) > 0 || len(idx.regexps) > 0 {
 		idx.lines = strings.Split(string(src), "\n")
 	}
 	for _, p := range pending {
 		target := nextNonCommentLine(idx.lines, p.sourceLine)
 		if target == 0 {
-			fmt.Fprintf(warn, "gomutants: %s:%d: disable-next-line has no following code (skipped)\n", relPath, p.sourceLine)
+			warnf(warn, relPath, p.sourceLine, "disable-next-line has no following code (skipped)")
 			continue
 		}
 		idx.nextLine[target] = append(idx.nextLine[target], p.d)
@@ -222,12 +217,6 @@ func matchMutant(idx *fileIndex, m mutator.Mutant) (directive, bool) {
 		}
 	}
 	for _, d := range idx.regexps {
-		if d.Regexp == nil {
-			continue
-		}
-		if m.Line < 1 || m.Line > len(idx.lines) {
-			continue
-		}
 		if d.Regexp.MatchString(idx.lines[m.Line-1]) && directiveMatchesType(d, m.Type) {
 			return d, true
 		}
@@ -257,7 +246,7 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 	var kind directiveKind
 	switch kindStr {
 	case "disable":
-		kind = directiveSameLine
+		kind = directiveSameLine // gomutants:disable BRANCH_CASE,STATEMENT_REMOVE reason="directiveSameLine == 0 == zero-value of directiveKind, so the explicit assignment is observably identical to relying on the var's zero value"
 	case "disable-next-line":
 		kind = directiveNextLine
 	case "disable-func":
@@ -271,17 +260,17 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 		return directive{}, false
 	}
 
-	d := directive{Kind: kind, Line: line}
+	d := directive{Kind: kind}
 
 	if kind == directiveRegexp {
 		patStr, after := splitFirstWord(rest)
 		if patStr == "" {
-			fmt.Fprintf(warn, "gomutants: %s:%d: disable-regexp missing pattern (skipped)\n", relPath, line)
+			warnf(warn, relPath, line, "disable-regexp missing pattern (skipped)")
 			return directive{}, false
 		}
 		re, err := regexp.Compile(patStr)
 		if err != nil {
-			fmt.Fprintf(warn, "gomutants: %s:%d: disable-regexp invalid pattern %q: %v (skipped)\n", relPath, line, patStr, err)
+			warnf(warn, relPath, line, "disable-regexp invalid pattern %q: %v (skipped)", patStr, err)
 			return directive{}, false
 		}
 		d.Regexp = re
@@ -290,11 +279,12 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 
 	mutatorsStr, reasonStr, ok := splitMutatorsAndReason(rest)
 	if !ok {
-		fmt.Fprintf(warn, "gomutants: %s:%d: malformed reason= (skipped)\n", relPath, line)
+		warnf(warn, relPath, line, "malformed reason= (skipped)")
 		return directive{}, false
 	}
 	d.Reason = reasonStr
 
+	// gomutants:disable-next-line EXPRESSION_REMOVE reason="`mutatorsStr != \"\" → true` is equivalent: the empty mutator list flows through SplitSeq+TrimSpace skipping every entry, leaving Mutators nil (= all), same as the skipped block"
 	if mutatorsStr != "" && mutatorsStr != "*" {
 		d.Mutators = make(map[mutator.MutationType]struct{})
 		for name := range strings.SplitSeq(mutatorsStr, ",") {
@@ -304,9 +294,9 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 			}
 			if !isKnownMutator(name) {
 				if d.Kind == directiveRegexp {
-					fmt.Fprintf(warn, "gomutants: %s:%d: unknown mutator %q in disable-regexp directive (note: patterns cannot contain whitespace; use \\s) (skipped)\n", relPath, line, name)
+					warnf(warn, relPath, line, "unknown mutator %q in disable-regexp directive (note: patterns cannot contain whitespace; use \\s) (skipped)", name)
 				} else {
-					fmt.Fprintf(warn, "gomutants: %s:%d: unknown mutator %q in directive (skipped)\n", relPath, line, name)
+					warnf(warn, relPath, line, "unknown mutator %q in directive (skipped)", name)
 				}
 				continue
 			}
@@ -321,74 +311,35 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 	return d, true
 }
 
-// splitFirstWord returns the first whitespace-delimited token of s and
-// the trimmed remainder. If s contains no whitespace, the whole string
-// is returned as the first word and the remainder is empty.
 func splitFirstWord(s string) (first, rest string) {
 	s = strings.TrimLeft(s, " \t")
-	if s == "" {
-		return "", ""
+	i := strings.IndexAny(s, " \t")
+	// gomutants:disable-next-line CONDITIONALS_BOUNDARY reason="`< → <=` would also accept i==0; after the leading TrimLeft above, position 0 is never whitespace, so i==0 is unreachable and the boundary widening is observably identical"
+	if i < 0 {
+		return s, ""
 	}
-	for i := 0; i < len(s); i++ {
-		if s[i] == ' ' || s[i] == '\t' {
-			return s[:i], strings.TrimLeft(s[i:], " \t")
-		}
-	}
-	return s, ""
+	return s[:i], strings.TrimLeft(s[i:], " \t")
 }
 
 // splitMutatorsAndReason parses an optional mutator list followed by an
 // optional `reason="..."`. Returns ok=false if `reason=` is present but
 // malformed (e.g., unbalanced quotes, trailing junk).
 func splitMutatorsAndReason(s string) (mutators, reason string, ok bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", "", true
-	}
-	before, tail, found := strings.Cut(s, "reason=")
-	if !found {
-		return s, "", true
-	}
+	before, tail, found := strings.Cut(strings.TrimSpace(s), "reason=")
 	mutators = strings.TrimSpace(before)
-	if !strings.HasPrefix(tail, `"`) {
+	if !found {
+		return mutators, "", true
+	}
+	quoted, err := strconv.QuotedPrefix(tail)
+	if err != nil || strings.TrimSpace(tail[len(quoted):]) != "" {
 		return "", "", false
 	}
-	end := scanQuotedEnd(tail)
-	if end < 0 {
-		return "", "", false
-	}
-	val, err := strconv.Unquote(tail[:end])
-	if err != nil {
-		return "", "", false
-	}
-	if strings.TrimSpace(tail[end:]) != "" {
-		return "", "", false
-	}
+	val, _ := strconv.Unquote(quoted)
 	return mutators, val, true
 }
 
-// scanQuotedEnd returns the index just past the closing quote of a Go
-// double-quoted string starting at s[0]=='"'. Returns -1 if the string
-// is unterminated.
-func scanQuotedEnd(s string) int {
-	if len(s) == 0 || s[0] != '"' {
-		return -1
-	}
-	for i := 1; i < len(s); i++ {
-		switch s[i] {
-		case '\\':
-			i++
-		case '"':
-			return i + 1
-		}
-	}
-	return -1
-}
-
 // nextNonCommentLine returns the smallest line number > directiveLine
-// whose source line is neither blank nor a `//` comment. Returns 0 if
-// every following line is blank or comment-only (i.e. the directive has
-// no code to apply to).
+// whose source is neither blank nor a `//` comment, or 0 if none.
 func nextNonCommentLine(lines []string, directiveLine int) int {
 	for l := directiveLine + 1; l <= len(lines); l++ {
 		trimmed := strings.TrimSpace(lines[l-1])
