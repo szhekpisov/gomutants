@@ -877,15 +877,11 @@ func G(a, b int) int {
 	}
 }
 
-// TestFilterByDirectivesUnchangedFileBytes guards the per-file dedup:
-// two mutants in the same file must trigger only one buildFileIndex
-// call. We can't observe the call count directly, but a well-known
-// invariant — the `seen` guard preventing rebuild — is locked by the
-// surrounding TestFilter* tests.
-//
-// This focused test just asserts that two mutants in the same file are
-// independently classified by the same index (one suppressed, one kept).
-func TestFilterByDirectivesUnchangedFileBytes(t *testing.T) {
+// TestFilterByDirectivesPerMutantClassification asserts that two
+// mutants in the same file are classified independently against the
+// shared per-file index: a same-line directive on one line suppresses
+// only that line's mutant, leaving an adjacent-line mutant untouched.
+func TestFilterByDirectivesPerMutantClassification(t *testing.T) {
 	src := `package p
 
 func F(a, b int) int {

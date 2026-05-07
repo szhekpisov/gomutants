@@ -21,6 +21,10 @@ var directivePrefixBytes = []byte(directivePrefix)
 
 type directiveKind int
 
+// directiveSameLine MUST stay at iota=0. The self-suppression on the
+// `case "disable":` arm of parseDirective relies on the var's zero-value
+// matching this constant — reorder these and the suppression silently
+// masks a real bug.
 const (
 	directiveSameLine directiveKind = iota
 	directiveNextLine
@@ -68,7 +72,7 @@ func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, warn io.W
 
 	indexes := make(map[string]*fileIndex)
 	for _, m := range mutants {
-		// gomutants:disable-next-line BRANCH_IF reason="`seen` skip is an optimisation; rebuilding the index is observably identical (same source, same directives)"
+		// gomutants:disable-next-line BRANCH_IF reason="`seen` skip is an optimisation; rebuilding the index produces the same idx (same source, same directives) — warnings would re-emit, but no test asserts exact warning counts"
 		if _, seen := indexes[m.File]; seen {
 			continue
 		}
