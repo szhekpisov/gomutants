@@ -36,17 +36,17 @@ body:
       description: Which part of gomutants does this relate to?
       options:
         - New mutator type
-        - Existing mutator behavior
-        - Mutant discovery / AST handling
-        - Coverage / per-test mapping
-        - Test execution (overlay, workers)
+        - Existing mutator behaviour
+        - Discovery / coverage filtering
+        - Per-mutant scheduling / runner
+        - Incremental cache
+        - Inline directives (`// gomutants:disable*`)
+        - JSON / Stryker / terminal report
+        - CLI / UX
         - Performance
-        - JSON report format
-        - Terminal output / progress
-        - CLI / flags / UX
-        - Configuration file
-        - Gremlins compatibility
         - CI integration
+        - Configuration file
+        - `unleash` gremlins-compat subcommand
         - Other
     validations:
       required: true
@@ -55,7 +55,7 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: Any workarounds or other tools (gremlins, ooze, etc.) you've tried.
+      description: Any workarounds or other tools you've tried.
     validations:
       required: false
 
