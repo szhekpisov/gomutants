@@ -1,9 +1,16 @@
 # gomutants configuration
 # Copy this file to .gomutants.yml in your project root.
 # All fields are optional — defaults are shown below.
+# Priority: built-in defaults < this file < CLI flags.
 
 # Number of parallel workers (default: number of CPUs).
 workers: 10
+
+# Value passed to inner `go test -cpu` per mutant. 0 (the default)
+# omits the flag so go test inherits GOMAXPROCS. Pair --workers=1
+# with a higher --test-cpu when you want one fat go-test child rather
+# than many narrow ones.
+test-cpu: 0
 
 # Per-mutant timeout = baseline test duration * this coefficient (default: 10).
 timeout-coefficient: 10
@@ -15,13 +22,18 @@ timeout-coefficient: 10
 # JSON report output path (default: mutation-report.json).
 output: mutation-report.json
 
-# Incremental-analysis cache path. When set (or via --cache <path>),
-# gomutants persists per-mutant outcomes keyed by content hashes of the
-# production file and the test files that cover the mutant (resolved
-# from the per-test coverage map; falls back to all _test.go in the
-# mutant's package directory). On the next run, mutants whose source
-# and covering tests are byte-identical to the cached run are skipped.
-# Empty/unset disables caching (default).
+# Scope mutation testing to lines changed since the given git ref
+# (e.g. "origin/main", "HEAD~1"). Empty disables; --changed-since on
+# the CLI overrides. Requires a git repository.
+# changed-since: ""
+
+# Incremental-analysis cache path. The default (".gomutants-cache.json")
+# enables caching at that path; set to "off" to disable. Per-mutant
+# outcomes are keyed by content hashes of the production file and the
+# test files that cover the mutant (resolved from the per-test coverage
+# map; falls back to all _test.go in the mutant's package directory).
+# On the next run, mutants whose source and covering tests are byte-
+# identical to the cached run are skipped.
 # cache: .gomutants-cache.json
 
 # Mutator types to disable (run all except these).
@@ -34,14 +46,22 @@ output: mutation-report.json
 #   - ARITHMETIC_BASE
 #   - CONDITIONALS_NEGATION
 
-# Available mutator types:
-#   ARITHMETIC_BASE        — swap +/-, */%, etc.
-#   CONDITIONALS_BOUNDARY  — swap </<=, >/>=
-#   CONDITIONALS_NEGATION  — swap ==/!=, </>=, >/<=
-#   INCREMENT_DECREMENT    — swap ++/--
-#   INVERT_NEGATIVES       — swap -/+ (unary and binary)
-#   BRANCH_IF              — empty if/else-if body
-#   BRANCH_ELSE            — empty else body
-#   BRANCH_CASE            — empty case clause body
-#   EXPRESSION_REMOVE      — replace &&/|| operand with true/false
-#   STATEMENT_REMOVE       — remove assignment/expression/increment side-effects
+# Available mutator types (16 total):
+#   Token-level:
+#     ARITHMETIC_BASE             — swap +/-, */%, etc.
+#     CONDITIONALS_BOUNDARY       — swap </<=, >/>=
+#     CONDITIONALS_NEGATION       — swap ==/!=, </>=, >/<=
+#     INCREMENT_DECREMENT         — swap ++/--
+#     INVERT_NEGATIVES            — swap -/+ (unary and binary)
+#     INVERT_ASSIGNMENTS          — swap arithmetic compound assignments (+=/-=, etc.)
+#     INVERT_BITWISE              — swap bitwise binary ops (&/|, ^, <<, >>)
+#     INVERT_BITWISE_ASSIGNMENTS  — swap bitwise compound assignments (&=/|=, etc.)
+#     INVERT_LOGICAL              — swap &&/||
+#     INVERT_LOOP_CTRL            — swap break/continue
+#     REMOVE_SELF_ASSIGNMENTS     — drop op from compound assignment (`x += y` → `x = y`)
+#   Block-level:
+#     BRANCH_IF                   — empty if/else-if body
+#     BRANCH_ELSE                 — empty else body
+#     BRANCH_CASE                 — empty case clause body
+#     EXPRESSION_REMOVE           — replace &&/|| operand with true/false
+#     STATEMENT_REMOVE            — remove assignment/expression/increment side-effects

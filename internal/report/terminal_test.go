@@ -164,8 +164,8 @@ func TestOnResultTTYTotalZero(t *testing.T) {
 }
 
 // TestSummaryExact pins the full Summary output for a known Report.
-// Kills every STATEMENT_REMOVE on each Fprintf line and every arithmetic
-// mutation on the MutantsKilled + MutantsLived and timed-out computations.
+// Kills every STATEMENT_REMOVE on each Fprintf line and surfaces any
+// regression in the per-status counter wiring.
 func TestSummaryExact(t *testing.T) {
 	var buf bytes.Buffer
 	term := NewTerminal(&buf, 0, false) // non-TTY
@@ -174,7 +174,8 @@ func TestSummaryExact(t *testing.T) {
 		MutantsLived:      2,
 		MutantsNotCovered: 3,
 		MutantsNotViable:  1,
-		MutantsTotal:      14,   // timed_out = 14 - 8 - 2 - 3 - 1 = 0
+		MutantsTimedOut:   0,
+		MutantsTotal:      14,
 		TestEfficacy:      80.0,
 	}
 	term.Summary(r)
@@ -193,8 +194,8 @@ func TestSummaryExact(t *testing.T) {
 	}
 }
 
-// TestSummaryTimedOutNonZero exercises the subtraction arithmetic in the
-// timed-out computation — specific values force timed_out = 2.
+// TestSummaryTimedOutNonZero pins the Timed-out line against a non-zero
+// MutantsTimedOut, killing any STATEMENT_REMOVE on the corresponding Fprintf.
 func TestSummaryTimedOutNonZero(t *testing.T) {
 	var buf bytes.Buffer
 	term := NewTerminal(&buf, 0, false)
@@ -203,7 +204,8 @@ func TestSummaryTimedOutNonZero(t *testing.T) {
 		MutantsLived:      1,
 		MutantsNotCovered: 3,
 		MutantsNotViable:  1,
-		MutantsTotal:      12, // timed_out = 12 - 5 - 1 - 3 - 1 = 2
+		MutantsTimedOut:   2,
+		MutantsTotal:      12,
 		TestEfficacy:      83.33,
 	}
 	term.Summary(r)

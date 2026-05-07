@@ -29,6 +29,7 @@ type Report struct {
 	MutantsLived      int            `json:"mutants_lived"`
 	MutantsNotViable  int            `json:"mutants_not_viable"`
 	MutantsNotCovered int            `json:"mutants_not_covered"`
+	MutantsTimedOut   int            `json:"mutants_timed_out,omitempty"`
 	MutantsCached     int            `json:"mutants_cached,omitempty"`
 	MutantsSuppressed int            `json:"mutants_suppressed,omitempty"`
 	ElapsedTime       float64        `json:"elapsed_time"`
@@ -81,6 +82,8 @@ func Generate(mutants []mutator.Mutant, goModule string, elapsed time.Duration, 
 			r.MutantsNotViable++
 		case mutator.StatusNotCovered:
 			r.MutantsNotCovered++
+		case mutator.StatusTimedOut:
+			r.MutantsTimedOut++
 		}
 
 		// Mutator statistics use lower_snake_case keys.

@@ -18,6 +18,7 @@ func TestGenerate(t *testing.T) {
 		{ID: 3, Type: mutator.ConditionalsBoundary, RelFile: "b.go", Line: 5, Col: 1, Status: mutator.StatusLived},
 		{ID: 4, Type: mutator.BranchIf, RelFile: "b.go", Line: 8, Col: 2, Status: mutator.StatusNotCovered},
 		{ID: 5, Type: mutator.BranchElse, RelFile: "a.go", Line: 30, Col: 1, Status: mutator.StatusNotViable},
+		{ID: 6, Type: mutator.StatementRemove, RelFile: "b.go", Line: 12, Col: 1, Status: mutator.StatusTimedOut},
 	}
 
 	r := Generate(mutants, "example.com/mod", 120*time.Second, 0)
@@ -25,8 +26,8 @@ func TestGenerate(t *testing.T) {
 	if r.GoModule != "example.com/mod" {
 		t.Errorf("GoModule=%q", r.GoModule)
 	}
-	if r.MutantsTotal != 5 {
-		t.Errorf("Total=%d, want 5", r.MutantsTotal)
+	if r.MutantsTotal != 6 {
+		t.Errorf("Total=%d, want 6", r.MutantsTotal)
 	}
 	if r.MutantsKilled != 2 {
 		t.Errorf("Killed=%d, want 2", r.MutantsKilled)
@@ -40,6 +41,9 @@ func TestGenerate(t *testing.T) {
 	if r.MutantsNotViable != 1 {
 		t.Errorf("NotViable=%d, want 1", r.MutantsNotViable)
 	}
+	if r.MutantsTimedOut != 1 {
+		t.Errorf("TimedOut=%d, want 1", r.MutantsTimedOut)
+	}
 
 	// Efficacy: 2 killed / (2 killed + 1 lived) = 66.67%
 	wantEfficacy := float64(2) / float64(3) * 100
@@ -47,8 +51,8 @@ func TestGenerate(t *testing.T) {
 		t.Errorf("TestEfficacy=%f, want %f", r.TestEfficacy, wantEfficacy)
 	}
 
-	// Coverage: (5 - 1 not covered) / 5 = 80%
-	wantCoverage := float64(4) / float64(5) * 100
+	// Coverage: (6 - 1 not covered) / 6 = 83.33%
+	wantCoverage := float64(5) / float64(6) * 100
 	if r.MutationsCoverage != wantCoverage {
 		t.Errorf("MutationsCoverage=%f, want %f", r.MutationsCoverage, wantCoverage)
 	}
@@ -70,8 +74,8 @@ func TestGenerate(t *testing.T) {
 	if len(r.Files[0].Mutations) != 3 {
 		t.Errorf("Files[0] mutations=%d, want 3", len(r.Files[0].Mutations))
 	}
-	if len(r.Files[1].Mutations) != 2 {
-		t.Errorf("Files[1] mutations=%d, want 2", len(r.Files[1].Mutations))
+	if len(r.Files[1].Mutations) != 3 {
+		t.Errorf("Files[1] mutations=%d, want 3", len(r.Files[1].Mutations))
 	}
 
 	// Mutator statistics should exclude NOT_COVERED.
@@ -204,6 +208,34 @@ func TestGenerateOmitsMutantsSuppressedWhenZero(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"mutants_suppressed"`) {
 		t.Errorf("mutants_suppressed should be omitted when 0, got: %s", data)
+	}
+}
+
+func TestGenerateOmitsMutantsTimedOutWhenZero(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusKilled},
+	}
+	r := Generate(mutants, "mod", time.Second, 0)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), `"mutants_timed_out"`) {
+		t.Errorf("mutants_timed_out should be omitted when 0, got: %s", data)
+	}
+}
+
+func TestGenerateEmitsMutantsTimedOutWhenNonZero(t *testing.T) {
+	mutants := []mutator.Mutant{
+		{ID: 1, Type: mutator.ArithmeticBase, RelFile: "a.go", Line: 1, Col: 1, Status: mutator.StatusTimedOut},
+	}
+	r := Generate(mutants, "mod", time.Second, 0)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"mutants_timed_out":1`) {
+		t.Errorf("expected mutants_timed_out:1 in JSON, got: %s", data)
 	}
 }
 

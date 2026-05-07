@@ -55,8 +55,9 @@ func NewPool(workers, testCPU int, timeout time.Duration, tmpDir string, srcCach
 	}
 }
 
-// Run tests all pending mutants in parallel, calling onResult for each completion.
-func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult ResultCallback) []mutator.Mutant {
+// Run tests all pending mutants in parallel, calling onResult for each
+// completion. Mutant statuses are updated in place on the input slice.
+func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult ResultCallback) {
 	// Filter to only pending mutants.
 	var pending []int
 	for i, m := range mutants {
@@ -66,7 +67,7 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 	}
 
 	if len(pending) == 0 {
-		return mutants
+		return
 	}
 
 	// EXP4: sort pending mutants by (Pkg, File, StartOffset) so consecutive
@@ -86,7 +87,7 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 	// on a feeder blocked forever sending into `work` with no readers.
 	if len(workers) == 0 {
 		fmt.Fprintln(os.Stderr, "gomutants: no workers could be started; skipping mutation run")
-		return mutants
+		return
 	}
 
 	var wg sync.WaitGroup
@@ -138,8 +139,6 @@ func (p *Pool) Run(ctx context.Context, mutants []mutator.Mutant, onResult Resul
 			onResult(result)
 		}
 	}
-
-	return mutants
 }
 
 // createWorkers spins up p.workers workers, logs and skips ones that fail

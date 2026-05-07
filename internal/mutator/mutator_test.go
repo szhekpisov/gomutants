@@ -761,6 +761,29 @@ func f() {
 
 // --- Registry ---
 
+func TestRegistryUnknownNames(t *testing.T) {
+	reg := mutator.NewRegistry()
+
+	if got := reg.UnknownNames(nil); got != nil {
+		t.Errorf("UnknownNames(nil)=%v, want nil", got)
+	}
+
+	if got := reg.UnknownNames([]string{"ARITHMETIC_BASE", "BRANCH_IF"}); got != nil {
+		t.Errorf("UnknownNames(all-known)=%v, want nil", got)
+	}
+
+	got := reg.UnknownNames([]string{"ARITHMETIC_BASE", "ARTIHMETIC_BASE", "FOO"})
+	want := []string{"ARTIHMETIC_BASE", "FOO"}
+	if len(got) != len(want) {
+		t.Fatalf("UnknownNames=%v, want %v", got, want)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("UnknownNames[%d]=%q, want %q", i, got[i], w)
+		}
+	}
+}
+
 func TestRegistryEnabledMutators(t *testing.T) {
 	reg := mutator.NewRegistry()
 

@@ -45,6 +45,24 @@ func (r *Registry) Mutators() []Mutator {
 	return r.mutators
 }
 
+// UnknownNames returns the subset of names that don't match any
+// registered mutator type. Used by callers that accept user-supplied
+// mutator lists (--only / --disable, config file) to surface typos
+// before silently filtering them out.
+func (r *Registry) UnknownNames(names []string) []string {
+	known := make(map[string]struct{}, len(r.mutators))
+	for _, m := range r.mutators {
+		known[string(m.Type())] = struct{}{}
+	}
+	var unknown []string
+	for _, n := range names {
+		if _, ok := known[n]; !ok {
+			unknown = append(unknown, n)
+		}
+	}
+	return unknown
+}
+
 // EnabledMutators returns mutators filtered by the given only/disable lists.
 // If only is non-empty, only those types are included.
 // Otherwise, disabled types are excluded.

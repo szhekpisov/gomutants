@@ -213,6 +213,22 @@ func TestResolveCache(t *testing.T) {
 	}
 }
 
+// TestLoadExampleFile asserts the in-repo .gomutants.yml.example parses
+// successfully through the same Load() that real users would hit. Pinned
+// expectations: the file is documentation, so we only assert keys are
+// recognised by the YAML decoder. If a future commit adds an unknown key
+// to the example, this test fails — flagging that the example drifted
+// ahead of the Config struct.
+func TestLoadExampleFile(t *testing.T) {
+	path := filepath.Join("..", "..", ".gomutants.yml.example")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("example file not found: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load(%s): %v", path, err)
+	}
+}
+
 func TestSplitAndTrim(t *testing.T) {
 	tests := []struct {
 		input string

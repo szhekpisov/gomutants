@@ -185,6 +185,46 @@ func TestRunAllLongFlags(t *testing.T) {
 	}
 }
 
+// TestRunWarnsOnUnknownMutatorName asserts a typo in --only / --disable
+// surfaces as a stderr warning instead of silently filtering nothing
+// (--disable) or everything (--only). The "ignored" wording is part of
+// the contract — the warning has to communicate that the run continues
+// with the remaining valid names.
+func TestRunWarnsOnUnknownMutatorName(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
+		"add_test.go": "package testmod\nimport \"testing\"\nfunc TestAdd(t *testing.T) { if Add(1,2) != 3 { t.Fatal(\"wrong\") } }\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	stderrText, err := captureStderr(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE,ARTIHMETIC_BASE",
+			"--disable", "BOGUS_MUTATOR",
+			"--dry-run", "testmod",
+		})
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(stderrText, `unknown mutator "ARTIHMETIC_BASE" in --only`) {
+		t.Errorf("expected --only typo warning, got: %q", stderrText)
+	}
+	if !strings.Contains(stderrText, `unknown mutator "BOGUS_MUTATOR" in --disable`) {
+		t.Errorf("expected --disable typo warning, got: %q", stderrText)
+	}
+}
+
 // TestRunOnlyFlag exercises --only (separate test because it disables all
 // other mutators).
 func TestRunOnlyFlag(t *testing.T) {
@@ -1150,20 +1190,3 @@ func setupTinyProject(t *testing.T) string {
 	return dir
 }
 
-func TestSplitLines(t *testing.T) {
-	tests := []struct {
-		input string
-		want  int
-	}{
-		{"", 0},
-		{"a\nb\nc", 3},
-		{"single", 1},
-		{"a\nb\n", 2}, // trailing newline: "a", "b" (newline consumed, no trailing empty)
-	}
-	for _, tc := range tests {
-		lines := splitLines([]byte(tc.input))
-		if len(lines) != tc.want {
-			t.Errorf("splitLines(%q) = %d lines, want %d", tc.input, len(lines), tc.want)
-		}
-	}
-}
