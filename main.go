@@ -501,5 +501,13 @@ func readModuleName(dir string) (string, error) {
 			return fields[1], nil
 		}
 	}
+	// bufio.Scanner caps lines at 64 KiB by default. A pathological
+	// go.mod with a longer-than-cap line before the module directive
+	// would surface as bufio.ErrTooLong here — we propagate it rather
+	// than silently returning "module name not found", which would
+	// mislead the user about what's wrong.
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("scanning go.mod: %w", err)
+	}
 	return "", fmt.Errorf("module name not found in go.mod")
 }

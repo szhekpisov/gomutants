@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefault(t *testing.T) {
@@ -213,19 +215,36 @@ func TestResolveCache(t *testing.T) {
 	}
 }
 
-// TestLoadExampleFile asserts the in-repo .gomutants.yml.example parses
-// successfully through the same Load() that real users would hit. Pinned
-// expectations: the file is documentation, so we only assert keys are
-// recognised by the YAML decoder. If a future commit adds an unknown key
-// to the example, this test fails — flagging that the example drifted
-// ahead of the Config struct.
+// TestLoadExampleFile asserts the in-repo .gomutants.yml.example matches
+// the Config struct field-for-field. The production Load() path is
+// permissive (yaml.v3 silently ignores unknown keys), so a separate
+// strict decode with KnownFields(true) is what actually catches drift —
+// e.g. a key removed from Config but still documented in the example,
+// or a typo in the example that would silently no-op for users.
+//
+// Hard-fails (not Skip) on a missing file: the example is committed and
+// referenced from the README; a missing file should break CI rather
+// than be quietly tolerated.
 func TestLoadExampleFile(t *testing.T) {
 	path := filepath.Join("..", "..", ".gomutants.yml.example")
-	if _, err := os.Stat(path); err != nil {
-		t.Skipf("example file not found: %v", err)
-	}
+
+	// Permissive Load() must succeed.
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load(%s): %v", path, err)
+	}
+
+	// Strict decode catches keys that aren't on the Config struct.
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	dec := yaml.NewDecoder(f)
+	dec.KnownFields(true)
+	var cfg Config
+	if err := dec.Decode(&cfg); err != nil {
+		t.Fatalf("strict decode of %s failed — example contains keys absent from Config: %v", path, err)
 	}
 }
 

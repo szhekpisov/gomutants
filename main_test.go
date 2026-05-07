@@ -1171,6 +1171,29 @@ func TestReadModuleNameBlankLines(t *testing.T) {
 	}
 }
 
+// TestReadModuleNameScannerError pins the `sc.Err()` propagation: a
+// pre-`module` line longer than bufio.Scanner's 64 KiB cap surfaces as a
+// "scanning go.mod" error instead of the misleading "module name not
+// found". Without the sc.Err() check, this test fails with the wrong
+// error message.
+func TestReadModuleNameScannerError(t *testing.T) {
+	dir := t.TempDir()
+	// 70 KiB single line ahead of `module …` → bufio.ErrTooLong on the
+	// first Scan; module directive never reached.
+	long := strings.Repeat("x", 70*1024)
+	goMod := "// " + long + "\nmodule example.com/m\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readModuleName(dir)
+	if err == nil {
+		t.Fatal("expected error for too-long line, got nil")
+	}
+	if !strings.Contains(err.Error(), "scanning go.mod") {
+		t.Errorf("expected scanner-error wrapping, got: %v", err)
+	}
+}
+
 // setupTinyProject creates a minimal Go project with one TestAdd that
 // kills the ARITHMETIC_BASE mutation on `+`. Used by tests that want a
 // cheap full-pipeline run.

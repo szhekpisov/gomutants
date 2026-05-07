@@ -320,10 +320,29 @@ func TestRunCoverageStdoutGoesToStderr(t *testing.T) {
 	}
 }
 
+// TestPoolRunEmpty pins the early-return when no mutants are pending:
+// nil input must not panic, and an all-terminal slice must not have any
+// statuses overwritten by the pending-mutant pipeline.
 func TestPoolRunEmpty(t *testing.T) {
-	p := NewPool(2, 0, 30*time.Second, t.TempDir(), nil, ".", nil)
-	// Should not panic on a nil mutant slice — Run early-returns on empty pending.
+	tmpDir := t.TempDir()
+	p := NewPool(2, 0, 30*time.Second, tmpDir, nil, ".", nil)
+
+	// nil input — Run must early-exit cleanly.
 	p.Run(context.Background(), nil, nil)
+
+	// Non-nil but no Pending — statuses must be preserved verbatim.
+	mutants := []mutator.Mutant{
+		{ID: 1, Status: mutator.StatusKilled},
+		{ID: 2, Status: mutator.StatusLived},
+	}
+	called := false
+	p.Run(context.Background(), mutants, func(mutator.Mutant) { called = true })
+	if mutants[0].Status != mutator.StatusKilled || mutants[1].Status != mutator.StatusLived {
+		t.Errorf("statuses changed on no-pending Run: %v", mutants)
+	}
+	if called {
+		t.Error("onResult called with no pending mutants — pending filter is wrong")
+	}
 }
 
 func TestPoolRunWithPending(t *testing.T) {
