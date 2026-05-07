@@ -19,28 +19,28 @@ body:
       required: true
 
   - type: textarea
-    id: command
-    attributes:
-      label: Command and flags
-      description: >-
-        The exact command you ran. Flags like --workers, --timeout-coefficient,
-        --coverpkg, --only, --disable, --dry-run, and --config trigger
-        different code paths, so include them all.
-      placeholder: gomutants -w 4 --only ARITHMETIC_BASE ./internal/...
-      render: bash
-    validations:
-      required: true
-
-  - type: textarea
     id: source-snippet
     attributes:
-      label: Minimal source snippet
+      label: Minimal Go source
       description: >-
         A small Go snippet that reproduces the issue (function under test
         plus its test). Raw text is far more useful than screenshots.
       render: go
     validations:
       required: false
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and flags
+      description: >-
+        The exact command you ran. Flags like --workers, --timeout-coefficient,
+        --coverpkg, --only, --disable, --threshold-efficacy, --changed-since,
+        --cache, and --config trigger different code paths, so include them all.
+      placeholder: gomutants -w 4 --only ARITHMETIC_BASE ./internal/...
+      render: bash
+    validations:
+      required: true
 
   - type: textarea
     id: actual-output
@@ -63,8 +63,8 @@ body:
   - type: checkboxes
     id: mutators
     attributes:
-      label: Mutator types involved
-      description: Check any mutators that appear relevant. Skip if unsure.
+      label: Affected mutator type(s)
+      description: Which mutator types are involved? Tick every type that produced an unexpected result.
       options:
         - label: ARITHMETIC_BASE
         - label: CONDITIONALS_BOUNDARY
@@ -93,6 +93,7 @@ body:
         - label: Code with no test coverage
         - label: External test packages (`foo_test` package suffix)
         - label: Multiple modules in the same repo
+        - label: Inline `// gomutants:disable*` directives
         - label: Custom .gomutants.yml config in use
         - label: Run via the `unleash` gremlins-compat subcommand
 
