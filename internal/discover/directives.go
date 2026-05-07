@@ -355,19 +355,13 @@ func nextNonCommentLine(lines []string, directiveLine int) int {
 	return 0
 }
 
-// knownMutatorTypes is the canonical set of registered mutator type
-// names, validated independent of the user's --only/--disable so that
-// directive typos surface even when the user has narrowed their set.
-var knownMutatorTypes = func() map[string]struct{} {
-	reg := mutator.NewRegistry()
-	out := make(map[string]struct{}, len(reg.Mutators()))
-	for _, m := range reg.Mutators() {
-		out[string(m.Type())] = struct{}{}
-	}
-	return out
-}()
+// defaultRegistry backs isKnownMutator so directive validation runs
+// against the same registered-type set as --only/--disable validation
+// (Registry.IsKnown). Names are validated independent of the user's
+// --only/--disable so directive typos surface even when the user has
+// narrowed their set.
+var defaultRegistry = mutator.NewRegistry()
 
 func isKnownMutator(name string) bool {
-	_, ok := knownMutatorTypes[name]
-	return ok
+	return defaultRegistry.IsKnown(name)
 }

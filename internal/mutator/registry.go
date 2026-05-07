@@ -11,33 +11,40 @@ type Mutator interface {
 	Discover(fset *token.FileSet, file *ast.File, src []byte) []MutantCandidate
 }
 
-// Registry holds all registered mutators.
+// Registry holds all registered mutators. typeSet mirrors mutators by
+// MutationType so name-validation lookups (IsKnown / UnknownNames) and
+// the directive parser share a single source of truth populated in
+// NewRegistry.
 type Registry struct {
 	mutators []Mutator
+	typeSet  map[string]struct{}
 }
 
 // NewRegistry creates a registry with all built-in mutators.
 func NewRegistry() *Registry {
-	return &Registry{
-		mutators: []Mutator{
-			&arithmeticBase{},
-			&conditionalsBoundary{},
-			&conditionalsNegation{},
-			&incrementDecrement{},
-			&invertNegatives{},
-			&invertAssignments{},
-			&invertBitwise{},
-			&invertBitwiseAssignments{},
-			&invertLogical{},
-			&invertLoopCtrl{},
-			&removeSelfAssignments{},
-			&branchIf{},
-			&branchElse{},
-			&branchCase{},
-			&expressionRemove{},
-			&statementRemove{},
-		},
+	mutators := []Mutator{
+		&arithmeticBase{},
+		&conditionalsBoundary{},
+		&conditionalsNegation{},
+		&incrementDecrement{},
+		&invertNegatives{},
+		&invertAssignments{},
+		&invertBitwise{},
+		&invertBitwiseAssignments{},
+		&invertLogical{},
+		&invertLoopCtrl{},
+		&removeSelfAssignments{},
+		&branchIf{},
+		&branchElse{},
+		&branchCase{},
+		&expressionRemove{},
+		&statementRemove{},
 	}
+	typeSet := make(map[string]struct{}, len(mutators))
+	for _, m := range mutators {
+		typeSet[string(m.Type())] = struct{}{}
+	}
+	return &Registry{mutators: mutators, typeSet: typeSet}
 }
 
 // Mutators returns all registered mutators.
@@ -45,18 +52,20 @@ func (r *Registry) Mutators() []Mutator {
 	return r.mutators
 }
 
+// IsKnown reports whether name matches a registered mutator type.
+func (r *Registry) IsKnown(name string) bool {
+	_, ok := r.typeSet[name]
+	return ok
+}
+
 // UnknownNames returns the subset of names that don't match any
 // registered mutator type. Used by callers that accept user-supplied
 // mutator lists (--only / --disable, config file) to surface typos
 // before silently filtering them out.
 func (r *Registry) UnknownNames(names []string) []string {
-	known := make(map[string]struct{}, len(r.mutators))
-	for _, m := range r.mutators {
-		known[string(m.Type())] = struct{}{}
-	}
 	var unknown []string
 	for _, n := range names {
-		if _, ok := known[n]; !ok {
+		if !r.IsKnown(n) {
 			unknown = append(unknown, n)
 		}
 	}

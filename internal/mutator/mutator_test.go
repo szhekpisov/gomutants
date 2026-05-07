@@ -761,6 +761,22 @@ func f() {
 
 // --- Registry ---
 
+func TestRegistryIsKnown(t *testing.T) {
+	reg := mutator.NewRegistry()
+
+	for _, name := range []string{"ARITHMETIC_BASE", "BRANCH_IF", "STATEMENT_REMOVE"} {
+		if !reg.IsKnown(name) {
+			t.Errorf("IsKnown(%q)=false, want true", name)
+		}
+	}
+
+	for _, name := range []string{"", "FOO", "ARTIHMETIC_BASE", "arithmetic_base"} {
+		if reg.IsKnown(name) {
+			t.Errorf("IsKnown(%q)=true, want false", name)
+		}
+	}
+}
+
 func TestRegistryUnknownNames(t *testing.T) {
 	reg := mutator.NewRegistry()
 
