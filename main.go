@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -220,8 +222,17 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// Get enabled mutators.
+	// Get enabled mutators. Validate names first so a typo in --only /
+	// --disable (or in the config file) surfaces as a stderr warning
+	// instead of a silent filter miss. EnabledMutators already ignores
+	// unknown names; warning is purely additive.
 	reg := mutator.NewRegistry()
+	for _, n := range reg.UnknownNames(cfg.Only) {
+		fmt.Fprintf(stderr, "gomutants: unknown mutator %q in --only (ignored)\n", n)
+	}
+	for _, n := range reg.UnknownNames(cfg.Disable) {
+		fmt.Fprintf(stderr, "gomutants: unknown mutator %q in --disable (ignored)\n", n)
+	}
 	enabledMutators := reg.EnabledMutators(cfg.Only, cfg.Disable)
 
 	term := report.NewTerminal(stdout, 0, cfg.Verbose)
@@ -392,13 +403,9 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	// 8. Run mutation testing.
+	// 8. Run mutation testing. pool.Run mutates the slice in place.
 	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose)
 	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, testTimeout, tmpDir, srcCache, projectDir, testMap)
-	// pool.Run modifies the mutants slice in place; the previous assignment
-	// `mutants = pool.Run(...)` was a no-op that surfaced as an equivalent
-	// STATEMENT_REMOVE mutant. As an ExprStmt the call is the only thing
-	// driving status updates, so STATEMENT_REMOVE here visibly drops them.
 	pool.Run(ctx, mutants, term2.OnResult)
 
 	// 8a. Persist updated cache (merging this run with prior entries
@@ -475,39 +482,32 @@ func run(ctx context.Context, args []string) error {
 	return nil
 }
 
+// readModuleName extracts the module path from go.mod by scanning for
+// the first `module <path>` line. Tolerates tabs and multiple spaces
+// between the directive and the path, and ignores inline comments
+// (`module foo // comment`) — fields[1] is always the path for a
+// well-formed go.mod. Prefer golang.org/x/mod/modfile if parsing ever
+// needs to handle deprecation markers, the rare `module ( ... )` block
+// form, or quoted module paths.
 func readModuleName(dir string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		return "", fmt.Errorf("reading go.mod: %w", err)
 	}
-	for _, line := range splitLines(data) {
-		// `module foo` — tolerate arbitrary whitespace (tabs, multiple
-		// spaces) between the directive and the path. Inline comments
-		// (`module foo // comment`) yield extra fields after fields[1]
-		// which we ignore — fields[1] is always the module path for a
-		// well-formed go.mod. Prefer golang.org/x/mod/modfile if parsing
-		// ever needs to handle `go.mod` deprecation markers or version
-		// directives.
-		fields := strings.Fields(string(line))
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
 		if len(fields) >= 2 && fields[0] == "module" {
 			return fields[1], nil
 		}
 	}
-	return "", fmt.Errorf("module name not found in go.mod")
-}
-
-func splitLines(data []byte) [][]byte {
-	var lines [][]byte
-	for len(data) > 0 {
-		i := 0
-		for i < len(data) && data[i] != '\n' {
-			i++
-		}
-		lines = append(lines, data[:i])
-		if i < len(data) {
-			i++ // skip \n
-		}
-		data = data[i:]
+	// bufio.Scanner caps lines at 64 KiB by default. A pathological
+	// go.mod with a longer-than-cap line before the module directive
+	// would surface as bufio.ErrTooLong here — we propagate it rather
+	// than silently returning "module name not found", which would
+	// mislead the user about what's wrong.
+	if err := sc.Err(); err != nil {
+		return "", fmt.Errorf("scanning go.mod: %w", err)
 	}
-	return lines
+	return "", fmt.Errorf("module name not found in go.mod")
 }

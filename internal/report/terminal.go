@@ -103,7 +103,7 @@ func (t *Terminal) Summary(r *Report) {
 	fmt.Fprintf(t.w, "  Lived:        %d  (%.1f%%)\n", r.MutantsLived, pct(r.MutantsLived, r.MutantsKilled+r.MutantsLived))
 	fmt.Fprintf(t.w, "  Not covered:  %d\n", r.MutantsNotCovered)
 	fmt.Fprintf(t.w, "  Not viable:   %d\n", r.MutantsNotViable)
-	fmt.Fprintf(t.w, "  Timed out:    %d\n", r.MutantsTotal-r.MutantsKilled-r.MutantsLived-r.MutantsNotCovered-r.MutantsNotViable)
+	fmt.Fprintf(t.w, "  Timed out:    %d\n", r.MutantsTimedOut)
 	if r.MutantsCached > 0 {
 		fmt.Fprintf(t.w, "  Cached:       %d  (skipped)\n", r.MutantsCached)
 	}

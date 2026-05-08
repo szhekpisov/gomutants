@@ -97,15 +97,15 @@ func TestPoolRunNoPending(t *testing.T) {
 		{ID: 2, Status: mutator.StatusKilled},
 	}
 
-	result := p.Run(context.Background(), mutants, nil)
-	if len(result) != 2 {
-		t.Fatalf("expected 2 mutants returned, got %d", len(result))
+	p.Run(context.Background(), mutants, nil)
+	if len(mutants) != 2 {
+		t.Fatalf("expected 2 mutants returned, got %d", len(mutants))
 	}
-	if result[0].Status != mutator.StatusNotCovered {
-		t.Errorf("mutant 1 status=%v, want NOT_COVERED", result[0].Status)
+	if mutants[0].Status != mutator.StatusNotCovered {
+		t.Errorf("mutant 1 status=%v, want NOT_COVERED", mutants[0].Status)
 	}
-	if result[1].Status != mutator.StatusKilled {
-		t.Errorf("mutant 2 status=%v, want KILLED", result[1].Status)
+	if mutants[1].Status != mutator.StatusKilled {
+		t.Errorf("mutant 2 status=%v, want KILLED", mutants[1].Status)
 	}
 }
 
@@ -320,11 +320,28 @@ func TestRunCoverageStdoutGoesToStderr(t *testing.T) {
 	}
 }
 
+// TestPoolRunEmpty pins the early-return when no mutants are pending:
+// nil input must not panic, and an all-terminal slice must not have any
+// statuses overwritten by the pending-mutant pipeline.
 func TestPoolRunEmpty(t *testing.T) {
-	p := NewPool(2, 0, 30*time.Second, t.TempDir(), nil, ".", nil)
-	result := p.Run(context.Background(), nil, nil)
-	if result != nil {
-		t.Errorf("expected nil for nil input, got %v", result)
+	tmpDir := t.TempDir()
+	p := NewPool(2, 0, 30*time.Second, tmpDir, nil, ".", nil)
+
+	// nil input — Run must early-exit cleanly.
+	p.Run(context.Background(), nil, nil)
+
+	// Non-nil but no Pending — statuses must be preserved verbatim.
+	mutants := []mutator.Mutant{
+		{ID: 1, Status: mutator.StatusKilled},
+		{ID: 2, Status: mutator.StatusLived},
+	}
+	called := false
+	p.Run(context.Background(), mutants, func(mutator.Mutant) { called = true })
+	if mutants[0].Status != mutator.StatusKilled || mutants[1].Status != mutator.StatusLived {
+		t.Errorf("statuses changed on no-pending Run: %v", mutants)
+	}
+	if called {
+		t.Error("onResult called with no pending mutants — pending filter is wrong")
 	}
 }
 
@@ -371,30 +388,27 @@ func TestPoolRunWithPending(t *testing.T) {
 		},
 	}
 
-	var (
-		callbackCount int
-		result        []mutator.Mutant
-	)
+	var callbackCount int
 	runWithDeadline(t, 60*time.Second, func() {
-		result = p.Run(context.Background(), mutants, func(m mutator.Mutant) {
+		p.Run(context.Background(), mutants, func(m mutator.Mutant) {
 			callbackCount++
 		})
 	})
 
-	if len(result) != 3 {
-		t.Fatalf("expected 3 mutants, got %d", len(result))
+	if len(mutants) != 3 {
+		t.Fatalf("expected 3 mutants, got %d", len(mutants))
 	}
 
 	// Mutants 1 and 2 should be tested (KILLED since tests check result).
-	if result[0].Status != mutator.StatusKilled {
-		t.Errorf("mutant 1: status=%v, want KILLED", result[0].Status)
+	if mutants[0].Status != mutator.StatusKilled {
+		t.Errorf("mutant 1: status=%v, want KILLED", mutants[0].Status)
 	}
-	if result[1].Status != mutator.StatusKilled {
-		t.Errorf("mutant 2: status=%v, want KILLED", result[1].Status)
+	if mutants[1].Status != mutator.StatusKilled {
+		t.Errorf("mutant 2: status=%v, want KILLED", mutants[1].Status)
 	}
 	// Mutant 3 unchanged.
-	if result[2].Status != mutator.StatusNotCovered {
-		t.Errorf("mutant 3: status=%v, want NOT_COVERED", result[2].Status)
+	if mutants[2].Status != mutator.StatusNotCovered {
+		t.Errorf("mutant 3: status=%v, want NOT_COVERED", mutants[2].Status)
 	}
 	if callbackCount != 2 {
 		t.Errorf("callback called %d times, want 2", callbackCount)
@@ -458,11 +472,11 @@ func TestPoolRunNonDenseIDs(t *testing.T) {
 			StartOffset: plusIdx, EndOffset: plusIdx + 1, Replacement: "*",
 			Status: mutator.StatusPending},
 	}
-	result := p.Run(context.Background(), mutants, nil)
-	if len(result) != 2 {
-		t.Fatalf("len(result)=%d, want 2", len(result))
+	p.Run(context.Background(), mutants, nil)
+	if len(mutants) != 2 {
+		t.Fatalf("len(mutants)=%d, want 2", len(mutants))
 	}
-	for _, m := range result {
+	for _, m := range mutants {
 		if m.Status == mutator.StatusPending {
 			t.Errorf("mutant ID=%d still Pending — ID→index lookup failed", m.ID)
 		}
@@ -493,9 +507,9 @@ func TestPoolRunCancelled(t *testing.T) {
 	}
 
 	// Should not hang — cancelled context means workers exit early.
-	result := p.Run(ctx, mutants, nil)
-	if len(result) != 1 {
-		t.Fatalf("expected 1 mutant, got %d", len(result))
+	p.Run(ctx, mutants, nil)
+	if len(mutants) != 1 {
+		t.Fatalf("expected 1 mutant, got %d", len(mutants))
 	}
 }
 
