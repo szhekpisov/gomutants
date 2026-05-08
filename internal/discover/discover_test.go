@@ -56,7 +56,7 @@ func Add(a, b int) int {
 
 	reg := mutator.NewRegistry()
 	fset := token.NewFileSet()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/test")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/test").Mutants
 
 	// "a + b" should produce at least 1 ARITHMETIC_BASE mutant.
 	if len(mutants) == 0 {
@@ -97,7 +97,7 @@ func TestDiscoverUnparseableFile(t *testing.T) {
 	reg := mutator.NewRegistry()
 	fset := token.NewFileSet()
 	// Should not panic — unparseable files are skipped.
-	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com").Mutants
 	if len(mutants) != 0 {
 		t.Errorf("expected 0 mutants from unparseable file, got %d", len(mutants))
 	}
@@ -125,7 +125,7 @@ func TestDiscoverPartiallyInvalidFileSkips(t *testing.T) {
 	}
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com").Mutants
 	if len(mutants) != 0 {
 		t.Errorf("parseFile error must short-circuit discovery; got %d mutants from partial AST", len(mutants))
 	}
@@ -349,7 +349,7 @@ func TestDiscoverMultiPackage(t *testing.T) {
 
 	reg := mutator.NewRegistry()
 	fset := token.NewFileSet()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/mod")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/mod").Mutants
 
 	if len(mutants) < 2 {
 		t.Fatalf("expected at least 2 mutants across packages, got %d", len(mutants))
@@ -381,7 +381,7 @@ func TestDiscoverRelFileNoCommonPrefix(t *testing.T) {
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "unrelated/module")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "unrelated/module").Mutants
 
 	if len(mutants) < 2 {
 		t.Fatalf("expected at least 2 mutants, got %d", len(mutants))
@@ -423,7 +423,7 @@ func f() int {
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com").Mutants
 
 	// Should have multiple mutants on the same line, testing sort comparisons.
 	if len(mutants) < 2 {
@@ -460,7 +460,7 @@ func f(a, b int) int { return a - b }
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE", "INVERT_NEGATIVES"}, nil), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE", "INVERT_NEGATIVES"}, nil), dir, "example.com").Mutants
 
 	if len(mutants) != 2 {
 		t.Fatalf("expected 2 mutants, got %d", len(mutants))
@@ -491,7 +491,7 @@ func f() int { return 1 + 2 * 3 }
 	pkgs := []Package{{Dir: dir, ImportPath: "example.com/line", GoFiles: []string{"line.go"}}}
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com").Mutants
 
 	// Expect 2 mutants: one for '+' and one for '*'.
 	if len(mutants) != 2 {
@@ -520,7 +520,7 @@ func TestDiscoverSortMultiFile(t *testing.T) {
 	pkgs := []Package{{Dir: dir, ImportPath: "example.com/multi", GoFiles: []string{"b.go", "a.go"}}}
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com").Mutants
 
 	if len(mutants) != 2 {
 		t.Fatalf("expected 2 mutants, got %d", len(mutants))
@@ -549,7 +549,7 @@ func f(a, b int) int { return a - b }
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE", "INVERT_NEGATIVES"}, nil), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE", "INVERT_NEGATIVES"}, nil), dir, "example.com").Mutants
 
 	// Should have 2 mutants at the same position but different types.
 	if len(mutants) != 2 {
@@ -585,7 +585,7 @@ func TestParseFileReadError(t *testing.T) {
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
 	// parseFile will succeed on parser.ParseFile but fail on readFileBytes — file is skipped.
-	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com").Mutants
 	if len(mutants) != 0 {
 		t.Errorf("expected 0 mutants when readFileBytes fails, got %d", len(mutants))
 	}
@@ -607,7 +607,7 @@ func TestDiscoverRelPathEmpty(t *testing.T) {
 		{Dir: dir, ImportPath: "beta", GoFiles: []string{"x.go"}},
 	}
 
-	mutants := Discover(fset, pkgsTwo, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, dir)
+	mutants := Discover(fset, pkgsTwo, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, dir).Mutants
 	for _, m := range mutants {
 		if m.RelFile == "" {
 			t.Error("RelFile should not be empty")
@@ -635,7 +635,7 @@ func TestDiscoverSortOrder(t *testing.T) {
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com/mod")
+	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com/mod").Mutants
 
 	// Verify file ordering: a.go mutants come before b.go mutants.
 	var aIdx, bIdx []int
@@ -688,7 +688,7 @@ func TestDiscoverRelFileSubEmpty(t *testing.T) {
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/mod")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/mod").Mutants
 	if len(mutants) == 0 {
 		t.Fatal("expected mutants")
 	}
@@ -715,7 +715,7 @@ func TestDiscoverRelFileSubNonEmpty(t *testing.T) {
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com").Mutants
 
 	// a.go has common prefix "example.com/mod/a", sub == "" → RelFile = "a.go"
 	// b.go has common prefix "example.com/mod/a", sub = "/b" → "b" → RelFile = "b/b.go"
@@ -825,7 +825,7 @@ func TestDiscoverSortLinePrimary(t *testing.T) {
 	reg := mutator.NewRegistry()
 	mutants := Discover(fset, pkgs,
 		reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil),
-		dir, "example.com")
+		dir, "example.com").Mutants
 	if len(mutants) < 2 {
 		t.Fatalf("expected >=2 arithmetic mutants, got %d", len(mutants))
 	}
@@ -972,7 +972,7 @@ func TestDiscoverContinuesPastUnparseable(t *testing.T) {
 
 	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com")
+	mutants := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com").Mutants
 	if len(mutants) == 0 {
 		t.Fatal("expected mutants from good.go even after bad.go was skipped — INVERT_LOOP_CTRL on the unparseable-continue mutates the loop into an early exit")
 	}

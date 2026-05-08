@@ -76,12 +76,30 @@ func decodeGoListJSON(r io.Reader) ([]Package, error) {
 	return pkgs, nil
 }
 
+// ParsedFile is a cached source file: bytes plus the AST parsed with
+// parser.ParseComments. FilterByDirectivesWithCache reuses both so it
+// doesn't re-read or re-parse during the directives pass.
+type ParsedFile struct {
+	Src  []byte
+	File *ast.File
+}
+
+// Result is the discovery output: the candidate mutants plus the per-file
+// parse cache keyed by absolute path. Pass Files into
+// FilterByDirectivesWithCache to skip the duplicate read+parse.
+type Result struct {
+	Mutants []mutator.Mutant
+	Files   map[string]*ParsedFile
+}
+
 // Discover walks the given packages, parses each source file, invokes all
-// mutators, and returns a sorted list of Mutants with sequential IDs.
+// mutators, and returns a sorted list of Mutants with sequential IDs
+// alongside the parse cache so downstream filters can reuse the AST.
 // moduleRoot is the absolute path to the project root (for computing absolute paths).
 // goModule is the Go module name (for computing gremlins-compatible relative paths).
-func Discover(fset *token.FileSet, pkgs []Package, mutators []mutator.Mutator, moduleRoot, goModule string) []mutator.Mutant {
+func Discover(fset *token.FileSet, pkgs []Package, mutators []mutator.Mutator, moduleRoot, goModule string) *Result {
 	var allCandidates []mutator.MutantCandidate
+	files := make(map[string]*ParsedFile)
 
 	for _, pkg := range pkgs {
 		for _, filename := range pkg.GoFiles {
@@ -93,6 +111,7 @@ func Discover(fset *token.FileSet, pkgs []Package, mutators []mutator.Mutator, m
 				fmt.Fprintf(os.Stderr, "gomutants: skipping unparseable %s: %v\n", absPath, err)
 				continue
 			}
+			files[absPath] = &ParsedFile{Src: src, File: file}
 			for _, m := range mutators {
 				candidates := m.Discover(fset, file, src)
 				allCandidates = append(allCandidates, candidates...)
@@ -147,16 +166,18 @@ func Discover(fset *token.FileSet, pkgs []Package, mutators []mutator.Mutator, m
 		}
 	}
 
-	return mutants
+	return &Result{Mutants: mutants, Files: files}
 }
 
+// parseFile reads and parses one file with parser.ParseComments so the
+// returned *ast.File can be reused by FilterByDirectivesWithCache without
+// re-parsing. The bytes are read once and handed to the parser.
 func parseFile(fset *token.FileSet, path string) ([]byte, *ast.File, error) {
-	file, err := parser.ParseFile(fset, path, nil, 0)
+	src, err := readFileBytes(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	// Re-read source bytes for byte-level patching.
-	src, err := readFileBytes(path)
+	file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
 	if err != nil {
 		return nil, nil, err
 	}

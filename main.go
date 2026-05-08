@@ -278,7 +278,8 @@ func run(ctx context.Context, args []string) error {
 	// 5. Discover mutants.
 	term.Phase("Discovering mutants...")
 	fset := token.NewFileSet()
-	mutants := discover.Discover(fset, pkgs, enabledMutators, projectDir, goModule)
+	discovered := discover.Discover(fset, pkgs, enabledMutators, projectDir, goModule)
+	mutants := discovered.Mutants
 	if cfg.ChangedSince != "" {
 		gitRoot, err := discover.GitRoot(ctx, projectDir)
 		if err != nil {
@@ -292,7 +293,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	discover.FilterByCoverage(mutants, profile, pkgs, goModule)
 
-	mutants, suppressed, err := discover.FilterByDirectives(fset, mutants)
+	mutants, suppressed, err := discover.FilterByDirectivesWithCache(fset, mutants, discovered.Files)
 	if err != nil {
 		return fmt.Errorf("applying directives: %w", err)
 	}

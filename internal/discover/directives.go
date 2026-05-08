@@ -61,11 +61,23 @@ func warnf(w io.Writer, relPath string, line int, format string, args ...any) {
 //
 // Not idempotent: warnings are emitted on each call. Call once per run,
 // after all other discovery filters have run.
+//
+// This entry point reads and parses each file itself. Prefer
+// FilterByDirectivesWithCache when you already have the parse cache from
+// Discover — it skips the duplicate read+parse.
 func FilterByDirectives(fset *token.FileSet, mutants []mutator.Mutant) ([]mutator.Mutant, []Suppression, error) {
-	return filterByDirectives(fset, mutants, os.Stderr)
+	return filterByDirectives(fset, mutants, nil, os.Stderr)
 }
 
-func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, warn io.Writer) ([]mutator.Mutant, []Suppression, error) {
+// FilterByDirectivesWithCache is the cache-aware variant: it reuses the
+// (src, *ast.File) entries from Discover.Files instead of reading and
+// parsing each file a second time. Files entries missing from the cache
+// fall back to the read+parse path so this also tolerates partial caches.
+func FilterByDirectivesWithCache(fset *token.FileSet, mutants []mutator.Mutant, files map[string]*ParsedFile) ([]mutator.Mutant, []Suppression, error) {
+	return filterByDirectives(fset, mutants, files, os.Stderr)
+}
+
+func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, files map[string]*ParsedFile, warn io.Writer) ([]mutator.Mutant, []Suppression, error) {
 	if len(mutants) == 0 {
 		return mutants, nil, nil
 	}
@@ -76,7 +88,7 @@ func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, warn io.W
 		if _, seen := indexes[m.File]; seen {
 			continue
 		}
-		idx, err := buildFileIndex(fset, m.File, m.RelFile, warn)
+		idx, err := indexFor(fset, m.File, m.RelFile, files, warn)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -111,7 +123,12 @@ type fileIndex struct {
 	lines    []string
 }
 
-func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (*fileIndex, error) {
+// indexFor returns the per-file directive index, preferring the parse
+// cache. Cache misses fall back to reading and parsing the file from disk.
+func indexFor(fset *token.FileSet, path, relPath string, files map[string]*ParsedFile, warn io.Writer) (*fileIndex, error) {
+	if pf, ok := files[path]; ok {
+		return buildFileIndex(fset, pf.Src, pf.File, relPath, warn), nil
+	}
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
@@ -127,6 +144,17 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 	// gomutants:disable-next-line BRANCH_IF reason="unreachable in normal flow: Discover already skips files where parser.ParseFile errors, so we never reach FilterByDirectives with such a file"
 	if err != nil {
 		return &fileIndex{}, nil
+	}
+	return buildFileIndex(fset, src, file, relPath, warn), nil
+}
+
+// buildFileIndex builds the per-file directive index from already-parsed
+// source. Both FilterByDirectives (after a fresh read+parse) and
+// FilterByDirectivesWithCache (via the Discover cache) funnel through here.
+func buildFileIndex(fset *token.FileSet, src []byte, file *ast.File, relPath string, warn io.Writer) *fileIndex {
+	// gomutants:disable-next-line BRANCH_IF reason="fast-path optimisation; identical observable when removed (the slow path also yields an empty index for files without the prefix)"
+	if !bytes.Contains(src, directivePrefixBytes) {
+		return &fileIndex{}
 	}
 
 	funcRangeByDocPos := make(map[token.Pos][2]int)
@@ -201,7 +229,7 @@ func buildFileIndex(fset *token.FileSet, path, relPath string, warn io.Writer) (
 		}
 		idx.nextLine[target] = append(idx.nextLine[target], p.d)
 	}
-	return idx, nil
+	return idx
 }
 
 func matchMutant(idx *fileIndex, m mutator.Mutant) (directive, bool) {
