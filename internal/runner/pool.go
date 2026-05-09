@@ -22,7 +22,7 @@ type ResultCallback func(m mutator.Mutant)
 type Pool struct {
 	workers    int
 	testCPU    int
-	timeout    time.Duration
+	policy     TimeoutPolicy
 	tmpDir     string
 	srcCache   map[string][]byte
 	projectDir string
@@ -43,11 +43,11 @@ func childGOMAXPROCSFor(workers int) int {
 
 // NewPool creates a worker pool. testCPU == 0 means "don't pass -cpu to the
 // inner go test" (let go test default to GOMAXPROCS).
-func NewPool(workers, testCPU int, timeout time.Duration, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
+func NewPool(workers, testCPU int, policy TimeoutPolicy, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
 	return &Pool{
 		workers:    workers,
 		testCPU:    testCPU,
-		timeout:    timeout,
+		policy:     policy,
 		tmpDir:     tmpDir,
 		srcCache:   srcCache,
 		projectDir: projectDir,
@@ -151,7 +151,7 @@ func (p *Pool) createWorkers() []*Worker {
 	workers := make([]*Worker, 0, p.workers)
 	cap := childGOMAXPROCSFor(p.workers)
 	for i := range p.workers {
-		w, err := newWorkerFunc(i, p.tmpDir, p.timeout, p.srcCache, p.projectDir, p.testMap)
+		w, err := newWorkerFunc(i, p.tmpDir, p.policy, p.srcCache, p.projectDir, p.testMap)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "gomutants: NewWorker %d failed: %v\n", i, err)
 			continue

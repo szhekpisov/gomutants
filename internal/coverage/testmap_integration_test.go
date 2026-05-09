@@ -435,7 +435,7 @@ func TestRunCompiledTestStaleProfileNotReturned(t *testing.T) {
 		importPath: "testmod",
 		dir:        tmpDir,
 	}
-	blocks := runCompiledTest(ctx, cp, "TestAnything", profilePath)
+	blocks, _ := runCompiledTest(ctx, cp, "TestAnything", profilePath)
 	if blocks != nil {
 		t.Errorf("cmd.Run failed but got %d blocks from stale profile — BRANCH_IF on the err check lets it through", len(blocks))
 	}
@@ -498,7 +498,7 @@ func TestRunCompiledTestFailure(t *testing.T) {
 	}
 
 	profilePath := filepath.Join(tmpDir, "test.cov")
-	blocks := runCompiledTest(ctx, cp, "TestAdd", profilePath)
+	blocks, _ := runCompiledTest(ctx, cp, "TestAdd", profilePath)
 	if blocks != nil {
 		t.Errorf("expected nil blocks for failed test binary, got %d", len(blocks))
 	}
@@ -535,7 +535,7 @@ func TestRunCompiledTestParseError(t *testing.T) {
 	defer func() { parseFileFunc = origParse }()
 
 	profilePath := filepath.Join(tmpDir, "test.cov")
-	blocks := runCompiledTest(ctx, cp, "TestAdd", profilePath)
+	blocks, _ := runCompiledTest(ctx, cp, "TestAdd", profilePath)
 	if blocks != nil {
 		t.Errorf("expected nil blocks when ParseFile fails, got %d", len(blocks))
 	}
@@ -568,7 +568,7 @@ func TestRunCompiledTestBadProfile(t *testing.T) {
 	// Use a directory as the profile path — go test will fail to write to it.
 	profileDir := filepath.Join(tmpDir, "profdir")
 	os.MkdirAll(profileDir, 0o755)
-	blocks := runCompiledTest(ctx, cp, "TestAdd", profileDir)
+	blocks, _ := runCompiledTest(ctx, cp, "TestAdd", profileDir)
 	// cmd.Run fails because -test.coverprofile can't write to a directory.
 	if blocks != nil {
 		t.Logf("blocks=%d (expected nil or empty)", len(blocks))
@@ -600,12 +600,15 @@ func TestRunCompiledTest(t *testing.T) {
 	}
 
 	profilePath := filepath.Join(tmpDir, "test.cov")
-	blocks := runCompiledTest(ctx, cp, "TestAdd", profilePath)
+	blocks, dur := runCompiledTest(ctx, cp, "TestAdd", profilePath)
 	if len(blocks) == 0 {
 		t.Error("expected coverage blocks from TestAdd")
 	}
+	if dur <= 0 {
+		t.Errorf("expected positive duration from runCompiledTest, got %v", dur)
+	}
 
 	// Running a non-existent test should return nil/empty blocks.
-	blocks = runCompiledTest(ctx, cp, "TestNonExistent", profilePath)
+	blocks, _ = runCompiledTest(ctx, cp, "TestNonExistent", profilePath)
 	_ = blocks
 }

@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -142,6 +143,9 @@ func run(ctx context.Context, args []string) error {
 		workers            int
 		testCPU            int
 		timeoutCoefficient int
+		timeoutMargin      float64
+		timeoutMin         time.Duration
+		adaptiveTimeout    config.AdaptiveTimeoutFlag
 		coverPkg           string
 		output             string
 		configPath         string
@@ -161,7 +165,20 @@ func run(ctx context.Context, args []string) error {
 	fs.IntVar(&workers, "workers", 0, "parallel workers (default: NumCPU)")
 	fs.IntVar(&workers, "w", 0, "parallel workers (shorthand)")
 	fs.IntVar(&testCPU, "test-cpu", 0, "value passed to inner go test -cpu per mutant (0 omits the flag; go test then uses GOMAXPROCS)")
-	fs.IntVar(&timeoutCoefficient, "timeout-coefficient", 0, "multiply baseline test time (default: 10)")
+	fs.IntVar(&timeoutCoefficient, "timeout-coefficient", 0, "multiply baseline test time for the global timeout ceiling (default: 10)")
+	fs.Float64Var(&timeoutMargin, "timeout-margin", 0, fmt.Sprintf("scale per-test sums into the per-mutant adaptive timeout (default: %g)", config.DefaultTimeoutMargin))
+	fs.DurationVar(&timeoutMin, "timeout-min", 0, fmt.Sprintf("floor for the per-mutant adaptive timeout (default: %s)", config.DefaultTimeoutMin))
+	// BoolFunc lets us distinguish "user set --adaptive-timeout=false"
+	// from "user did not pass the flag" — the merge layer in
+	// (*Config).ApplyFlags relies on the .Set bit to override YAML.
+	fs.BoolFunc("adaptive-timeout", "use per-test durations to size each mutant's timeout (default: true; pass =false to disable)", func(s string) error {
+		v, err := strconv.ParseBool(s)
+		if err != nil {
+			return fmt.Errorf("--adaptive-timeout: %w", err)
+		}
+		adaptiveTimeout = config.AdaptiveTimeoutFlag{Set: true, Value: v}
+		return nil
+	})
 	fs.StringVar(&coverPkg, "coverpkg", "", "coverage package pattern")
 	fs.StringVar(&output, "output", "", "JSON report path")
 	fs.StringVar(&output, "o", "", "JSON report path (shorthand)")
@@ -202,7 +219,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose)
+	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, timeoutMargin, timeoutMin, adaptiveTimeout, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose)
 	cfg.ResolveCache()
 
 	packages := fs.Args()
@@ -405,8 +422,17 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	// 8. Run mutation testing. pool.Run mutates the slice in place.
+	// TimeoutPolicy resolves per-mutant deadlines from the per-test
+	// durations recorded on the testMap, falling back to the global
+	// baseline×coefficient ceiling. testTimeout stays the absolute cap.
+	policy := runner.TimeoutPolicy{
+		Global:   testTimeout,
+		Margin:   cfg.TimeoutMargin,
+		Min:      cfg.TimeoutMin,
+		Adaptive: cfg.AdaptiveTimeoutEnabled(),
+	}
 	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose)
-	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, testTimeout, tmpDir, srcCache, projectDir, testMap)
+	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, policy, tmpDir, srcCache, projectDir, testMap)
 	pool.Run(ctx, mutants, term2.OnResult)
 
 	// 8a. Persist updated cache (merging this run with prior entries

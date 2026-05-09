@@ -144,7 +144,7 @@ type Worker struct {
 	id          int
 	tmpSrcPath  string // Stable temp source file for this worker.
 	overlayPath string // Stable overlay JSON file for this worker.
-	timeout     time.Duration
+	policy      TimeoutPolicy
 	sourceCache map[string][]byte // Read-only, shared across workers.
 	projectDir  string            // Working directory for go test.
 	testMap     *coverage.TestMap  // Per-test coverage map (may be nil).
@@ -163,7 +163,7 @@ type Worker struct {
 }
 
 // NewWorker creates a worker with stable temp file paths.
-func NewWorker(id int, tmpDir string, timeout time.Duration, sourceCache map[string][]byte, projectDir string, testMap *coverage.TestMap) (*Worker, error) {
+func NewWorker(id int, tmpDir string, policy TimeoutPolicy, sourceCache map[string][]byte, projectDir string, testMap *coverage.TestMap) (*Worker, error) {
 	tmpSrc := filepath.Join(tmpDir, fmt.Sprintf("worker-%d.go", id))
 	overlayFile := filepath.Join(tmpDir, fmt.Sprintf("overlay-%d.json", id))
 
@@ -179,7 +179,7 @@ func NewWorker(id int, tmpDir string, timeout time.Duration, sourceCache map[str
 		id:          id,
 		tmpSrcPath:  tmpSrc,
 		overlayPath: overlayFile,
-		timeout:     timeout,
+		policy:      policy,
 		sourceCache: sourceCache,
 		projectDir:  projectDir,
 		testMap:     testMap,
@@ -222,11 +222,16 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 		return m
 	}
 
-	// 5. Run go test.
-	testCtx, cancel := context.WithTimeout(ctx, w.timeout)
+	// 5. Compute the per-mutant timeout once and reuse it for both the
+	// outer context deadline (which feeds exec.CommandContext's
+	// SIGKILL-on-expiry) and the inner -timeout flag (which lets `go test`
+	// exit cleanly with its own timeout error). Computing once means an
+	// odd-shaped TimeoutPolicy can't desync the two.
+	timeout := w.policy.For(w.testMap, m)
+	testCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := w.buildTestArgs(m, shortFlagFromEnv())
+	args := w.buildTestArgs(m, shortFlagFromEnv(), timeout)
 	cmd, stdout, stderr := w.makeTestCmd(testCtx, args)
 
 	if err := cmd.Start(); err != nil {
@@ -330,12 +335,19 @@ func (w *Worker) makeTestCmd(ctx context.Context, args []string) (*exec.Cmd, *ca
 // buildTestArgs constructs the `go test` argv for a single mutant. Split
 // out so callers can verify the -short, -run, and package arg wiring
 // without spinning up a subprocess.
-func (w *Worker) buildTestArgs(m mutator.Mutant, short bool) []string {
+//
+// `timeout` is the resolved per-mutant deadline (computed by the caller
+// from TimeoutPolicy), threaded into both the outer context and the
+// `-timeout=` flag. Passing it explicitly — instead of reading w.policy
+// from inside this function — keeps buildTestArgs a pure transformation
+// over its inputs and matches what the unit tests can stage without
+// reaching into the policy struct.
+func (w *Worker) buildTestArgs(m mutator.Mutant, short bool, timeout time.Duration) []string {
 	// -vet=off: vet runs in the user's CI on clean source; re-running it
 	// per mutant is pure overhead. Measured ~17–39% per-mutant wall-clock
 	// reduction on representative packages.
 	args := []string{"test", "-count=1", "-failfast", "-vet=off",
-		fmt.Sprintf("-timeout=%s", w.timeout),
+		fmt.Sprintf("-timeout=%s", timeout),
 		fmt.Sprintf("-overlay=%s", w.overlayPath),
 	}
 	if w.testCPU > 0 {

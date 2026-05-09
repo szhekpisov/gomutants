@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -134,7 +135,7 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
-	cfg.ApplyFlags(8, 4, 15, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", "cache.json", true, true)
+	cfg.ApplyFlags(8, 4, 15, 4.5, 5*time.Second, AdaptiveTimeoutFlag{Set: true, Value: false}, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", "cache.json", true, true)
 
 	if cfg.Workers != 8 {
 		t.Errorf("Workers=%d, want 8", cfg.Workers)
@@ -144,6 +145,15 @@ func TestApplyFlags(t *testing.T) {
 	}
 	if cfg.TimeoutCoefficient != 15 {
 		t.Errorf("TimeoutCoefficient=%d, want 15", cfg.TimeoutCoefficient)
+	}
+	if cfg.TimeoutMargin != 4.5 {
+		t.Errorf("TimeoutMargin=%v, want 4.5", cfg.TimeoutMargin)
+	}
+	if cfg.TimeoutMin != 5*time.Second {
+		t.Errorf("TimeoutMin=%v, want 5s", cfg.TimeoutMin)
+	}
+	if cfg.AdaptiveTimeoutEnabled() {
+		t.Errorf("AdaptiveTimeoutEnabled=true, want false (CLI override)")
 	}
 	if cfg.CoverPkg != "./pkg/..." {
 		t.Errorf("CoverPkg=%q", cfg.CoverPkg)
@@ -177,7 +187,7 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
-	cfg.ApplyFlags(0, 0, 0, "", "", "", "", "", "", false, false)
+	cfg.ApplyFlags(0, 0, 0, 0, 0, AdaptiveTimeoutFlag{}, "", "", "", "", "", "", false, false)
 
 	if cfg.Workers != orig.Workers {
 		t.Errorf("Workers changed from %d to %d", orig.Workers, cfg.Workers)

@@ -230,7 +230,10 @@ Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutation
 |------|-------|---------|-------------|
 | `--workers` | `-w` | NumCPU | Parallel workers |
 | `--test-cpu` | | 0 (omit) | Value passed to inner `go test -cpu` per mutant; 0 lets go test use `GOMAXPROCS` |
-| `--timeout-coefficient` | | 10 | Multiplier applied to baseline test time for the per-mutant timeout |
+| `--timeout-coefficient` | | 10 | Multiplier applied to baseline test time for the **global timeout ceiling** (also the per-mutant timeout when `--adaptive-timeout=false`) |
+| `--adaptive-timeout` | | true | Use the per-test durations recorded during the coverage build to size each mutant's timeout. Pass `=false` to fall back to the single global ceiling. |
+| `--timeout-margin` | | 3.0 | When adaptive: `per-mutant timeout = sum(selected test durations) × this`, clamped to `[--timeout-min, --timeout-coefficient × baseline]` |
+| `--timeout-min` | | 2s | Floor for the per-mutant adaptive timeout. Absorbs cold-start, child fork, and GC pause overhead that doesn't scale with the underlying test work. |
 | `--coverpkg` | | | Coverage package pattern (forwarded to `go test -coverpkg`) |
 | `--output` | `-o` | `mutation-report.json` | JSON report path |
 | `--config` | | `.gomutants.yml` | Config file path |
@@ -285,8 +288,11 @@ $ gomutants -o report.json --coverpkg ./pkg/mypackage/... \
 
 ```yaml
 workers: 10
-test-cpu: 0           # 0 = let go test use GOMAXPROCS
+test-cpu: 0             # 0 = let go test use GOMAXPROCS
 timeout-coefficient: 10
+adaptive-timeout: true  # per-test adaptive sizing; set false for single global timeout
+timeout-margin: 3.0     # multiplier on per-test sums (only when adaptive)
+timeout-min: 2s         # floor on per-mutant adaptive timeout
 coverpkg: "./pkg/mypackage/..."
 output: mutation-report.json
 changed-since: ""     # set to e.g. "main" to scope runs by default
@@ -409,17 +415,18 @@ Compatible with the gremlins JSON format:
 
 1. **Resolve packages** via `go list -json`.
 2. **Collect coverage** with `go test -coverprofile`. Mutants on uncovered lines are filtered upfront as `NOT_COVERED`.
-3. **Measure baseline test time** to set a sane per-mutant timeout (multiplied by `--timeout-coefficient`).
+3. **Measure baseline test time** to set the global timeout ceiling (`baseline × --timeout-coefficient`). With `--adaptive-timeout=false` this also becomes every mutant's deadline.
 4. **Discover mutants** by walking the AST and emitting byte-level patches. Address-of `&` is recognised and skipped; unary `-` is emitted by exactly one mutator.
-5. **Build per-test coverage map.** Test binaries are compiled once; each test runs in isolation with `-test.run=<one>` to record the lines it covers.
+5. **Build per-test coverage map.** Test binaries are compiled once; each test runs in isolation with `-test.run=<one>` to record the lines it covers — and its wall-time, used for adaptive per-mutant timeouts.
 6. **Test mutants** in parallel:
    * Each worker owns a stable temp source file + overlay JSON.
    * Mutations are applied as byte-level patches; the original tree is never written to.
    * The mutant's covered tests are looked up; only those run via `go test -overlay -run=<regex>`.
    * Each `go test` child runs in its own process group with a 2 GiB RSS cap; output is capped at 1 MiB per stream.
 
-Three performance optimizations layered on top:
+Performance optimizations layered on top:
 
+* **Per-mutant adaptive timeout.** Each mutant's deadline is `clamp(sum(selected test durations) × --timeout-margin, --timeout-min, global ceiling)`. A 50ms unit test gets a 2s floor instead of waiting out a multi-minute whole-suite ceiling, so infinite-loop mutants on fast packages trip in seconds rather than minutes. Falls back to the per-package sum when no per-test set is known, then to the global ceiling. Disable with `--adaptive-timeout=false`.
 * **`GOMAXPROCS=NumCPU/workers` per child.** Without this, `--workers=10` on a 10-core box would have each child also assume 10 cores, oversubscribing 100×. With it, each child compiles + tests within its share.
 * **Sort pending mutants by `(Pkg, File, Offset)` before dispatch.** The first mutant in a package pays the cold compile; subsequent ones reuse the build cache for deps and stdlib. This sort alone was a 17% wall-clock reduction.
 * **`-vet=off` on the inner `go test`.** Vet runs in the user's CI on clean source; re-running it for every mutant is wasted work. Measured 17–39% per-mutant wall-clock reduction on representative packages.

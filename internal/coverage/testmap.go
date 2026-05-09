@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Function variables for testing.
@@ -28,10 +29,35 @@ var (
 type TestMap struct {
 	// index maps "file:line" to a set of test function names.
 	index map[string]map[string]bool
+
+	// durations is the per-test execution time captured during the
+	// per-test coverage build, keyed by (pkg, test). Per-mutant adaptive
+	// timeout reads from this directly. Same-named tests in different
+	// packages get distinct entries because go test scopes -run within
+	// a single package.
+	durations map[testKey]time.Duration
+
+	// pkgDurations is the running sum of per-test durations per package,
+	// used as the per-package fallback when a mutant has no per-test
+	// covering set (e.g. mutated line outside any covered block). Kept
+	// alongside durations so package totals don't require a fresh
+	// O(n) scan on every Worker.computeTimeout call.
+	pkgDurations map[string]time.Duration
+}
+
+// testKey identifies a single (pkg, test) timing entry. Using a struct
+// instead of "pkg::name" string concatenation avoids the parsing cost
+// on every lookup and removes a class of mutation surface (string-key
+// off-by-one) that would force the timeout selector into a defensive
+// trim path.
+type testKey struct {
+	pkg, name string
 }
 
 type testCoverage struct {
+	pkg      string
 	testName string
+	duration time.Duration
 	blocks   []Block
 }
 
@@ -85,12 +111,31 @@ func BuildTestMap(ctx context.Context, projectDir string, packages []string, cov
 	}()
 
 	// 4. Collect and index results.
-	tm := &TestMap{index: make(map[string]map[string]bool)}
+	tm := &TestMap{
+		index:        make(map[string]map[string]bool),
+		durations:    make(map[testKey]time.Duration),
+		pkgDurations: make(map[string]time.Duration),
+	}
 	for tc := range results {
 		tm.addBlocks(tc.testName, tc.blocks)
+		tm.recordDuration(tc.pkg, tc.testName, tc.duration)
 	}
 
 	return tm, nil
+}
+
+// recordDuration stores a single (pkg, test) timing and updates the
+// rolling per-package sum. Extracted so a duplicate observation (same
+// test re-run because two packages list the same name into testEntry,
+// or future retry logic) accumulates rather than overwrites — matching
+// the per-package sum's pre-existing accumulation behavior.
+func (tm *TestMap) recordDuration(pkg, name string, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	k := testKey{pkg: pkg, name: name}
+	tm.durations[k] += d
+	tm.pkgDurations[pkg] += d
 }
 
 // addBlocks indexes a test's coverage blocks into the map.
@@ -125,11 +170,21 @@ func processWork(ctx context.Context, work <-chan testEntry, pkgBins map[string]
 			continue
 		}
 		profilePath := filepath.Join(tmpDir, fmt.Sprintf("testmap-%d.cov", workerID))
-		blocks := runCompiledTestFunc(ctx, cp, test.name, profilePath)
-		if len(blocks) == 0 {
+		blocks, dur := runCompiledTestFunc(ctx, cp, test.name, profilePath)
+		// Forward the timing even when the test produced no blocks: the
+		// mutant covering this test still executes it, so its duration
+		// matters for the per-mutant timeout. Without this, a fast unit
+		// test that touches no shared coverage line gets a 0 contribution
+		// and the package sum understates real wall time.
+		if len(blocks) == 0 && dur <= 0 {
 			continue
 		}
-		results <- testCoverage{testName: test.name, blocks: blocks}
+		results <- testCoverage{
+			pkg:      test.pkg,
+			testName: test.name,
+			duration: dur,
+			blocks:   blocks,
+		}
 	}
 }
 
@@ -191,8 +246,15 @@ func compileTestBinary(ctx context.Context, projectDir, tmpDir, coverPkg string,
 	}, nil
 }
 
-// runCompiledTest runs a pre-compiled test binary for a single test with coverage.
-func runCompiledTest(ctx context.Context, cp *compiledPkg, testName, profilePath string) []Block {
+// runCompiledTest runs a pre-compiled test binary for a single test with
+// coverage and reports the wall-clock duration alongside the parsed blocks.
+//
+// The duration is reported even on parse failure or non-zero exit: the
+// per-mutant adaptive timeout uses these timings, and a flaky test that
+// happens to fail during the build phase still represents real work the
+// runner will do. Timing only the success path would systematically
+// understate timeouts for packages with environment-sensitive tests.
+func runCompiledTest(ctx context.Context, cp *compiledPkg, testName, profilePath string) ([]Block, time.Duration) {
 	args := []string{
 		fmt.Sprintf("-test.run=^%s$", regexp.QuoteMeta(testName)),
 		"-test.coverprofile=" + profilePath,
@@ -201,15 +263,19 @@ func runCompiledTest(ctx context.Context, cp *compiledPkg, testName, profilePath
 	cmd := exec.CommandContext(ctx, cp.binPath, args...)
 	cmd.Dir = cp.dir
 
-	if err := cmd.Run(); err != nil {
-		return nil
+	start := time.Now()
+	runErr := cmd.Run()
+	dur := time.Since(start)
+
+	if runErr != nil {
+		return nil, dur
 	}
 
 	profile, err := parseFileFunc(profilePath)
 	if err != nil {
-		return nil
+		return nil, dur
 	}
-	return profile.blocks
+	return profile.blocks, dur
 }
 
 // TestsFor returns the test function names that cover the given position.
@@ -228,6 +294,74 @@ func (tm *TestMap) TestsFor(file string, line int) []string {
 		tests = append(tests, t)
 	}
 	return tests
+}
+
+// SumDurationsFor returns the total observed wall-time of `tests` within
+// `pkg` (sum of per-test timings recorded during the coverage build),
+// and reports whether every requested test had a recorded timing.
+//
+// Callers use the returned `complete` flag to decide whether the sum
+// is trustworthy: if any test was missing (e.g. it failed during the
+// coverage build and produced 0 duration, or the test was added after
+// build) the per-package fallback should be used instead.
+//
+// On a nil TestMap, returns (0, false). Empty tests slice short-circuits
+// to (0, false) so the per-package fallback is reached without a misread
+// of "all 0 of 0 tests had data → complete=true → use 0 timeout".
+func (tm *TestMap) SumDurationsFor(pkg string, tests []string) (time.Duration, bool) {
+	if tm == nil || len(tests) == 0 {
+		return 0, false
+	}
+	var total time.Duration
+	for _, t := range tests {
+		d, ok := tm.durations[testKey{pkg: pkg, name: t}]
+		if !ok {
+			return 0, false
+		}
+		total += d
+	}
+	return total, true
+}
+
+// PackageDuration returns the sum of per-test durations recorded for
+// `pkg` during the coverage build. Used as the per-package fallback
+// when a mutant has no resolvable per-test covering set.
+//
+// Returns 0 for unknown packages or a nil TestMap; callers treat 0 as
+// "no per-package signal" and degrade further to the global timeout.
+func (tm *TestMap) PackageDuration(pkg string) time.Duration {
+	if tm == nil {
+		return 0
+	}
+	return tm.pkgDurations[pkg]
+}
+
+// NewTestMapForTesting constructs a TestMap directly from raw timing
+// data and a "file:line" → tests cover index. Exposed only because the
+// runner-package timeout selector needs to be exercised against
+// hand-built fixtures without spinning up `go test` to populate a real
+// map. Production code must use BuildTestMap.
+//
+// perTest: keys are [pkg, name] pairs; the helper aggregates them into
+// the internal (pkg, name)→duration map and the rolling per-package
+// totals so PackageDuration matches what BuildTestMap would produce.
+func NewTestMapForTesting(perTest map[[2]string]time.Duration, coverIndex map[string][]string) *TestMap {
+	tm := &TestMap{
+		index:        make(map[string]map[string]bool),
+		durations:    make(map[testKey]time.Duration),
+		pkgDurations: make(map[string]time.Duration),
+	}
+	for k, d := range perTest {
+		tm.recordDuration(k[0], k[1], d)
+	}
+	for fileLine, names := range coverIndex {
+		set := make(map[string]bool, len(names))
+		for _, n := range names {
+			set[n] = true
+		}
+		tm.index[fileLine] = set
+	}
+	return tm
 }
 
 // RunPattern returns a -run regex pattern that matches exactly the given tests.
