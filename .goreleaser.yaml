@@ -69,7 +69,6 @@ changelog:
       order: 99
   filters:
     exclude:
-      - "^doc"
       - "^test:"
       - "^chore:"
 

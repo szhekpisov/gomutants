@@ -60,7 +60,6 @@ commit_parsers = [
   { message = "^fix\\(security\\)", group = "<!-- 05 -->Security" },
   { message = "^feat", group = "<!-- 0 -->Added" },
   { message = "^fix|^bug", group = "<!-- 1 -->Fixed" },
-  { message = "^docs: update CHANGELOG", skip = true },
   { message = "^doc|^readme", group = "<!-- 2 -->Documentation" },
   { message = "^perf", group = "<!-- 3 -->Performance" },
   { message = "^refactor", group = "<!-- 4 -->Changed" },
