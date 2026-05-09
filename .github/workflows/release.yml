@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate semver tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '${TAG}' does not match strict semver format vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "Tag '${TAG}' is valid semver"
+
+      # Fail before anything ships if the changelog auto-commit secret
+      # is missing — otherwise the release artifacts would publish and
+      # only the final update-changelog job would error.
+      - name: Verify GH_PAT secret is configured
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "${GH_PAT}" ]; then
+            echo "::error::GH_PAT secret is not configured. Required by the update-changelog job."
+            exit 1
+          fi
+          echo "GH_PAT secret is present"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run tests
+        run: go test -race ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Verify version output
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          go build -ldflags "-s -w -X main.version=${VERSION}" -o gomutants_verify
+          OUTPUT=$(./gomutants_verify --version)
+          echo "Version output: ${OUTPUT}"
+          if [[ "${OUTPUT}" != *"${VERSION}"* ]]; then
+            echo "::error::Version output does not contain expected version '${VERSION}'"
+            exit 1
+          fi
+          echo "Version verification passed"
+          rm -f gomutants_verify
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      - name: Run GoReleaser
+        id: goreleaser
+        uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7.2.1
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate subject hashes for SLSA provenance
+        id: hash
+        env:
+          ARTIFACTS: "${{ steps.goreleaser.outputs.artifacts }}"
+        run: |
+          checksum_file=$(echo "$ARTIFACTS" | jq -r '.[] | select (.type=="Checksum") | .path')
+          echo "hashes=$(base64 -w0 "$checksum_file")" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-checksums: ./dist/checksums.txt
+
+  provenance:
+    needs: release
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
+    with:
+      base64-subjects: "${{ needs.release.outputs.hashes }}"
+      upload-assets: false
+
+  publish:
+    needs: [release, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: multiple.intoto.jsonl
+          path: provenance
+
+      - name: Upload provenance to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" provenance/*.intoto.jsonl --repo "$GITHUB_REPOSITORY"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
+
+  update-changelog:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
+        with:
+          config: cliff.toml
+          args: --output CHANGELOG.md
+
+      - name: Commit and push changelog
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No changelog changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: update CHANGELOG.md for ${TAG}"
+          git push
