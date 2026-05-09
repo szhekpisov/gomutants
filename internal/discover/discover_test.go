@@ -566,25 +566,38 @@ func f(a, b int) int { return a - b }
 
 func TestParseFileReadError(t *testing.T) {
 	dir := t.TempDir()
-	// Create a valid Go file.
+	// The file exists on disk so parser.ParseFile would succeed if it
+	// were ever reached with src==nil — that's exactly the equivalent
+	// BRANCH_IF mutation we need to kill, so the wrapped-error assertion
+	// below is what makes it observable.
 	goSrc := "package p\nfunc F() int { return 1 + 2 }\n"
 	path := filepath.Join(dir, "ok.go")
 	os.WriteFile(path, []byte(goSrc), 0o644)
 
-	// Stub readFileBytesFunc to fail.
 	orig := readFileBytesFunc
 	readFileBytesFunc = func(string) ([]byte, error) {
 		return nil, fmt.Errorf("injected read error")
 	}
 	defer func() { readFileBytesFunc = orig }()
 
+	fset := token.NewFileSet()
+	src, file, err := parseFile(fset, path)
+	if err == nil {
+		t.Fatalf("parseFile should propagate the read error; got src=%v file=%v", src, file)
+	}
+	if !strings.HasPrefix(err.Error(), "read ") {
+		t.Errorf("parseFile must wrap read errors with a 'read <path>:' prefix so the early-return cannot be silently dropped; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "injected read error") {
+		t.Errorf("wrapped error should preserve the underlying cause via %%w; got: %v", err)
+	}
+
+	// Integration check: Discover swallows the parseFile error and skips
+	// the file, so the run yields zero mutants.
 	pkgs := []Package{
 		{Dir: dir, ImportPath: "example.com/err", GoFiles: []string{"ok.go"}},
 	}
-
-	fset := token.NewFileSet()
 	reg := mutator.NewRegistry()
-	// parseFile will succeed on parser.ParseFile but fail on readFileBytes — file is skipped.
 	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com").Mutants
 	if len(mutants) != 0 {
 		t.Errorf("expected 0 mutants when readFileBytes fails, got %d", len(mutants))
