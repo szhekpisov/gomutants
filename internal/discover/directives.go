@@ -152,6 +152,9 @@ func indexFor(fset *token.FileSet, path, relPath string, files map[string]*Parse
 // source. Both FilterByDirectives (after a fresh read+parse) and
 // FilterByDirectivesWithCache (via the Discover cache) funnel through here.
 func buildFileIndex(fset *token.FileSet, src []byte, file *ast.File, relPath string, warn io.Writer) *fileIndex {
+	// This guard is for the cache-path callers — indexFor's no-cache
+	// path already gates the parse on the same check, so it never
+	// reaches this point with a no-prefix file.
 	// gomutants:disable-next-line BRANCH_IF reason="fast-path optimisation; identical observable when removed (the slow path also yields an empty index for files without the prefix)"
 	if !bytes.Contains(src, directivePrefixBytes) {
 		return &fileIndex{}

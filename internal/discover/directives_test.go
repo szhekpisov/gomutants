@@ -1185,3 +1185,55 @@ func F(a, b int) int {
 		t.Fatalf("expected directive to suppress the arithmetic mutant via the cache")
 	}
 }
+
+// TestFilterByDirectivesWithCachePartialCacheFallsBack verifies that
+// files missing from the supplied cache fall back to the read+parse
+// path: with one file's entry deleted from the cache map (but the file
+// still on disk), its directive must still suppress.
+func TestFilterByDirectivesWithCachePartialCacheFallsBack(t *testing.T) {
+	srcA := `package p
+
+func A(a, b int) int {
+	// gomutants:disable-next-line ARITHMETIC_BASE
+	return a + b
+}
+`
+	srcB := `package p
+
+func B(a, b int) int {
+	// gomutants:disable-next-line ARITHMETIC_BASE
+	return a + b
+}
+`
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.go")
+	pathB := filepath.Join(dir, "b.go")
+	if err := os.WriteFile(pathA, []byte(srcA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathB, []byte(srcB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgs := []Package{{Dir: dir, ImportPath: "example.com/test", GoFiles: []string{"a.go", "b.go"}}}
+	reg := mutator.NewRegistry()
+	fset := token.NewFileSet()
+	res := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/test")
+
+	// Drop a.go from the cache; it stays on disk so the fallback can read it.
+	delete(res.Files, pathA)
+
+	_, suppressed, err := FilterByDirectivesWithCache(fset, res.Mutants, res.Files)
+	if err != nil {
+		t.Fatalf("FilterByDirectivesWithCache: %v", err)
+	}
+	suppressedFiles := make(map[string]int)
+	for _, s := range suppressed {
+		suppressedFiles[s.Mutant.File]++
+	}
+	if suppressedFiles[pathA] == 0 {
+		t.Errorf("a.go directive must suppress via the read+parse fallback; suppressed=%v", suppressedFiles)
+	}
+	if suppressedFiles[pathB] == 0 {
+		t.Errorf("b.go directive must suppress via the cache; suppressed=%v", suppressedFiles)
+	}
+}
