@@ -21,19 +21,6 @@ jobs:
           fi
           echo "Tag '${TAG}' is valid semver"
 
-      # Fail before anything ships if the changelog auto-commit secret
-      # is missing — otherwise the release artifacts would publish and
-      # only the final update-changelog job would error.
-      - name: Verify GH_PAT secret is configured
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: |
-          if [ -z "${GH_PAT}" ]; then
-            echo "::error::GH_PAT secret is not configured. Required by the update-changelog job."
-            exit 1
-          fi
-          echo "GH_PAT secret is present"
-
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
@@ -146,37 +133,3 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
-
-  update-changelog:
-    needs: publish
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          ref: main
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Generate changelog
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
-        with:
-          config: cliff.toml
-          args: --output CHANGELOG.md
-
-      - name: Commit and push changelog
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git add CHANGELOG.md
-          if git diff --cached --quiet; then
-            echo "No changelog changes to commit"
-            exit 0
-          fi
-          git commit -m "chore: update CHANGELOG.md for ${TAG}"
-          git push
