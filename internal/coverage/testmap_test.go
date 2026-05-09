@@ -165,6 +165,56 @@ func TestTestMapRecordDurationAccumulates(t *testing.T) {
 	}
 }
 
+// TestNewTestMapForTestingPopulatesAllMaps exercises the helper from
+// inside the coverage package so its lines appear in this package's
+// own coverage profile. Without this, NewTestMapForTesting is only
+// driven from runner-package tests and shows up as NOT_COVERED in
+// gomutants's own self-mutation runs (each go-test binary instruments
+// only its own package's source).
+func TestNewTestMapForTestingPopulatesAllMaps(t *testing.T) {
+	tm := NewTestMapForTesting(
+		map[[2]string]time.Duration{
+			{"p", "TestA"}: 30 * time.Millisecond,
+			{"p", "TestB"}: 70 * time.Millisecond,
+			{"q", "TestA"}: 100 * time.Millisecond, // same name, different pkg
+		},
+		map[string][]string{
+			"f.go:10": {"TestA", "TestB"},
+			"g.go:1":  {"TestA"},
+		},
+	)
+
+	// Per-test durations land in the right (pkg, name) cells.
+	if got := tm.durations[testKey{pkg: "p", name: "TestA"}]; got != 30*time.Millisecond {
+		t.Errorf("durations[p,TestA]=%v, want 30ms — STATEMENT_REMOVE on the recordDuration call would zero this", got)
+	}
+	if got := tm.durations[testKey{pkg: "q", name: "TestA"}]; got != 100*time.Millisecond {
+		t.Errorf("durations[q,TestA]=%v, want 100ms — cross-package isolation must hold", got)
+	}
+
+	// Per-package sums roll up correctly.
+	if got := tm.pkgDurations["p"]; got != 100*time.Millisecond {
+		t.Errorf("pkgDurations[p]=%v, want 100ms (30+70)", got)
+	}
+	if got := tm.pkgDurations["q"]; got != 100*time.Millisecond {
+		t.Errorf("pkgDurations[q]=%v, want 100ms", got)
+	}
+
+	// Cover index entries are converted from []string to set[string]bool.
+	if !tm.index["f.go:10"]["TestA"] || !tm.index["f.go:10"]["TestB"] {
+		t.Errorf("f.go:10 → {TestA, TestB} edges missing; got %v — STATEMENT_REMOVE on the index assignment would empty this", tm.index["f.go:10"])
+	}
+	if !tm.index["g.go:1"]["TestA"] {
+		t.Errorf("g.go:1 → TestA edge missing; got %v", tm.index["g.go:1"])
+	}
+
+	// Empty inputs produce an empty-but-usable TestMap (no nil maps).
+	empty := NewTestMapForTesting(nil, nil)
+	if empty.durations == nil || empty.pkgDurations == nil || empty.index == nil {
+		t.Errorf("NewTestMapForTesting(nil, nil) left a nil internal map; future writes would panic")
+	}
+}
+
 func TestProcessWorkRecordsDurationOnlyEntries(t *testing.T) {
 	// A test that produces no coverage blocks but takes nonzero wall-time
 	// must still surface its duration to the caller — the runner will
