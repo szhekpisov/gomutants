@@ -12,7 +12,12 @@ inputs:
       show up as inline annotations on the PR diff.
     required: true
   version:
-    description: gomutants version to install (git tag, branch, or "latest").
+    description: |
+      gomutants version to install. A release tag (e.g. "v0.2.1") or
+      "latest" downloads a pre-built binary from the GitHub release and
+      verifies its signed build attestation via `gh attestation verify`.
+      Any other value (branch, SHA, etc.) falls back to `go install`
+      without signature verification.
     required: false
     default: latest
   threshold-efficacy:
@@ -63,16 +68,68 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-      # Skip only when the caller didn't pin a version — for "latest" we
-      # honor a pre-installed binary (this lets a smoke job pre-build from
-      # source). When the caller pins to a tag/branch/SHA we always
-      # install, so version: matches what runs.
+        REPO: szhekpisov/gomutants
+        GH_TOKEN: ${{ github.token }}
+      # For a release tag (or "latest") we download the prebuilt binary
+      # and verify its signed build attestation, so the action runs the
+      # exact artifact produced by .github/workflows/release.yml. For any
+      # other version (branch, SHA) we fall back to `go install` with a
+      # warning — no signed binary exists for non-release refs. The
+      # smoke-test workflow pre-installs from source and passes
+      # version=latest; honor that pre-existing binary.
       run: |
+        set -euo pipefail
+
         if [ "$VERSION" = "latest" ] && command -v gomutants >/dev/null 2>&1; then
           echo "gomutants already on PATH ($(gomutants --version)); skipping install (version: latest)"
-        else
-          go install "github.com/szhekpisov/gomutants@$VERSION"
+          exit 0
         fi
+
+        if [ "$VERSION" = "latest" ]; then
+          VERSION=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
+          echo "Resolved latest -> $VERSION"
+        fi
+
+        if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::warning::Version '$VERSION' is not a release tag; falling back to 'go install' without signature verification"
+          go install "github.com/szhekpisov/gomutants@$VERSION"
+          exit 0
+        fi
+
+        case "$RUNNER_OS" in
+          Linux) os=linux ;;
+          macOS) os=darwin ;;
+          *) echo "::error::Unsupported runner OS: $RUNNER_OS"; exit 1 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64)   arch=amd64 ;;
+          ARM64) arch=arm64 ;;
+          *) echo "::error::Unsupported runner arch: $RUNNER_ARCH"; exit 1 ;;
+        esac
+
+        semver="${VERSION#v}"
+        asset="gomutants_${semver}_${os}_${arch}.tar.gz"
+        workdir="$(mktemp -d)"
+
+        echo "Downloading $asset from $REPO@$VERSION"
+        gh release download "$VERSION" --repo "$REPO" --pattern "$asset" --dir "$workdir"
+
+        # --signer-workflow pins the attestation to release.yml so a
+        # different (potentially compromised) workflow in the repo
+        # cannot mint a passing attestation for a forged binary.
+        echo "Verifying build provenance for $asset"
+        gh attestation verify "$workdir/$asset" \
+          --repo "$REPO" \
+          --signer-workflow "$REPO/.github/workflows/release.yml"
+
+        tar -xzf "$workdir/$asset" -C "$workdir"
+        install_dir="$HOME/.local/bin"
+        mkdir -p "$install_dir"
+        install -m 0755 "$workdir/gomutants" "$install_dir/gomutants"
+        echo "$install_dir" >> "$GITHUB_PATH"
+        rm -rf "$workdir"
+
+        echo "Installed gomutants $VERSION ($("$install_dir/gomutants" --version))"
 
     - name: Run gomutants
       shell: bash
