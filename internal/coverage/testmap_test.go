@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestTestMapTestsFor(t *testing.T) {
@@ -39,6 +40,212 @@ func TestTestMapTestsFor(t *testing.T) {
 	tests = nilTm.TestsFor("file.go", 10)
 	if tests != nil {
 		t.Errorf("nil TestMap.TestsFor = %v, want nil", tests)
+	}
+}
+
+func TestTestMapSumDurationsFor(t *testing.T) {
+	tm := &TestMap{
+		durations: map[testKey]time.Duration{
+			{pkg: "p", name: "TestA"}: 100 * time.Millisecond,
+			{pkg: "p", name: "TestB"}: 200 * time.Millisecond,
+			{pkg: "q", name: "TestA"}: 999 * time.Millisecond,
+		},
+	}
+
+	// Two known tests in pkg "p" → sum and complete.
+	got, complete := tm.SumDurationsFor("p", []string{"TestA", "TestB"})
+	if got != 300*time.Millisecond || !complete {
+		t.Errorf("SumDurationsFor(p, [A,B]) = (%v, %v), want (300ms, true)", got, complete)
+	}
+
+	// Cross-package isolation: pkg q's TestA must not leak into p.
+	got, complete = tm.SumDurationsFor("p", []string{"TestA"})
+	if got != 100*time.Millisecond || !complete {
+		t.Errorf("SumDurationsFor(p, [A]) = (%v, %v), want (100ms, true)", got, complete)
+	}
+
+	// Missing test → not complete; sum reset to 0 so caller doesn't read a partial sum.
+	got, complete = tm.SumDurationsFor("p", []string{"TestA", "TestMissing"})
+	if got != 0 || complete {
+		t.Errorf("SumDurationsFor(p, [A,Missing]) = (%v, %v), want (0, false)", got, complete)
+	}
+
+	// Empty test list → not complete (avoid the "all 0 of 0 → use 0 timeout" trap).
+	got, complete = tm.SumDurationsFor("p", nil)
+	if got != 0 || complete {
+		t.Errorf("SumDurationsFor(p, nil) = (%v, %v), want (0, false)", got, complete)
+	}
+
+	// Nil receiver tolerated.
+	var nilTm *TestMap
+	got, complete = nilTm.SumDurationsFor("p", []string{"TestA"})
+	if got != 0 || complete {
+		t.Errorf("nil.SumDurationsFor = (%v, %v), want (0, false)", got, complete)
+	}
+}
+
+func TestTestMapPackageDuration(t *testing.T) {
+	tm := &TestMap{
+		pkgDurations: map[string]time.Duration{
+			"p": 500 * time.Millisecond,
+			"q": time.Second,
+		},
+	}
+
+	if got := tm.PackageDuration("p"); got != 500*time.Millisecond {
+		t.Errorf("PackageDuration(p) = %v, want 500ms", got)
+	}
+	if got := tm.PackageDuration("missing"); got != 0 {
+		t.Errorf("PackageDuration(missing) = %v, want 0", got)
+	}
+
+	var nilTm *TestMap
+	if got := nilTm.PackageDuration("p"); got != 0 {
+		t.Errorf("nil.PackageDuration = %v, want 0", got)
+	}
+}
+
+// TestTestMapIngestResultUpdatesBothMaps kills STATEMENT_REMOVE on the
+// recordDuration call inside the BuildTestMap collect loop. Without
+// this assertion any path that drops the duration recording would be
+// invisible — the index map still gets populated by addBlocks.
+func TestTestMapIngestResultUpdatesBothMaps(t *testing.T) {
+	tm := &TestMap{
+		index:        map[string]map[string]bool{},
+		durations:    map[testKey]time.Duration{},
+		pkgDurations: map[string]time.Duration{},
+	}
+	tm.ingestResult(testCoverage{
+		pkg:      "p",
+		testName: "TestA",
+		duration: 25 * time.Millisecond,
+		blocks: []Block{
+			{File: "f.go", StartLine: 5, EndLine: 5, Count: 1},
+		},
+	})
+
+	if got := tm.durations[testKey{pkg: "p", name: "TestA"}]; got != 25*time.Millisecond {
+		t.Errorf("durations not populated by ingestResult; got %v want 25ms — STATEMENT_REMOVE on the recordDuration call would zero this", got)
+	}
+	if got := tm.pkgDurations["p"]; got != 25*time.Millisecond {
+		t.Errorf("pkgDurations not populated; got %v want 25ms", got)
+	}
+	if !tm.index["f.go:5"]["TestA"] {
+		t.Errorf("addBlocks side of ingestResult missing the f.go:5 → TestA edge; index=%v", tm.index)
+	}
+}
+
+func TestTestMapRecordDurationAccumulates(t *testing.T) {
+	// Same (pkg, name) recorded twice — the per-package sum and the per-test
+	// entry must both accumulate, not overwrite. Mirrors the documented
+	// behavior contract on recordDuration.
+	tm := &TestMap{
+		durations:    map[testKey]time.Duration{},
+		pkgDurations: map[string]time.Duration{},
+	}
+	tm.recordDuration("p", "TestA", 10*time.Millisecond)
+	tm.recordDuration("p", "TestA", 5*time.Millisecond)
+	tm.recordDuration("p", "TestB", 7*time.Millisecond)
+
+	if got := tm.durations[testKey{pkg: "p", name: "TestA"}]; got != 15*time.Millisecond {
+		t.Errorf("durations[p,TestA] = %v, want 15ms (10ms + 5ms)", got)
+	}
+	if got := tm.pkgDurations["p"]; got != 22*time.Millisecond {
+		t.Errorf("pkgDurations[p] = %v, want 22ms", got)
+	}
+
+	// Zero or negative durations are dropped (sentinel "no measurement").
+	tm.recordDuration("p", "TestC", 0)
+	if _, ok := tm.durations[testKey{pkg: "p", name: "TestC"}]; ok {
+		t.Errorf("zero duration recorded into durations map")
+	}
+	tm.recordDuration("p", "TestC", -time.Second)
+	if _, ok := tm.durations[testKey{pkg: "p", name: "TestC"}]; ok {
+		t.Errorf("negative duration recorded into durations map")
+	}
+}
+
+// TestNewTestMapForTestingPopulatesAllMaps exercises the helper from
+// inside the coverage package so its lines appear in this package's
+// own coverage profile. Without this, NewTestMapForTesting is only
+// driven from runner-package tests and shows up as NOT_COVERED in
+// gomutants's own self-mutation runs (each go-test binary instruments
+// only its own package's source).
+func TestNewTestMapForTestingPopulatesAllMaps(t *testing.T) {
+	tm := NewTestMapForTesting(
+		map[[2]string]time.Duration{
+			{"p", "TestA"}: 30 * time.Millisecond,
+			{"p", "TestB"}: 70 * time.Millisecond,
+			{"q", "TestA"}: 100 * time.Millisecond, // same name, different pkg
+		},
+		map[string][]string{
+			"f.go:10": {"TestA", "TestB"},
+			"g.go:1":  {"TestA"},
+		},
+	)
+
+	// Per-test durations land in the right (pkg, name) cells.
+	if got := tm.durations[testKey{pkg: "p", name: "TestA"}]; got != 30*time.Millisecond {
+		t.Errorf("durations[p,TestA]=%v, want 30ms — STATEMENT_REMOVE on the recordDuration call would zero this", got)
+	}
+	if got := tm.durations[testKey{pkg: "q", name: "TestA"}]; got != 100*time.Millisecond {
+		t.Errorf("durations[q,TestA]=%v, want 100ms — cross-package isolation must hold", got)
+	}
+
+	// Per-package sums roll up correctly.
+	if got := tm.pkgDurations["p"]; got != 100*time.Millisecond {
+		t.Errorf("pkgDurations[p]=%v, want 100ms (30+70)", got)
+	}
+	if got := tm.pkgDurations["q"]; got != 100*time.Millisecond {
+		t.Errorf("pkgDurations[q]=%v, want 100ms", got)
+	}
+
+	// Cover index entries are converted from []string to set[string]bool.
+	if !tm.index["f.go:10"]["TestA"] || !tm.index["f.go:10"]["TestB"] {
+		t.Errorf("f.go:10 → {TestA, TestB} edges missing; got %v — STATEMENT_REMOVE on the index assignment would empty this", tm.index["f.go:10"])
+	}
+	if !tm.index["g.go:1"]["TestA"] {
+		t.Errorf("g.go:1 → TestA edge missing; got %v", tm.index["g.go:1"])
+	}
+
+	// Empty inputs produce an empty-but-usable TestMap (no nil maps).
+	empty := NewTestMapForTesting(nil, nil)
+	if empty.durations == nil || empty.pkgDurations == nil || empty.index == nil {
+		t.Errorf("NewTestMapForTesting(nil, nil) left a nil internal map; future writes would panic")
+	}
+}
+
+func TestProcessWorkRecordsDurationOnlyEntries(t *testing.T) {
+	// A test that produces no coverage blocks but takes nonzero wall-time
+	// must still surface its duration to the caller — the runner will
+	// execute it on every mutant in its package and the per-package sum
+	// must reflect that work.
+	orig := runCompiledTestFunc
+	defer func() { runCompiledTestFunc = orig }()
+	runCompiledTestFunc = func(_ context.Context, _ *compiledPkg, _, _ string) ([]Block, time.Duration) {
+		return nil, 50 * time.Millisecond
+	}
+
+	work := make(chan testEntry, 1)
+	results := make(chan testCoverage, 1)
+	work <- testEntry{name: "TestNoCovButSlow", pkg: "p"}
+	close(work)
+
+	pkgBins := map[string]*compiledPkg{
+		"p": {binPath: "x", importPath: "p", dir: t.TempDir()},
+	}
+	processWork(context.Background(), work, pkgBins, t.TempDir(), 0, results)
+	close(results)
+
+	got := 0
+	for tc := range results {
+		got++
+		if tc.duration != 50*time.Millisecond {
+			t.Errorf("forwarded duration = %v, want 50ms", tc.duration)
+		}
+	}
+	if got != 1 {
+		t.Errorf("got %d duration-only results, want 1", got)
 	}
 }
 
@@ -168,9 +375,9 @@ func TestProcessWorkReturnsImmediatelyOnCancelledCtx(t *testing.T) {
 	orig := runCompiledTestFunc
 	defer func() { runCompiledTestFunc = orig }()
 	var calls atomic.Int32
-	runCompiledTestFunc = func(_ context.Context, _ *compiledPkg, _, _ string) []Block {
+	runCompiledTestFunc = func(_ context.Context, _ *compiledPkg, _, _ string) ([]Block, time.Duration) {
 		calls.Add(1)
-		return nil
+		return nil, 0
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -199,11 +406,11 @@ func TestProcessWorkReturnsImmediatelyOnCancelledCtx(t *testing.T) {
 func TestProcessWorkContinuesPastEmptyBlocks(t *testing.T) {
 	orig := runCompiledTestFunc
 	defer func() { runCompiledTestFunc = orig }()
-	runCompiledTestFunc = func(_ context.Context, _ *compiledPkg, testName, _ string) []Block {
+	runCompiledTestFunc = func(_ context.Context, _ *compiledPkg, testName, _ string) ([]Block, time.Duration) {
 		if testName == "TestEmpty" {
-			return nil
+			return nil, 0
 		}
-		return []Block{{File: "f.go", StartLine: 1, EndLine: 1, Count: 1}}
+		return []Block{{File: "f.go", StartLine: 1, EndLine: 1, Count: 1}}, 0
 	}
 
 	work := make(chan testEntry, 2)
@@ -234,9 +441,9 @@ func TestProcessWorkContinuesPastNilCp(t *testing.T) {
 	orig := runCompiledTestFunc
 	defer func() { runCompiledTestFunc = orig }()
 	var calls atomic.Int32
-	runCompiledTestFunc = func(_ context.Context, cp *compiledPkg, _, _ string) []Block {
+	runCompiledTestFunc = func(_ context.Context, cp *compiledPkg, _, _ string) ([]Block, time.Duration) {
 		calls.Add(1)
-		return nil
+		return nil, 0
 	}
 
 	work := make(chan testEntry, 2)
@@ -263,8 +470,8 @@ func TestProcessWorkContinuesPastNilCp(t *testing.T) {
 func TestProcessWorkSkipsEmptyBlocks(t *testing.T) {
 	orig := runCompiledTestFunc
 	defer func() { runCompiledTestFunc = orig }()
-	runCompiledTestFunc = func(_ context.Context, _ *compiledPkg, _, _ string) []Block {
-		return nil // simulate test that produced no coverage blocks
+	runCompiledTestFunc = func(_ context.Context, _ *compiledPkg, _, _ string) ([]Block, time.Duration) {
+		return nil, 0 // simulate test that produced no coverage blocks
 	}
 
 	work := make(chan testEntry, 1)
@@ -407,7 +614,7 @@ func TestNeedsCwd(t *testing.T) {
 	}
 
 	profilePath := filepath.Join(tmpDir, "cwd.cov")
-	blocks := runCompiledTest(context.Background(), cp, "TestNeedsCwd", profilePath)
+	blocks, _ := runCompiledTest(context.Background(), cp, "TestNeedsCwd", profilePath)
 	if len(blocks) == 0 {
 		t.Errorf("expected coverage blocks; the test fails when cwd != cp.dir, so STATEMENT_REMOVE on `cmd.Dir = cp.dir` would zero this out")
 	}
@@ -445,12 +652,12 @@ func TestBuildTestMapContinuesPastFailedCompile(t *testing.T) {
 		return &compiledPkg{binPath: "x", importPath: pkg.importPath, dir: pkg.dir}, nil
 	}
 	var ranTests int32
-	runCompiledTestFunc = func(_ context.Context, cp *compiledPkg, _, _ string) []Block {
+	runCompiledTestFunc = func(_ context.Context, cp *compiledPkg, _, _ string) ([]Block, time.Duration) {
 		atomic.AddInt32(&ranTests, 1)
 		if cp.importPath != "pkg.ok" {
 			t.Errorf("runCompiledTestFunc invoked with wrong pkg %q", cp.importPath)
 		}
-		return nil
+		return nil, 0
 	}
 
 	_, err := BuildTestMap(context.Background(), t.TempDir(), []string{"./..."}, "", t.TempDir(), 1)

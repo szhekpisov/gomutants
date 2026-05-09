@@ -38,7 +38,7 @@ func TestNewWorker(t *testing.T) {
 	dir := t.TempDir()
 	cache := map[string][]byte{"/src/file.go": []byte("package p\n")}
 
-	w, err := NewWorker(0, dir, 30*time.Second, cache, "/src", nil)
+	w, err := NewWorker(0, dir, TimeoutPolicy{Global: 30 * time.Second}, cache, "/src", nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestWorkerTestMissingSource(t *testing.T) {
 	dir := t.TempDir()
 	cache := map[string][]byte{} // Empty cache.
 
-	w, err := NewWorker(0, dir, 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, dir, TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestWorkerTestInvalidPatch(t *testing.T) {
 	src := []byte("package p\n")
 	cache := map[string][]byte{"/src/file.go": src}
 
-	w, err := NewWorker(0, dir, 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, dir, TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestAdd(t *testing.T) {
 
 	cache := map[string][]byte{filepath.Join(dir, "add.go"): []byte(src)}
 
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestAdd(t *testing.T) {
 
 	cache := map[string][]byte{filepath.Join(dir, "add.go"): []byte(src)}
 
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestAdd(t *testing.T) {
 
 	cache := map[string][]byte{filepath.Join(dir, "add.go"): []byte(src)}
 
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestAdd(t *testing.T) {
 	cache := map[string][]byte{filepath.Join(dir, "add.go"): []byte(src)}
 
 	// Very short timeout.
-	w, err := NewWorker(0, t.TempDir(), 3*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 3 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestNewWorkerWriteFailures(t *testing.T) {
 				}
 				return os.WriteFile(name, data, perm)
 			}
-			w, err := NewWorker(0, t.TempDir(), time.Second, nil, "/", nil)
+			w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: time.Second}, nil, "/", nil)
 			if err == nil {
 				t.Errorf("got nil error, want injected failure on call %d (BRANCH_IF on err-return elides early exit, returning %+v)", tt.failCall, w)
 			}
@@ -553,7 +553,7 @@ func TestWorkerTestWriteFailures(t *testing.T) {
 				return os.WriteFile(name, data, perm)
 			}
 
-			w, err := NewWorker(0, t.TempDir(), 5*time.Second, cache, dir, nil)
+			w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 5 * time.Second}, cache, dir, nil)
 			if err != nil {
 				t.Fatalf("NewWorker: %v", err)
 			}
@@ -611,7 +611,7 @@ func TestShortFlagFromEnv(t *testing.T) {
 // parent's process group; the RSS monitor would mistakenly include the
 // parent and SIGKILL the entire test process.
 func TestMakeTestCmdSetpgid(t *testing.T) {
-	w := &Worker{projectDir: ".", timeout: time.Second}
+	w := &Worker{projectDir: ".", policy: TimeoutPolicy{Global: time.Second}}
 	cmd, _, _ := w.makeTestCmd(context.Background(), []string{"version"})
 	if cmd.SysProcAttr == nil {
 		t.Fatal("SysProcAttr is nil — STATEMENT_REMOVE strips process-group isolation")
@@ -626,14 +626,14 @@ func TestMakeTestCmdSetpgid(t *testing.T) {
 // `if w.childGOMAXPROCS > 0 { cmd.Env = append(...) }` block.
 func TestMakeTestCmdGOMAXPROCSEnv(t *testing.T) {
 	t.Run("zero leaves Env nil", func(t *testing.T) {
-		w := &Worker{projectDir: ".", timeout: time.Second, childGOMAXPROCS: 0}
+		w := &Worker{projectDir: ".", policy: TimeoutPolicy{Global: time.Second}, childGOMAXPROCS: 0}
 		cmd, _, _ := w.makeTestCmd(context.Background(), []string{"version"})
 		if cmd.Env != nil {
 			t.Errorf("Env=%v; want nil — CONDITIONALS_BOUNDARY `> 0` → `>= 0` would set env even at zero", cmd.Env)
 		}
 	})
 	t.Run("non-zero sets GOMAXPROCS", func(t *testing.T) {
-		w := &Worker{projectDir: "/proj", timeout: time.Second, childGOMAXPROCS: 3}
+		w := &Worker{projectDir: "/proj", policy: TimeoutPolicy{Global: time.Second}, childGOMAXPROCS: 3}
 		cmd, _, _ := w.makeTestCmd(context.Background(), []string{"version"})
 		if cmd.Env == nil {
 			t.Fatal("Env is nil; want GOMAXPROCS override — BRANCH_IF on the body or STATEMENT_REMOVE on the assignment drops it")
@@ -678,7 +678,7 @@ func TestWorkerTestStartFailureClassifiesNotViable(t *testing.T) {
 		return exec.CommandContext(ctx, "/this/path/does/not/exist/zzz")
 	}
 
-	w, err := NewWorker(0, t.TempDir(), 5*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 5 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -754,7 +754,7 @@ func TestWorkerTestGetpgidFallback(t *testing.T) {
 		return nil
 	}
 
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -834,7 +834,7 @@ func TestWorkerTestRSSKillsRunaway(t *testing.T) {
 		return nil
 	}
 
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -886,7 +886,7 @@ func TestWorkerTestRSSExactlyAtCapDoesNotKill(t *testing.T) {
 		return nil
 	}
 
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -933,7 +933,7 @@ func TestWorkerTestMonitorGoroutineExits(t *testing.T) {
 		return []byte("0\n"), nil // far below cap; no kill
 	}
 
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -1070,7 +1070,7 @@ func TestWorkerTestParentCtxCancel(t *testing.T) {
 	}
 
 	cache := map[string][]byte{filepath.Join(dir, "add.go"): []byte(src)}
-	w, err := NewWorker(0, t.TempDir(), 30*time.Second, cache, dir, nil)
+	w, err := NewWorker(0, t.TempDir(), TimeoutPolicy{Global: 30 * time.Second}, cache, dir, nil)
 	if err != nil {
 		t.Fatalf("NewWorker: %v", err)
 	}
@@ -1112,14 +1112,14 @@ func TestWorkerTestParentCtxCancel(t *testing.T) {
 // the GOMUTANTS_TEST_SHORT gate: passing short=true must add "-short" to
 // the command line; short=false must omit it. We assert both directions.
 func TestBuildTestArgsShortFlag(t *testing.T) {
-	w := &Worker{timeout: time.Second, overlayPath: "/tmp/o.json"}
+	w := &Worker{policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
 	m := mutator.Mutant{Pkg: "mymod"}
 
-	withShort := w.buildTestArgs(m, true)
+	withShort := w.buildTestArgs(m, true, time.Second)
 	if !containsStr(withShort, "-short") {
 		t.Errorf("short=true: args %v missing -short", withShort)
 	}
-	withoutShort := w.buildTestArgs(m, false)
+	withoutShort := w.buildTestArgs(m, false, time.Second)
 	if containsStr(withoutShort, "-short") {
 		t.Errorf("short=false: args %v should not contain -short", withoutShort)
 	}
@@ -1132,14 +1132,14 @@ func TestBuildTestArgsShortFlag(t *testing.T) {
 func TestBuildTestArgsTestCPU(t *testing.T) {
 	m := mutator.Mutant{Pkg: "mymod"}
 
-	wOn := &Worker{testCPU: 2, timeout: time.Second, overlayPath: "/tmp/o.json"}
-	argsOn := wOn.buildTestArgs(m, false)
+	wOn := &Worker{testCPU: 2, policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
+	argsOn := wOn.buildTestArgs(m, false, time.Second)
 	if !containsStr(argsOn, "-cpu=2") {
 		t.Errorf("testCPU=2: args %v missing -cpu=2", argsOn)
 	}
 
-	wOff := &Worker{testCPU: 0, timeout: time.Second, overlayPath: "/tmp/o.json"}
-	argsOff := wOff.buildTestArgs(m, false)
+	wOff := &Worker{testCPU: 0, policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
+	argsOff := wOff.buildTestArgs(m, false, time.Second)
 	if anyHasPrefix(argsOff, "-cpu=") {
 		t.Errorf("testCPU=0: args %v should not contain -cpu=", argsOff)
 	}
@@ -1150,9 +1150,9 @@ func TestBuildTestArgsTestCPU(t *testing.T) {
 // without a package target. Asserting that the package shows up as the
 // final positional arg catches both the removal and any reordering.
 func TestBuildTestArgsPackageArgLast(t *testing.T) {
-	w := &Worker{timeout: time.Second, overlayPath: "/tmp/o.json"}
+	w := &Worker{policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
 	m := mutator.Mutant{Pkg: "example.com/mod/sub"}
-	args := w.buildTestArgs(m, false)
+	args := w.buildTestArgs(m, false, time.Second)
 	if len(args) == 0 || args[len(args)-1] != "example.com/mod/sub" {
 		t.Errorf("last arg = %q, want package import path; full args: %v",
 			args[len(args)-1], args)
@@ -1194,20 +1194,20 @@ func TestBuildTestArgsWithTestMap(t *testing.T) {
 		t.Fatalf("BuildTestMap: %v", err)
 	}
 
-	wWith := &Worker{testMap: tm, timeout: time.Second, overlayPath: "/tmp/o.json"}
-	wWithout := &Worker{timeout: time.Second, overlayPath: "/tmp/o.json"}
+	wWith := &Worker{testMap: tm, policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
+	wWithout := &Worker{policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
 	m := mutator.Mutant{
 		CoverageFile: "testmod/add.go",
 		Line:         3,
 		Pkg:          "testmod",
 	}
 	// With map: -run=<pattern> must appear.
-	argsWith := wWith.buildTestArgs(m, false)
+	argsWith := wWith.buildTestArgs(m, false, time.Second)
 	if !anyHasPrefix(argsWith, "-run=") {
 		t.Errorf("testMap non-nil with matching entry: expected -run= in %v", argsWith)
 	}
 	// Without map: -run= must not appear.
-	argsWithout := wWithout.buildTestArgs(m, false)
+	argsWithout := wWithout.buildTestArgs(m, false, time.Second)
 	if anyHasPrefix(argsWithout, "-run=") {
 		t.Errorf("testMap nil: -run= must be absent, got %v", argsWithout)
 	}
@@ -1215,7 +1215,7 @@ func TestBuildTestArgsWithTestMap(t *testing.T) {
 	// Kills CONDITIONALS_BOUNDARY on `len(tests) > 0` — mutated `>= 0` would
 	// always enter the branch and append -run= with an empty pattern.
 	mMiss := mutator.Mutant{CoverageFile: "unknown/file.go", Line: 9999, Pkg: "testmod"}
-	argsMiss := wWith.buildTestArgs(mMiss, false)
+	argsMiss := wWith.buildTestArgs(mMiss, false, time.Second)
 	if anyHasPrefix(argsMiss, "-run=") {
 		t.Errorf("testMap non-nil but no matches: -run= must be absent (len(tests)>0 guard), got %v", argsMiss)
 	}
