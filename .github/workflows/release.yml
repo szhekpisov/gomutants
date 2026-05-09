@@ -21,6 +21,19 @@ jobs:
           fi
           echo "Tag '${TAG}' is valid semver"
 
+      # Fail before anything ships if the changelog auto-commit secret
+      # is missing — otherwise the release artifacts would publish and
+      # only the final update-changelog job would error.
+      - name: Verify GH_PAT secret is configured
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "${GH_PAT}" ]; then
+            echo "::error::GH_PAT secret is not configured. Required by the update-changelog job."
+            exit 1
+          fi
+          echo "GH_PAT secret is present"
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
@@ -91,7 +104,7 @@ jobs:
           ARTIFACTS: "${{ steps.goreleaser.outputs.artifacts }}"
         run: |
           checksum_file=$(echo "$ARTIFACTS" | jq -r '.[] | select (.type=="Checksum") | .path')
-          echo "hashes=$(cat "$checksum_file" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          echo "hashes=$(base64 -w0 "$checksum_file")" >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0

@@ -63,7 +63,7 @@ changelog:
       regexp: "^(fix|bug)"
       order: 2
     - title: Documentation
-      regexp: "^(doc|docs|readme)"
+      regexp: "^doc"
       order: 3
     - title: Other
       order: 99
