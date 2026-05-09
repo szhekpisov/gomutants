@@ -32,7 +32,7 @@ Gomutants is a mutation testing tool for Go, supporting diff-scoped runs, increm
 ### Quick start
 
 ```
-$ go install github.com/szhekpisov/gomutants@v0.2.0
+$ go install github.com/szhekpisov/gomutants@v0.2.1
 
 # Run on the whole module.
 $ gomutants ./...
@@ -136,7 +136,7 @@ PR-scoped runs are faster than gremlins for a different reason: gremlins has no 
 Gomutants can be installed with `go install`:
 
 ```
-$ go install github.com/szhekpisov/gomutants@v0.2.0
+$ go install github.com/szhekpisov/gomutants@v0.2.1
 ```
 
 The minimum supported version of Go for gomutants is **1.26**, both for building gomutants itself and for the project under test (gomutants shells out to `go test` in your project's toolchain).
@@ -181,7 +181,7 @@ Surface surviving mutants as inline annotations on the PR diff:
 - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
   with:
     fetch-depth: 0  # required so --changed-since can reach the base ref
-- uses: szhekpisov/gomutants@v0.2.0
+- uses: szhekpisov/gomutants@v0.2.1
   with:
     args: --changed-since origin/${{ github.base_ref }} ./...
 ```
