@@ -26,7 +26,10 @@ import (
 	"github.com/szhekpisov/gomutants/internal/runner"
 )
 
-const version = "0.1.0"
+// version is overridden at release time via -ldflags '-X main.version=...'.
+// Keeping it `var` (not const) is what makes the ldflags injection work;
+// the default lets `go install`/`go build` produce a meaningful string.
+var version = "0.1.0"
 
 // cacheToolVersion is the identifier stamped into the cache's
 // `tool_version` field and gated on Load to invalidate stale entries.
