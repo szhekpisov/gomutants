@@ -51,7 +51,7 @@ jobs:
       # intentionally don't pin.
       - name: Run mutation testing (PR, changed-since)
         if: github.event_name == 'pull_request'
-        uses: szhekpisov/gomutants@15315f9b020ec723e5f4495224e48712bcb939c1 # main
+        uses: szhekpisov/gomutants@c22b49b2785c2475d89fdcbc67caaff1fb50acbc # v0.2.1
         with:
           # No quotes around the ref: $ARGS in the action is unquoted so
           # it word-splits, and a literal `"` would land in the
@@ -59,11 +59,11 @@ jobs:
           args: -workers=2 -verbose --changed-since origin/${{ github.base_ref }} ./internal/...
 
       # Post-merge full-tree run on the same internal/... scope. Same
-      # threshold-efficacy=100 gate. --stryker-output writes the
-      # dashboard report consumed by the upload step below.
+      # threshold-efficacy=100 gate (action default). --stryker-output
+      # writes the dashboard report consumed by the upload step below.
       - name: Run mutation testing (full tree, post-merge)
         if: github.event_name == 'push'
-        uses: szhekpisov/gomutants@15315f9b020ec723e5f4495224e48712bcb939c1 # main
+        uses: szhekpisov/gomutants@c22b49b2785c2475d89fdcbc67caaff1fb50acbc # v0.2.1
         with:
           args: -workers=2 -verbose --stryker-output stryker-report.json ./internal/...
 

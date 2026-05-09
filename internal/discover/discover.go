@@ -172,10 +172,17 @@ func Discover(fset *token.FileSet, pkgs []Package, mutators []mutator.Mutator, m
 // parseFile reads and parses one file with parser.ParseComments so the
 // returned *ast.File can be reused by FilterByDirectivesWithCache without
 // re-parsing. The bytes are read once and handed to the parser.
+//
+// The read error is wrapped with a "read <path>:" prefix so callers
+// know which file failed. The prefix is also load-bearing: without it,
+// dropping the early return would let parser.ParseFile fall through
+// with src==nil, re-read `path` from disk, and either silently succeed
+// or surface a parser-shaped error — both observably equivalent to the
+// original from a caller that only checks `err != nil`.
 func parseFile(fset *token.FileSet, path string) ([]byte, *ast.File, error) {
 	src, err := readFileBytes(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
 	if err != nil {
