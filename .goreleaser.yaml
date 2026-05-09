@@ -1,0 +1,81 @@
+---
+version: 2
+
+project_name: gomutants
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - id: archive
+    artifacts: archive
+    documents:
+      - "${artifact}.spdx.json"
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+  - id: sboms
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: sbom
+
+changelog:
+  sort: asc
+  groups:
+    - title: Security
+      regexp: '^fix\(security\)'
+      order: 0
+    - title: Features
+      regexp: "^feat"
+      order: 1
+    - title: Fixes
+      regexp: "^(fix|bug)"
+      order: 2
+    - title: Documentation
+      regexp: "^(doc|docs|readme)"
+      order: 3
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - "^doc"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: true
+  name_template: "v{{.Version}}"
+
+snapshot:
+  version_template: "{{ .Tag }}-next"

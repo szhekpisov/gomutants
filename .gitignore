@@ -7,6 +7,9 @@
 /gomutants
 /bin/
 
+# goreleaser snapshot output
+/dist/
+
 # Test binary, built with `go test -c`
 *.test
 
