@@ -99,10 +99,16 @@ func Load(path string) (Config, error) {
 	if cfg.TimeoutCoefficient == 0 {
 		cfg.TimeoutCoefficient = 10
 	}
-	if cfg.TimeoutMargin == 0 {
+	// Treat negative as nonsensical and revert to the default. ApplyFlags
+	// already screens out non-positive CLI values; doing the same here
+	// closes the YAML side. A negative Margin or Min would silently
+	// collapse adaptive selection to the floor or to a negative scaled
+	// value (later max'd up to Min) — never useful, never what the user
+	// meant.
+	if cfg.TimeoutMargin <= 0 {
 		cfg.TimeoutMargin = DefaultTimeoutMargin
 	}
-	if cfg.TimeoutMin == 0 {
+	if cfg.TimeoutMin <= 0 {
 		cfg.TimeoutMin = DefaultTimeoutMin
 	}
 	if cfg.Output == "" {

@@ -227,7 +227,7 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 	// SIGKILL-on-expiry) and the inner -timeout flag (which lets `go test`
 	// exit cleanly with its own timeout error). Computing once means an
 	// odd-shaped TimeoutPolicy can't desync the two.
-	timeout := w.policy.For(w.testMap, m)
+	timeout := w.computeTimeout(m)
 	testCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -367,6 +367,16 @@ func (w *Worker) buildTestArgs(m mutator.Mutant, short bool, timeout time.Durati
 	}
 	args = append(args, m.Pkg)
 	return args
+}
+
+// computeTimeout resolves the per-mutant deadline for `m` from the
+// worker's policy and testMap. Extracted from Worker.Test so the wiring
+// — that the policy's TestMap argument is in fact w.testMap, not nil —
+// is unit-testable without spinning up a real subprocess. A regression
+// where a refactor passed nil here would silently downgrade every
+// mutant to the global ceiling and pass the existing tests.
+func (w *Worker) computeTimeout(m mutator.Mutant) time.Duration {
+	return w.policy.For(w.testMap, m)
 }
 
 // classifyTestOutcome decides a mutant's terminal status from the raw

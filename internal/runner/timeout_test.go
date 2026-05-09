@@ -131,6 +131,78 @@ func TestTimeoutPolicyForFallsBackToGlobalWhenNoData(t *testing.T) {
 	}
 }
 
+// TestWorkerComputeTimeoutWiresPolicyAndTestMap binds the field plumbing
+// in Worker.computeTimeout to the policy's semantics. With Adaptive=true
+// and a populated TestMap, the resolved timeout must reflect the per-test
+// sum × Margin (clamped to Min/Global), not the Global ceiling. Catches
+// the regression where a refactor passes nil — or the wrong field —
+// into policy.For and silently downgrades every mutant.
+func TestWorkerComputeTimeoutWiresPolicyAndTestMap(t *testing.T) {
+	tm := newTestMapWithDurations(t,
+		map[[2]string]time.Duration{
+			{"p", "TestA"}: time.Second, // 1s × 3 = 3s, between Min(2s) and Global(30s)
+		},
+		map[string][]string{
+			"f.go:1": {"TestA"},
+		},
+	)
+	w := &Worker{
+		policy: TimeoutPolicy{
+			Global: 30 * time.Second, Margin: 3, Min: 2 * time.Second, Adaptive: true,
+		},
+		testMap: tm,
+	}
+	got := w.computeTimeout(mutator.Mutant{Pkg: "p", CoverageFile: "f.go", Line: 1})
+	want := 3 * time.Second
+	if got != want {
+		t.Errorf("computeTimeout = %v, want %v — Worker isn't passing its TestMap into policy.For; the Global ceiling (%v) would surface here instead", got, want, w.policy.Global)
+	}
+}
+
+// TestWorkerBuildTestArgsUsesAdaptiveTimeout closes the loop end-to-end:
+// the per-mutant timeout chosen by computeTimeout must thread into the
+// `-timeout=` flag that `go test` actually receives. A refactor that
+// reverts to threading w.policy.Global directly would still pass
+// TestWorkerComputeTimeoutWiresPolicyAndTestMap; this test catches that
+// by asserting the args carry the adaptive value.
+func TestWorkerBuildTestArgsUsesAdaptiveTimeout(t *testing.T) {
+	tm := newTestMapWithDurations(t,
+		map[[2]string]time.Duration{
+			{"p", "TestA"}: 500 * time.Millisecond,
+		},
+		map[string][]string{
+			"f.go:7": {"TestA"},
+		},
+	)
+	w := &Worker{
+		policy: TimeoutPolicy{
+			Global: 30 * time.Second, Margin: 4, Min: 0, Adaptive: true,
+		},
+		testMap:     tm,
+		overlayPath: "/tmp/overlay.json",
+	}
+	m := mutator.Mutant{Pkg: "p", CoverageFile: "f.go", Line: 7}
+
+	timeout := w.computeTimeout(m)
+	wantTimeout := 2 * time.Second // 500ms × 4 = 2s, no clamp
+	if timeout != wantTimeout {
+		t.Fatalf("computeTimeout = %v, want %v (precondition for arg test)", timeout, wantTimeout)
+	}
+
+	args := w.buildTestArgs(m, false, timeout)
+	wantArg := "-timeout=" + wantTimeout.String()
+	found := false
+	for _, a := range args {
+		if a == wantArg {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("args missing %q; got: %v — buildTestArgs must thread the resolved adaptive timeout, not w.policy.Global", wantArg, args)
+	}
+}
+
 func TestTimeoutPolicyForNoCoveringSetUsesPackage(t *testing.T) {
 	// No entry in the cover index for the mutant's location → TestsFor
 	// returns nil → SumDurationsFor returns (0, false) → package fallback.

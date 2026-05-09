@@ -293,7 +293,15 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	testTimeout := baseline * time.Duration(cfg.TimeoutCoefficient)
-	term.PhaseDone(fmt.Sprintf("done (%s, timeout: %s)", phaseDurationDisplay(baseline), testTimeout.Round(time.Second)))
+	// Distinguish the displayed value: with adaptive sizing, testTimeout
+	// is the upper-bound ceiling, not the deadline every mutant gets.
+	// Without this, users see "timeout: 4m" and assume each mutant has
+	// 4 minutes; in reality fast packages get sub-second deadlines.
+	timeoutLabel := "timeout"
+	if cfg.AdaptiveTimeoutEnabled() {
+		timeoutLabel = "ceiling"
+	}
+	term.PhaseDone(fmt.Sprintf("done (%s, %s: %s)", phaseDurationDisplay(baseline), timeoutLabel, testTimeout.Round(time.Second)))
 
 	// 5. Discover mutants.
 	term.Phase("Discovering mutants...")

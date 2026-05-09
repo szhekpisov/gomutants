@@ -26,6 +26,15 @@ var (
 )
 
 // TestMap maps (file, line) positions to the test functions that cover them.
+//
+// Concurrency: TestMap is built sequentially in BuildTestMap (the
+// receive loop is single-goroutine even though the producers are
+// parallel) and is treated as immutable thereafter. The runner's
+// per-mutant Worker.Test reads it concurrently across N workers
+// without locking — that's safe only because the build phase
+// completes before any worker reads. Don't expose new methods that
+// mutate TestMap state after BuildTestMap returns, or the lock-free
+// read assumption breaks.
 type TestMap struct {
 	// index maps "file:line" to a set of test function names.
 	index map[string]map[string]bool
@@ -263,6 +272,14 @@ func compileTestBinary(ctx context.Context, projectDir, tmpDir, coverPkg string,
 // happens to fail during the build phase still represents real work the
 // runner will do. Timing only the success path would systematically
 // understate timeouts for packages with environment-sensitive tests.
+//
+// Note on context cancellation: if `ctx` is cancelled mid-run (e.g. an
+// upstream SIGINT during the coverage build), the returned duration is
+// the partial run-time at cancellation, not the full test cost. That
+// can under-record the per-test timing for that one entry; the
+// adaptive selector's per-package fallback and the global ceiling
+// absorb the impact, but be aware that one cancelled coverage build
+// can leave behind tighter-than-real timings until the next clean run.
 func runCompiledTest(ctx context.Context, cp *compiledPkg, testName, profilePath string) ([]Block, time.Duration) {
 	args := []string{
 		fmt.Sprintf("-test.run=^%s$", regexp.QuoteMeta(testName)),
