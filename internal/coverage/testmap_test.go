@@ -105,6 +105,36 @@ func TestTestMapPackageDuration(t *testing.T) {
 	}
 }
 
+// TestTestMapIngestResultUpdatesBothMaps kills STATEMENT_REMOVE on the
+// recordDuration call inside the BuildTestMap collect loop. Without
+// this assertion any path that drops the duration recording would be
+// invisible — the index map still gets populated by addBlocks.
+func TestTestMapIngestResultUpdatesBothMaps(t *testing.T) {
+	tm := &TestMap{
+		index:        map[string]map[string]bool{},
+		durations:    map[testKey]time.Duration{},
+		pkgDurations: map[string]time.Duration{},
+	}
+	tm.ingestResult(testCoverage{
+		pkg:      "p",
+		testName: "TestA",
+		duration: 25 * time.Millisecond,
+		blocks: []Block{
+			{File: "f.go", StartLine: 5, EndLine: 5, Count: 1},
+		},
+	})
+
+	if got := tm.durations[testKey{pkg: "p", name: "TestA"}]; got != 25*time.Millisecond {
+		t.Errorf("durations not populated by ingestResult; got %v want 25ms — STATEMENT_REMOVE on the recordDuration call would zero this", got)
+	}
+	if got := tm.pkgDurations["p"]; got != 25*time.Millisecond {
+		t.Errorf("pkgDurations not populated; got %v want 25ms", got)
+	}
+	if !tm.index["f.go:5"]["TestA"] {
+		t.Errorf("addBlocks side of ingestResult missing the f.go:5 → TestA edge; index=%v", tm.index)
+	}
+}
+
 func TestTestMapRecordDurationAccumulates(t *testing.T) {
 	// Same (pkg, name) recorded twice — the per-package sum and the per-test
 	// entry must both accumulate, not overwrite. Mirrors the documented

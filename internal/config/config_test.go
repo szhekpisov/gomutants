@@ -198,8 +198,89 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	if cfg.TimeoutCoefficient != orig.TimeoutCoefficient {
 		t.Errorf("TimeoutCoefficient changed")
 	}
+	// Pin the new adaptive-timeout knobs against CONDITIONALS_BOUNDARY
+	// (`> 0` → `>= 0`) on their respective ApplyFlags guards. Without
+	// these checks a `>= 0` mutation would silently overwrite the
+	// default with the caller's zero.
+	if cfg.TimeoutMargin != orig.TimeoutMargin {
+		t.Errorf("TimeoutMargin changed from %v to %v — CONDITIONALS_BOUNDARY on `> 0` would let zero override the default", orig.TimeoutMargin, cfg.TimeoutMargin)
+	}
+	if cfg.TimeoutMin != orig.TimeoutMin {
+		t.Errorf("TimeoutMin changed from %v to %v", orig.TimeoutMin, cfg.TimeoutMin)
+	}
+	if cfg.AdaptiveTimeout != orig.AdaptiveTimeout {
+		t.Errorf("AdaptiveTimeout pointer changed; AdaptiveTimeoutFlag{Set:false} must be a no-op")
+	}
 	if cfg.Output != orig.Output {
 		t.Errorf("Output changed")
+	}
+}
+
+// TestAdaptiveTimeoutEnabledNilDefault kills BRANCH_IF on the
+// `if c.AdaptiveTimeout == nil { return true }` body. Without that
+// early return the function dereferences a nil pointer and panics; the
+// recover-then-fail wrapper distinguishes the panic from a clean
+// `false` return that some mutations might also produce.
+func TestAdaptiveTimeoutEnabledNilDefault(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("AdaptiveTimeoutEnabled panicked on nil pointer — BRANCH_IF on the nil-guard body lets execution fall through to *c.AdaptiveTimeout: %v", r)
+		}
+	}()
+	c := Config{AdaptiveTimeout: nil}
+	if !c.AdaptiveTimeoutEnabled() {
+		t.Errorf("nil AdaptiveTimeout must default to true")
+	}
+}
+
+// TestAdaptiveTimeoutEnabledExplicitFalse pins the *c.AdaptiveTimeout
+// dereference path so a STATEMENT_REMOVE on the deref still has a
+// targeted assertion.
+func TestAdaptiveTimeoutEnabledExplicitFalse(t *testing.T) {
+	f := false
+	c := Config{AdaptiveTimeout: &f}
+	if c.AdaptiveTimeoutEnabled() {
+		t.Errorf("explicit false must propagate through AdaptiveTimeoutEnabled")
+	}
+}
+
+// TestDefaultTimeoutMinValue pins DefaultTimeoutMin against
+// ARITHMETIC_BASE (`*` → `/` collapses 2*time.Second to 0). Asserting
+// the literal value ensures any arithmetic mutation on the constant
+// shows up here.
+func TestDefaultTimeoutMinValue(t *testing.T) {
+	if DefaultTimeoutMin != 2*time.Second {
+		t.Errorf("DefaultTimeoutMin = %v, want 2s — ARITHMETIC_BASE on `2 * time.Second` would change this", DefaultTimeoutMin)
+	}
+}
+
+// TestLoadAppliesDefaultsForZeroAdaptiveFields kills BRANCH_IF and
+// CONDITIONALS_NEGATION on the two `if cfg.TimeoutMargin == 0` /
+// `cfg.TimeoutMin == 0` defaulting blocks in Load. We write a YAML
+// that explicitly sets both to zero and assert the defaults take over.
+// Without the guards (or with their condition negated) the user would
+// run with TimeoutMargin=0 → per-mutant timeouts always clamp to Min,
+// hiding genuine slowdowns.
+func TestLoadAppliesDefaultsForZeroAdaptiveFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".gomutants.yml")
+	// timeout-min is time.Duration; YAML needs a string-compatible zero.
+	// "0s" is the zero duration so the defaulting block in Load() must
+	// still kick in (its trigger is the int64 zero, not the YAML token).
+	body := []byte("timeout-margin: 0\ntimeout-min: 0s\n")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TimeoutMargin != DefaultTimeoutMargin {
+		t.Errorf("TimeoutMargin=%v, want default %v — BRANCH_IF / CONDITIONALS_NEGATION on the zero-guard would skip the default", cfg.TimeoutMargin, DefaultTimeoutMargin)
+	}
+	if cfg.TimeoutMin != DefaultTimeoutMin {
+		t.Errorf("TimeoutMin=%v, want default %v", cfg.TimeoutMin, DefaultTimeoutMin)
 	}
 }
 

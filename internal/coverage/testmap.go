@@ -117,11 +117,20 @@ func BuildTestMap(ctx context.Context, projectDir string, packages []string, cov
 		pkgDurations: make(map[string]time.Duration),
 	}
 	for tc := range results {
-		tm.addBlocks(tc.testName, tc.blocks)
-		tm.recordDuration(tc.pkg, tc.testName, tc.duration)
+		tm.ingestResult(tc)
 	}
 
 	return tm, nil
+}
+
+// ingestResult folds one per-test outcome into both the coverage index
+// and the duration maps. Extracted so STATEMENT_REMOVE on the duration
+// recording is observable without needing a full BuildTestMap pipeline
+// to assert on (the receive loop is otherwise invisible to a unit
+// test that doesn't drive real `go test` invocations).
+func (tm *TestMap) ingestResult(tc testCoverage) {
+	tm.addBlocks(tc.testName, tc.blocks)
+	tm.recordDuration(tc.pkg, tc.testName, tc.duration)
 }
 
 // recordDuration stores a single (pkg, test) timing and updates the

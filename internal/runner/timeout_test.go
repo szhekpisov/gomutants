@@ -30,6 +30,27 @@ func TestTimeoutPolicyForAdaptiveDisabled(t *testing.T) {
 	}
 }
 
+// Adaptive=false must short-circuit even when the TestMap has timing
+// data that would otherwise drive a much shorter per-mutant timeout.
+// Drives the Adaptive=false branch with a populated map; if the early
+// `if !p.Adaptive` return is elided (BRANCH_IF), the function falls
+// through and returns the Min-clamped 1s instead of Global 30s.
+func TestTimeoutPolicyForAdaptiveDisabledIgnoresTestMap(t *testing.T) {
+	tm := newTestMapWithDurations(t,
+		map[[2]string]time.Duration{
+			{"p", "TestA"}: 100 * time.Millisecond,
+		},
+		map[string][]string{
+			"f.go:1": {"TestA"},
+		},
+	)
+	p := TimeoutPolicy{Global: 30 * time.Second, Margin: 3, Min: time.Second, Adaptive: false}
+	got := p.For(tm, mutator.Mutant{Pkg: "p", CoverageFile: "f.go", Line: 1})
+	if got != 30*time.Second {
+		t.Errorf("Adaptive=false must ignore TestMap and return Global; got %v", got)
+	}
+}
+
 func TestTimeoutPolicyForUsesPerTestSum(t *testing.T) {
 	tm := newTestMapWithDurations(t,
 		map[[2]string]time.Duration{
