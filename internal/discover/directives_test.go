@@ -25,7 +25,7 @@ func writeFixture(t *testing.T, src string) (mutants []mutator.Mutant, path stri
 	pkgs := []Package{{Dir: dir, ImportPath: "example.com/test", GoFiles: []string{"src.go"}}}
 	reg := mutator.NewRegistry()
 	fset := token.NewFileSet()
-	return Discover(fset, pkgs, reg.Mutators(), dir, "example.com/test"), path
+	return Discover(fset, pkgs, reg.Mutators(), dir, "example.com/test").Mutants, path
 }
 
 // suppressedTypes returns the set of mutator types in suppressions.
@@ -209,7 +209,7 @@ func F(a, b int) int { return a + b }
 	mutants, _ := writeFixture(t, src)
 	fset := token.NewFileSet()
 	var warn bytes.Buffer
-	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	kept, suppressed, err := filterByDirectives(fset, mutants, nil, &warn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ var x = 1 + 2
 	mutants, _ := writeFixture(t, src)
 	fset := token.NewFileSet()
 	var warn bytes.Buffer
-	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	kept, suppressed, err := filterByDirectives(fset, mutants, nil, &warn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func B(a, b int) int { return a + b }
 	pkgs := []Package{{Dir: dir, ImportPath: "example.com/test", GoFiles: []string{"a.go", "b.go"}}}
 	reg := mutator.NewRegistry()
 	fset := token.NewFileSet()
-	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com/test")
+	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com/test").Mutants
 
 	kept, suppressed, err := FilterByDirectives(fset, mutants)
 	if err != nil {
@@ -795,7 +795,7 @@ func F(a, b int) int {
 	mutants, _ := writeFixture(t, src)
 	fset := token.NewFileSet()
 	var warn bytes.Buffer
-	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	kept, suppressed, err := filterByDirectives(fset, mutants, nil, &warn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -927,7 +927,7 @@ func TestFilterByDirectivesUnreadableFile(t *testing.T) {
 		Type:    mutator.ArithmeticBase,
 	}
 	fset := token.NewFileSet()
-	_, _, err := filterByDirectives(fset, []mutator.Mutant{m}, io.Discard)
+	_, _, err := filterByDirectives(fset, []mutator.Mutant{m}, nil, io.Discard)
 	if err == nil {
 		t.Errorf("expected an error for unreadable file path")
 	}
@@ -958,7 +958,7 @@ func B2(a, b int) int { return a + b } // gomutants:disable ARITHMETIC_BASE
 	pkgs := []Package{{Dir: dir, ImportPath: "example.com/test", GoFiles: []string{"a.go", "b.go"}}}
 	reg := mutator.NewRegistry()
 	fset := token.NewFileSet()
-	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com/test")
+	mutants := Discover(fset, pkgs, reg.Mutators(), dir, "example.com/test").Mutants
 
 	kept, _, err := FilterByDirectives(fset, mutants)
 	if err != nil {
@@ -1042,7 +1042,7 @@ func F(a, b int) int { return a + b }
 	mutants, _ := writeFixture(t, src)
 	fset := token.NewFileSet()
 	var warn bytes.Buffer
-	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	kept, suppressed, err := filterByDirectives(fset, mutants, nil, &warn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1073,7 +1073,7 @@ var x = 1 + 2
 	mutants, _ := writeFixture(t, src)
 	fset := token.NewFileSet()
 	var warn bytes.Buffer
-	kept, suppressed, err := filterByDirectives(fset, mutants, &warn)
+	kept, suppressed, err := filterByDirectives(fset, mutants, nil, &warn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1105,7 +1105,7 @@ func F() int { return 1 + 2 }
 	mutants, _ := writeFixture(t, src)
 	fset := token.NewFileSet()
 	var warn bytes.Buffer
-	if _, _, err := filterByDirectives(fset, mutants, &warn); err != nil {
+	if _, _, err := filterByDirectives(fset, mutants, nil, &warn); err != nil {
 		t.Fatal(err)
 	}
 	w := warn.String()
@@ -1147,5 +1147,93 @@ func F(a, b int) int {
 	}
 	if !condBoundaryKept {
 		t.Errorf("CONDITIONALS_BOUNDARY on the log.Printf line should NOT be suppressed by an ARITHMETIC_BASE-scoped regexp")
+	}
+}
+
+// TestFilterByDirectivesWithCacheSkipsReread verifies that when the parse
+// cache from Discover is supplied, FilterByDirectivesWithCache does not
+// touch the filesystem: the source file is removed before the call and
+// the directive must still suppress its target.
+func TestFilterByDirectivesWithCacheSkipsReread(t *testing.T) {
+	src := `package p
+
+func F(a, b int) int {
+	// gomutants:disable-next-line ARITHMETIC_BASE
+	return a + b
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "src.go")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgs := []Package{{Dir: dir, ImportPath: "example.com/test", GoFiles: []string{"src.go"}}}
+	reg := mutator.NewRegistry()
+	fset := token.NewFileSet()
+	res := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/test")
+
+	// Drop the file: any read attempt downstream is now a hard error.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	_, suppressed, err := FilterByDirectivesWithCache(fset, res.Mutants, res.Files)
+	if err != nil {
+		t.Fatalf("cache path read disk: %v", err)
+	}
+	if len(suppressed) == 0 {
+		t.Fatalf("expected directive to suppress the arithmetic mutant via the cache")
+	}
+}
+
+// TestFilterByDirectivesWithCachePartialCacheFallsBack verifies that
+// files missing from the supplied cache fall back to the read+parse
+// path: with one file's entry deleted from the cache map (but the file
+// still on disk), its directive must still suppress.
+func TestFilterByDirectivesWithCachePartialCacheFallsBack(t *testing.T) {
+	srcA := `package p
+
+func A(a, b int) int {
+	// gomutants:disable-next-line ARITHMETIC_BASE
+	return a + b
+}
+`
+	srcB := `package p
+
+func B(a, b int) int {
+	// gomutants:disable-next-line ARITHMETIC_BASE
+	return a + b
+}
+`
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.go")
+	pathB := filepath.Join(dir, "b.go")
+	if err := os.WriteFile(pathA, []byte(srcA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pathB, []byte(srcB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkgs := []Package{{Dir: dir, ImportPath: "example.com/test", GoFiles: []string{"a.go", "b.go"}}}
+	reg := mutator.NewRegistry()
+	fset := token.NewFileSet()
+	res := Discover(fset, pkgs, reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil), dir, "example.com/test")
+
+	// Drop a.go from the cache; it stays on disk so the fallback can read it.
+	delete(res.Files, pathA)
+
+	_, suppressed, err := FilterByDirectivesWithCache(fset, res.Mutants, res.Files)
+	if err != nil {
+		t.Fatalf("FilterByDirectivesWithCache: %v", err)
+	}
+	suppressedFiles := make(map[string]int)
+	for _, s := range suppressed {
+		suppressedFiles[s.Mutant.File]++
+	}
+	if suppressedFiles[pathA] == 0 {
+		t.Errorf("a.go directive must suppress via the read+parse fallback; suppressed=%v", suppressedFiles)
+	}
+	if suppressedFiles[pathB] == 0 {
+		t.Errorf("b.go directive must suppress via the cache; suppressed=%v", suppressedFiles)
 	}
 }
