@@ -1,5 +1,3 @@
-Gomutants is a mutation testing tool for Go, supporting diff-scoped runs, incremental caching, per-test coverage routing, and block-level mutators. It's a near drop-in for [gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` command, same gremlins-compatible JSON output, same threshold exit codes — so existing CI scripts keep working.
-
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutants/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutants)
 [![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutants)](https://goreportcard.com/report/github.com/szhekpisov/gomutants)
 [![Go Reference](https://pkg.go.dev/badge/github.com/szhekpisov/gomutants.svg)](https://pkg.go.dev/github.com/szhekpisov/gomutants)
@@ -8,8 +6,7 @@ Gomutants is a mutation testing tool for Go, supporting diff-scoped runs, increm
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security & Static Analysis](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml)
 
-Licensed under [MIT](LICENSE).
-
+Gomutants is a mutation testing tool for Go, supporting diff-scoped runs, incremental caching, per-test coverage routing, and block-level mutators. It's a near drop-in for [gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` command, same gremlins-compatible JSON output, same threshold exit codes — so existing CI scripts keep working.
 
 ### Documentation quick links
 
@@ -35,7 +32,7 @@ Licensed under [MIT](LICENSE).
 ### Quick start
 
 ```
-$ go install github.com/szhekpisov/gomutants@v0.1.0
+$ go install github.com/szhekpisov/gomutants@v0.2.0
 
 # Run on the whole module.
 $ gomutants ./...
@@ -139,7 +136,7 @@ PR-scoped runs are faster than gremlins for a different reason: gremlins has no 
 Gomutants can be installed with `go install`:
 
 ```
-$ go install github.com/szhekpisov/gomutants@v0.1.0
+$ go install github.com/szhekpisov/gomutants@v0.2.0
 ```
 
 The minimum supported version of Go for gomutants is **1.26**, both for building gomutants itself and for the project under test (gomutants shells out to `go test` in your project's toolchain).
@@ -184,7 +181,7 @@ Surface surviving mutants as inline annotations on the PR diff:
 - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
   with:
     fetch-depth: 0  # required so --changed-since can reach the base ref
-- uses: szhekpisov/gomutants@v0.1.0
+- uses: szhekpisov/gomutants@v0.2.0
   with:
     args: --changed-since origin/${{ github.base_ref }} ./...
 ```
