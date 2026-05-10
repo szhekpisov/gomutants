@@ -263,6 +263,80 @@ func captureStderr(t *testing.T, fn func()) string {
 	return captured.String()
 }
 
+// TestPoolRunWorkerCtxErrCheckHitDeterministic deterministically exercises
+// the worker goroutine's `if ctx.Err() != nil { return }` body (pool.go
+// lines 99–101). The pre-cancelled-ctx variant below is probabilistic on
+// Linux: with ctx already cancelled when Run starts, the feeder's `select`
+// between `case work <- idx:` and `case <-ctx.Done():` picks ctx.Done on
+// the first iteration with probability 0.5, closing the work channel
+// before any send. The worker's `for idx := range work` then exits without
+// entering the body, leaving lines 99–101 uncovered on ~50% of CI runs.
+//
+// Strategy: feed the worker N mutants and cancel ctx synchronously inside
+// the very first w.Test call (via the writeFileFunc indirection, which
+// w.Test invokes before any subprocess work). When that first w.Test
+// returns, ctx is already cancelled; the worker's next `for idx := range
+// work` receive succeeds (the work channel was filled by the feeder before
+// ctx was cancelled, since the feeder ran first), the `if ctx.Err() != nil`
+// check fires true, and the early-return path is taken — no race on
+// callback ordering or scheduler timing.
+func TestPoolRunWorkerCtxErrCheckHitDeterministic(t *testing.T) {
+	dir := setupTestProject(t)
+	srcPath := filepath.Join(dir, "add.go")
+	src, _ := os.ReadFile(srcPath)
+	cache := map[string][]byte{srcPath: src}
+	plusIdx := strings.IndexByte(string(src), '+')
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Hook writeFileFunc to cancel ctx during the very first w.Test call.
+	// NewWorker's two preflight writes (the empty worker-N.go and
+	// overlay-N.json) come first; w.Test's first write is the patched
+	// source file, which is the third writeFileFunc invocation. Cancelling
+	// at that point guarantees the first w.Test still completes (the
+	// patched file is written before cancel takes effect on subprocess
+	// start) but ctx is cancelled by the time the worker loops back to
+	// `for idx := range work`, so the pre-w.Test `if ctx.Err() != nil`
+	// check fires on the second iteration.
+	origWrite := writeFileFunc
+	defer func() { writeFileFunc = origWrite }()
+	var writeCalls atomic.Int32
+	writeFileFunc = func(name string, data []byte, perm os.FileMode) error {
+		if writeCalls.Add(1) == 3 {
+			cancel()
+		}
+		return origWrite(name, data, perm)
+	}
+
+	// Single worker so the two mutants serialize through one goroutine —
+	// keeps the test's iteration-ordering guarantee tight.
+	p := NewPool(1, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	mk := func(id int, repl string) mutator.Mutant {
+		return mutator.Mutant{
+			ID: id, File: srcPath, Pkg: "testmod",
+			StartOffset: plusIdx, EndOffset: plusIdx + 1,
+			Replacement: repl, Status: mutator.StatusPending,
+		}
+	}
+	mutants := []mutator.Mutant{mk(1, "-"), mk(2, "*")}
+
+	var calls atomic.Int32
+	runWithDeadline(t, 60*time.Second, func() {
+		p.Run(ctx, mutants, func(mutator.Mutant) { calls.Add(1) })
+	})
+
+	// At most one result should reach the callback: the first mutant ran
+	// (its writeFileFunc call cancelled ctx mid-flight, but w.Test still
+	// finishes and emits a result), and the second was skipped via the
+	// ctx-err early-return (its result never makes it onto the results
+	// channel). BRANCH_IF on the early-return body would let the second
+	// w.Test fire and bump calls to 2.
+	if got := calls.Load(); got > 1 {
+		t.Errorf("callback fired %d times, want at most 1 — BRANCH_IF on the worker's `if ctx.Err() != nil { return }` lets the post-cancel mutant slip through", got)
+	}
+}
+
 // TestPoolRunCancelledNoCallback kills BRANCH_IF on the worker goroutine's
 // `if ctx.Err() != nil { return }`. With the body elided, w.Test runs
 // (returns Pending via its own ctx-cancel handling) and the result still
