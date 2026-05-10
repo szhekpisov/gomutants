@@ -16,7 +16,7 @@ import (
 // Kills STATEMENT_REMOVE on any of the three Fprintf lines and any text mutations.
 func TestHeaderExact(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false)
+	term := NewTerminal(&buf, 0, false, false)
 	term.Header("0.1.0", "[./...]", 10, 5)
 
 	want := "gomutants v0.1.0\n\nTarget: [./...]\nWorkers: 10 | Mutations: 5 types enabled\n\n"
@@ -27,7 +27,7 @@ func TestHeaderExact(t *testing.T) {
 
 func TestPhaseExact(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false)
+	term := NewTerminal(&buf, 0, false, false)
 	term.Phase("Collecting coverage...")
 	term.PhaseDone("done (2.1s)")
 
@@ -40,7 +40,7 @@ func TestPhaseExact(t *testing.T) {
 // TestOnResultVerboseExact asserts the full verbose line format.
 func TestOnResultVerboseExact(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 5, true)
+	term := NewTerminal(&buf, 5, true, false)
 
 	m := mutator.Mutant{
 		ID:          1,
@@ -62,7 +62,7 @@ func TestOnResultVerboseExact(t *testing.T) {
 
 func TestOnResultNonTTY(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 5, false)
+	term := NewTerminal(&buf, 5, false, false)
 
 	m := mutator.Mutant{ID: 1, Status: mutator.StatusLived, Duration: time.Second}
 	term.OnResult(m)
@@ -168,7 +168,7 @@ func TestOnResultTTYTotalZero(t *testing.T) {
 // regression in the per-status counter wiring.
 func TestSummaryExact(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false) // non-TTY
+	term := NewTerminal(&buf, 0, false, false) // non-TTY
 	r := &Report{
 		MutantsKilled:     8,
 		MutantsLived:      2,
@@ -198,7 +198,7 @@ func TestSummaryExact(t *testing.T) {
 // MutantsTimedOut, killing any STATEMENT_REMOVE on the corresponding Fprintf.
 func TestSummaryTimedOutNonZero(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false)
+	term := NewTerminal(&buf, 0, false, false)
 	r := &Report{
 		MutantsKilled:     5,
 		MutantsLived:      1,
@@ -263,7 +263,7 @@ func TestSummaryTTYVerboseNoLeadingNewline(t *testing.T) {
 // if the guard's isTTY operand is replaced with true, a non-TTY would get the extra newline.
 func TestSummaryNonTTYNoLeadingNewline(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false) // bytes.Buffer → isTTY=false
+	term := NewTerminal(&buf, 0, false, false) // bytes.Buffer → isTTY=false
 	r := &Report{MutantsKilled: 5, MutantsTotal: 5, TestEfficacy: 100}
 	term.Summary(r)
 
@@ -276,7 +276,7 @@ func TestSummaryNonTTYNoLeadingNewline(t *testing.T) {
 
 func TestSummaryShowsCachedLineWhenNonZero(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false)
+	term := NewTerminal(&buf, 0, false, false)
 	r := &Report{
 		MutantsKilled: 5, MutantsLived: 1,
 		MutantsTotal: 6, MutantsCached: 4,
@@ -290,7 +290,7 @@ func TestSummaryShowsCachedLineWhenNonZero(t *testing.T) {
 
 func TestSummaryHidesCachedLineWhenZero(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false)
+	term := NewTerminal(&buf, 0, false, false)
 	r := &Report{MutantsKilled: 5, MutantsTotal: 5, TestEfficacy: 100}
 	term.Summary(r)
 	if strings.Contains(buf.String(), "Cached:") {
@@ -300,7 +300,7 @@ func TestSummaryHidesCachedLineWhenZero(t *testing.T) {
 
 func TestSummaryShowsSuppressedLineWhenNonZero(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false)
+	term := NewTerminal(&buf, 0, false, false)
 	r := &Report{
 		MutantsKilled: 5, MutantsLived: 1,
 		MutantsTotal: 6, MutantsSuppressed: 3,
@@ -314,11 +314,59 @@ func TestSummaryShowsSuppressedLineWhenNonZero(t *testing.T) {
 
 func TestSummaryHidesSuppressedLineWhenZero(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 0, false)
+	term := NewTerminal(&buf, 0, false, false)
 	r := &Report{MutantsKilled: 5, MutantsTotal: 5, TestEfficacy: 100}
 	term.Summary(r)
 	if strings.Contains(buf.String(), "Suppressed:") {
 		t.Errorf("expected no Suppressed line when MutantsSuppressed=0, got %q", buf.String())
+	}
+}
+
+func TestQuietSuppressesHeaderPhaseAndOnResult(t *testing.T) {
+	var buf bytes.Buffer
+	// Force isTTY=true so the OnResult progress-bar branch is exercised
+	// (otherwise the non-TTY non-verbose path is already silent and the
+	// quiet guard would be redundantly tested).
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now(), quiet: true}
+
+	term.Header("0.1.0", "[./...]", 4, 16)
+	term.Phase("Resolving packages...")
+	term.PhaseDone("done (1 packages)")
+	term.OnResult(mutator.Mutant{ID: 1, Status: mutator.StatusKilled, Duration: time.Millisecond})
+
+	if buf.Len() != 0 {
+		t.Errorf("quiet mode should produce no output for Header/Phase/OnResult, got %q", buf.String())
+	}
+}
+
+func TestQuietStillPrintsSummary(t *testing.T) {
+	var buf bytes.Buffer
+	term := NewTerminal(&buf, 0, false, true)
+	r := &Report{
+		MutantsKilled: 5, MutantsLived: 1,
+		MutantsTotal: 6, TestEfficacy: 83.33,
+	}
+	term.Summary(r)
+
+	got := buf.String()
+	if !strings.Contains(got, "Killed:") {
+		t.Errorf("Summary must still print in quiet mode, got %q", got)
+	}
+	if !strings.Contains(got, "Efficacy:") {
+		t.Errorf("Summary must still include efficacy in quiet mode, got %q", got)
+	}
+}
+
+// TestQuietVerboseOnResultStillSuppressed kills any future regression
+// where verbose's per-mutant Fprintf path runs ahead of the quiet guard.
+// The CLI rejects --quiet --verbose, but Terminal is a library: defense
+// in depth keeps the no-output guarantee local to the Terminal.
+func TestQuietVerboseOnResultStillSuppressed(t *testing.T) {
+	var buf bytes.Buffer
+	term := &Terminal{w: &buf, isTTY: false, total: 5, start: time.Now(), verbose: true, quiet: true}
+	term.OnResult(mutator.Mutant{ID: 1, Status: mutator.StatusLived})
+	if buf.Len() != 0 {
+		t.Errorf("quiet must short-circuit before verbose path, got %q", buf.String())
 	}
 }
 
@@ -336,7 +384,7 @@ func TestPct(t *testing.T) {
 
 func TestNewTerminalNonFile(t *testing.T) {
 	var buf bytes.Buffer
-	term := NewTerminal(&buf, 10, false)
+	term := NewTerminal(&buf, 10, false, false)
 	if term.isTTY {
 		t.Error("bytes.Buffer should not be detected as TTY")
 	}
@@ -355,7 +403,7 @@ func TestNewTerminalWithPipe(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 
-	term := NewTerminal(w, 5, false)
+	term := NewTerminal(w, 5, false, false)
 	if term.isTTY {
 		t.Error("pipe should not be detected as TTY")
 	}
@@ -372,7 +420,7 @@ func TestNewTerminalWithClosedFile(t *testing.T) {
 	_ = f.Close()
 	os.Remove(name)
 	// f is now a closed file.
-	term := NewTerminal(f, 5, false)
+	term := NewTerminal(f, 5, false, false)
 	if term.isTTY {
 		t.Error("closed file should not be detected as TTY")
 	}
@@ -436,7 +484,7 @@ func TestNewTerminalDetectsCharDevice(t *testing.T) {
 		t.Skipf("/dev/null unavailable: %v", err)
 	}
 	defer f.Close()
-	term := NewTerminal(f, 10, false)
+	term := NewTerminal(f, 10, false, false)
 	if !term.isTTY {
 		t.Errorf("expected isTTY=true for char device %s, got false", os.DevNull)
 	}

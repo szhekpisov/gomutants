@@ -19,10 +19,11 @@ type Terminal struct {
 	done    int
 	start   time.Time
 	verbose bool
+	quiet   bool
 }
 
 // NewTerminal creates a terminal progress reporter.
-func NewTerminal(w io.Writer, total int, verbose bool) *Terminal {
+func NewTerminal(w io.Writer, total int, verbose, quiet bool) *Terminal {
 	isTTY := false
 	if f, ok := w.(*os.File); ok {
 		if info, err := f.Stat(); err == nil {
@@ -35,11 +36,15 @@ func NewTerminal(w io.Writer, total int, verbose bool) *Terminal {
 		total:   total,
 		start:   time.Now(),
 		verbose: verbose,
+		quiet:   quiet,
 	}
 }
 
 // Header prints the initial info banner.
 func (t *Terminal) Header(version string, target string, workers int, mutatorCount int) {
+	if t.quiet {
+		return
+	}
 	fmt.Fprintf(t.w, "gomutants v%s\n\n", version)
 	fmt.Fprintf(t.w, "Target: %s\n", target)
 	fmt.Fprintf(t.w, "Workers: %d | Mutations: %d types enabled\n\n", workers, mutatorCount)
@@ -47,16 +52,25 @@ func (t *Terminal) Header(version string, target string, workers int, mutatorCou
 
 // Phase prints a phase status line.
 func (t *Terminal) Phase(msg string) {
+	if t.quiet {
+		return
+	}
 	fmt.Fprintf(t.w, "%s", msg)
 }
 
 // PhaseDone completes a phase line.
 func (t *Terminal) PhaseDone(msg string) {
+	if t.quiet {
+		return
+	}
 	fmt.Fprintf(t.w, " %s\n", msg)
 }
 
 // OnResult is the callback for each completed mutant.
 func (t *Terminal) OnResult(m mutator.Mutant) {
+	if t.quiet {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.done++
