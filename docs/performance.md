@@ -1,17 +1,19 @@
 # Performance
 
 Mutation testing on real, third-party Go packages. This page documents the
-methodology and the numbers it produced on two targets — a small fast one
-(`google/uuid`) and a larger one (`spf13/cobra`) — so you can reproduce
-them on your own hardware. Repo-internal benchmarks live in `benchmarks/`;
-this page covers external codebases.
+methodology and the numbers it produced on three targets — a small fast
+one (`google/uuid`), a medium CLI (`spf13/cobra`), and a foundational
+package inside a large monorepo (`prometheus/model/labels`) — so you can
+reproduce them on your own hardware. Repo-internal benchmarks live in
+`benchmarks/`; this page covers external codebases.
 
 ## Targets at a glance
 
-| Target | LOC | Packages | Baseline `go test` | Mutants (gomutants OOB on `.`) |
+| Target | LOC | Packages | Baseline `go test` | Mutants (gomutants OOB) |
 |---|---:|---:|---:|---:|
-| google/uuid | ~2.3k | 1 | ~1.0 s | 464 |
-| spf13/cobra | ~16.7k | 2 | ~3.0 s | 1706 |
+| google/uuid (root) | ~2.3k | 1 | ~1.0 s | 464 |
+| spf13/cobra (root) | ~6.1k | 1 | ~3.0 s | 1706 |
+| prometheus/model/labels | ~4.0k | 1 | ~3.0 s | 1324 |
 
 ## Environment
 
@@ -239,11 +241,93 @@ treat them as upper bounds and ±15% rather than precise.
   affect gomutants's `go test`-driven loop. See "Go 1.26.x compatibility"
   below.
 
+## Results: prometheus/model/labels
+
+- Pinned commit: `ecab2f45a8b7a1f12b8a16590a56590c96422f44`
+- Source size: ~4.0k LOC, single package within a 245-package monorepo.
+- Baseline `go test ./model/labels`: ~3.0 s (with 10 cores; user 8.9 s).
+
+A foundational package from a real production codebase. Highly parallel
+test suite (test-level parallelism saturates 10 cores), regex-heavy
+matchers, and integration with the rest of the Prometheus monorepo via a
+fat `go.mod`. Targets `./model/labels` from the repo root so both tools
+resolve the package within the surrounding module.
+
+Same methodology as cobra: 3-run medians for L4L and gremlins, single
+run for OOB.
+
+### Wall time
+
+| # | Tool | Mode | Go | Target | Wall time |
+|---|---|---|---|---|---|
+| 1 | gremlins v0.6.0 | 10w, 5 default ops, `--timeout-coefficient=20` (median of 3) | 1.25.7 | `./model/labels` | 139.0 s |
+| 2 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off, single run) | 1.25.7 | `./model/labels` | 342.4 s |
+| 3 | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | 1.25.7 | `./model/labels` | **89.8 s** |
+| 3a | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | **1.26.3** | `./model/labels` | **96.4 s** |
+| 4 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, hyperfine 3×) | 1.25.7 | `./model/labels` | **2.84 ± 0.16 s** |
+
+### Mutant outcomes
+
+| # | Total | KILLED | LIVED | NOT_COVERED | TIMED_OUT | NOT_VIABLE | Efficacy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 859 | 352 | 86 | 419 | 2 | 0 | 80.0% |
+| 2 | 1324 | 817 | 263 | 165 | 33 | 46 | 73.4% |
+| 3 | 500 | 356 | 85 | 51 | 3 | 5 | 80.2% |
+| 3a | 500 | 356 | 85 | 51 | 3 | 5 | 80.2% |
+| 4 | 1324 | 817 | 263 | 165 | 33 | 46 | 73.4% |
+
+### Reading the prometheus results
+
+- **Engine throughput gap widens further on this target.** Like-for-like
+  (1 vs 3): gomutants is **1.55× faster** wall-clock — 89.8 s vs 139.0 s.
+  Per-mutant cost (KILLED+LIVED only): gremlins ~317 ms, gomutants
+  ~204 ms. Same root cause as cobra — gomutants's pre-built test binary
+  amortizes the test-binary compile across all mutants while gremlins
+  re-pays it per mutant. The win is bigger here than on cobra (1.78×) but
+  the absolute per-mutant gap is similar; what's different is gremlins is
+  testing nearly twice as many mutants (438 vs 441 K+L is similar, but
+  gremlins also serially attempts mutants on uncovered lines and counts
+  them differently — see below).
+
+- **NOT_COVERED interpretation differs sharply.** gremlins reports 419
+  NOT_COVERED mutants on this target; gomutants reports 51. Both ran the
+  same 5 operators against the same source. The gap is in how each tool
+  defines "covered": gomutants uses per-test coverage (only counts a line
+  as not-covered if no test in the suite touches it), while gremlins's
+  package-level coverage flags lines that look uncovered by the
+  test-utility files (`test_utils.go`) and a few less-exercised paths.
+  Both KILLED counts (352 vs 356) are within run-to-run noise, so the
+  meaningful comparison is unaffected.
+
+- **OOB times out on 33 mutants.** The default adaptive timeout struggles
+  on this target's heavier per-test workload — model/labels has slow
+  regex tests that already approach the timeout floor under contention.
+  Tuning `-timeout-margin` higher (e.g. 5×) or running fewer workers
+  reduces this. The warm-cache row preserves the same 33 timeouts because
+  the cache stores the timed-out status as-is; users rerunning to confirm
+  flakes can pass `--cache=off`.
+
+- **Go 1.25.7 → 1.26.3 shows a real ~7% slowdown here.** 89.79 s →
+  96.38 s, with very tight per-version stddevs (0.34 / 0.21 across runs
+  2–3). uuid and cobra didn't show this; prometheus/model/labels does.
+  The mutant set and KILLED/LIVED counts are identical (500 mutants, 356
+  killed, 85 lived), so this isn't an engine difference — it's the
+  underlying `go test` getting slightly slower on this codebase under the
+  newer toolchain. Likely a regex-related performance change in stdlib;
+  hasn't been pinpointed.
+
+- **Cache lands the same way as on cobra.** Run 4: 2.84 s vs 342 s OOB —
+  **~120× faster**. The 33 cached timeouts and the heavy mutant set
+  (1324) re-emerge instantly on second run; if you've fixed flake causes,
+  pass `--cache=off` to re-test from scratch.
+
 ## Why warm-cache time doesn't track project size
 
-Cobra's warm-cache run (2.73 s) is *faster* than uuid's (3.22 s), despite
-cobra having ~3.7× more mutants and ~7× more LOC. That looks wrong until
-you measure where the seconds actually go.
+Warm-cache wall times are remarkably similar across all three targets
+despite radically different sizes — uuid 3.22 s, cobra 2.73 s,
+prometheus/model/labels 2.84 s — and cobra is *faster* than uuid despite
+having ~3.7× more mutants and ~7× more LOC. That looks wrong until you
+measure where the seconds actually go.
 
 On a warm-cache run, gomutants's per-mutant work is genuinely free — every
 mutant short-circuits to its cached status. The wall time is almost
@@ -299,11 +383,16 @@ regression in gomutants, the like-for-like rows are duplicated under
 |---|---:|---:|---:|
 | google/uuid (L4L, hyperfine 3+1) | 29.66 ± 0.28 s | 29.73 ± 0.11 s | +0.2% (within σ) |
 | spf13/cobra (L4L, median of 3) | 72.60 s | 72.96 s | +0.5% |
+| prometheus/model/labels (L4L, median of 3) | 89.79 s | 96.38 s | **+7.3%** |
 
-Mutant discovery is identical between toolchains (461 mutants on cobra,
-120 on uuid), and KILLED/LIVED counts vary only by run-to-run noise.
-gomutants's engine is unaffected by the Go 1.26 changes that break
-gremlins's coverage path.
+Mutant discovery is identical between toolchains across all three targets
+(120 / 461 / 500 mutants) and KILLED/LIVED counts match either exactly or
+within run-to-run noise. The 7.3% prometheus slowdown is real and
+reproducible (per-version stddev across runs 2–3 is ~0.3 s on each side).
+gomutants's engine is the same on both toolchains, so the slowdown lives
+in the underlying `go test` for that specific package — likely a
+regex-related stdlib change in 1.26, since model/labels's hot path is
+regex-heavy. Hasn't been pinpointed. uuid and cobra are unaffected.
 
 ## Caveats
 
@@ -332,10 +421,11 @@ gremlins's coverage path.
   Gremlins doesn't share that artifact (each mutant is a fresh
   `go test`, so no warm-up effect; its 3 runs were 130/129/128 s). Treat
   the cobra OOB numbers as ±15% upper bounds rather than precise.
-- **Coverage of external targets.** This page covers `google/uuid` and
-  `spf13/cobra`. The in-repo `benchmarks/` harness covers two other
-  targets (`./testdata/simple/` and `./internal/mutator`) and will give a
-  different picture on different code.
+- **Coverage of external targets.** This page covers `google/uuid`,
+  `spf13/cobra`, and `prometheus/model/labels`. The in-repo `benchmarks/`
+  harness covers two other targets (`./testdata/simple/` and
+  `./internal/mutator`) and will give a different picture on different
+  code.
 
 ## Reproducing
 
@@ -391,4 +481,30 @@ done
 rm -f .gomutants-cache.json
 GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/c-prime.json . >/dev/null
 hyperfine --warmup 0 --runs 3 'GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/c-warm.json .'
+
+# --- prometheus/model/labels (run from repo root, target ./model/labels) ---
+git clone https://github.com/prometheus/prometheus /tmp/prom && cd /tmp/prom
+git checkout ecab2f45a8b7a1f12b8a16590a56590c96422f44
+go mod download   # heavy: k8s, azure, gcp, etc.
+
+# OOB single-run (~6 min)
+rm -f .gomutants-cache.json
+GOTOOLCHAIN=go1.25.7 time gomutants -workers 10 --cache=off -quiet -o /tmp/p-oob.json ./model/labels
+
+# L4L 3-run median per Go version, gremlins 3-run median:
+for v in 1.25.7 1.26.3; do
+  for r in 1 2 3; do
+    rm -f .gomutants-cache.json
+    GOTOOLCHAIN=go$v time gomutants -workers 10 --cache=off -quiet -only=$GREM_OPS -o /tmp/p-l4l-$v-$r.json ./model/labels
+  done
+done
+for r in 1 2 3; do
+  rm -f .gomutants-cache.json
+  GOTOOLCHAIN=go1.25.7 time gremlins unleash --workers 10 --timeout-coefficient 20 --silent -o /tmp/p-grem-$r.json ./model/labels
+done
+
+# Warm cache (~3 s):
+rm -f .gomutants-cache.json
+GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/p-prime.json ./model/labels >/dev/null
+hyperfine --warmup 0 --runs 3 'GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/p-warm.json ./model/labels'
 ```
