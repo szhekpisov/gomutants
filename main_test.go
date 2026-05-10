@@ -46,9 +46,15 @@ func TestRunVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run --version: %v", err)
 	}
-	want := "gomutants v0.1.0\n"
-	if out != want {
-		t.Errorf("version output: got %q, want %q", out, want)
+	// Under `go test`, version falls back to "dev" (Main.Version is
+	// "(devel)"); commit/buildDate may be either the sentinel defaults
+	// or vcs.revision/vcs.time depending on how the test was built, so
+	// only assert structure, not exact values.
+	if !strings.HasPrefix(out, "gomutants vdev (commit: ") {
+		t.Errorf("version output prefix: got %q", out)
+	}
+	if !strings.Contains(out, ", built: ") || !strings.HasSuffix(out, ")\n") {
+		t.Errorf("version output structure: got %q", out)
 	}
 }
 
@@ -60,7 +66,7 @@ func TestRunUnleash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run unleash --version: %v", err)
 	}
-	if !strings.Contains(out, "gomutants v0.1.0") {
+	if !strings.Contains(out, "gomutants vdev") {
 		t.Errorf("unleash: expected version output, got %q", out)
 	}
 }
@@ -159,7 +165,7 @@ func TestRunAllLongFlags(t *testing.T) {
 		t.Fatalf("run with all long flags: %v", err)
 	}
 	// Dry-run prints "[PENDING]" or "[NOT COVERED]" markers per mutant.
-	if !strings.Contains(out, "gomutants v0.1.0") {
+	if !strings.Contains(out, "gomutants vdev") {
 		t.Errorf("missing header: %q", out)
 	}
 	if !strings.Contains(out, "Target: [testmod]") {
@@ -463,7 +469,7 @@ func TestRunFullPipeline(t *testing.T) {
 
 	// Verify every phase-banner line and the final report line.
 	mustContain := []string{
-		"gomutants v0.1.0",
+		"gomutants vdev",
 		"Target: [testmod]",
 		"Workers: 1 | Mutations: 1 types enabled",
 		"Resolving packages...",

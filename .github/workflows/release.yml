@@ -40,13 +40,17 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          go build -ldflags "-s -w -X main.version=${VERSION}" -o gomutants_verify
+          COMMIT="${GITHUB_SHA}"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" -o gomutants_verify
           OUTPUT=$(./gomutants_verify --version)
           echo "Version output: ${OUTPUT}"
-          if [[ "${OUTPUT}" != *"${VERSION}"* ]]; then
-            echo "::error::Version output does not contain expected version '${VERSION}'"
-            exit 1
-          fi
+          for needle in "${VERSION}" "${COMMIT}" "${BUILD_DATE}"; do
+            if [[ "${OUTPUT}" != *"${needle}"* ]]; then
+              echo "::error::Version output missing expected substring '${needle}'"
+              exit 1
+            fi
+          done
           echo "Version verification passed"
           rm -f gomutants_verify
 
