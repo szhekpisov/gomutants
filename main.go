@@ -27,10 +27,27 @@ import (
 	"github.com/szhekpisov/gomutants/internal/runner"
 )
 
+// devVersion is the sentinel default; effectiveVersion() falls back to
+// build info when version still equals it.
+const devVersion = "dev"
+
 // version is overridden at release time via -ldflags '-X main.version=...'.
-// Keeping it `var` (not const) is what makes the ldflags injection work;
-// the default lets `go install`/`go build` produce a meaningful string.
-var version = "0.1.0"
+var version = devVersion
+
+// effectiveVersion returns the user-visible version. Ldflags-injected
+// builds win; otherwise we try Main.Version from build info (set by
+// `go install module@vX.Y.Z`); otherwise devVersion.
+func effectiveVersion() string {
+	if version != devVersion {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return version
+}
 
 // cacheToolVersion is the identifier stamped into the cache's
 // `tool_version` field and gated on Load to invalidate stale entries.
@@ -48,9 +65,10 @@ var version = "0.1.0"
 // would be overkill — this runs exactly twice per process at most
 // (startup + cache integration).
 func cacheToolVersion() string {
+	v := effectiveVersion()
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return version + "+nobuildinfo"
+		return v + "+nobuildinfo"
 	}
 	var rev string
 	var modified bool
@@ -63,16 +81,16 @@ func cacheToolVersion() string {
 		}
 	}
 	if rev == "" {
-		return version + "+nobuildinfo"
+		return v + "+nobuildinfo"
 	}
 	short := rev
 	if len(short) > 12 {
 		short = short[:12]
 	}
 	if modified {
-		return version + "+" + short + ".dirty"
+		return v + "+" + short + ".dirty"
 	}
-	return version + "+" + short
+	return v + "+" + short
 }
 
 func main() {
@@ -223,7 +241,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if showVersion {
-		fmt.Fprintf(stdout, "gomutants v%s\n", version)
+		fmt.Fprintf(stdout, "gomutants v%s\n", effectiveVersion())
 		return nil
 	}
 
@@ -265,7 +283,7 @@ func run(ctx context.Context, args []string) error {
 	enabledMutators := reg.EnabledMutators(cfg.Only, cfg.Disable)
 
 	term := report.NewTerminal(stdout, 0, cfg.Verbose, cfg.Quiet)
-	term.Header(version, fmt.Sprintf("%v", packages), cfg.Workers, len(enabledMutators))
+	term.Header(effectiveVersion(), fmt.Sprintf("%v", packages), cfg.Workers, len(enabledMutators))
 
 	// 1. Resolve packages.
 	term.Phase("Resolving packages...")
@@ -480,7 +498,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if strykerOutput != "" {
-		if err := report.WriteStryker(strykerOutput, mutants, projectDir, version); err != nil {
+		if err := report.WriteStryker(strykerOutput, mutants, projectDir, effectiveVersion()); err != nil {
 			return fmt.Errorf("writing Stryker report: %w", err)
 		}
 		if !cfg.Quiet {
@@ -489,7 +507,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if htmlOutput != "" {
-		if err := report.WriteHTML(htmlOutput, mutants, projectDir, version); err != nil {
+		if err := report.WriteHTML(htmlOutput, mutants, projectDir, effectiveVersion()); err != nil {
 			return fmt.Errorf("writing HTML report: %w", err)
 		}
 		fmt.Fprintf(stdout, "HTML report: %s\n", htmlOutput)
