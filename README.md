@@ -20,6 +20,7 @@ Gomutants is a mutation testing tool for Go, supporting diff-scoped runs, increm
 * [Building](#building)
 * [Running tests](#running-tests)
 * [GitHub Action](#github-action)
+* [Claude Code plugin](#claude-code-plugin)
 * [Stryker-format reports](#stryker-format-reports)
 * [HTML reports](#html-reports)
 * [CLI reference](#cli-reference)
@@ -202,6 +203,28 @@ Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...
 **Security note:** the `args` input is splatted into a shell command, and `version` is interpolated into `go install …@<version>`. Don't pipe untrusted strings (PR titles, branch names) into either. For supply-chain hardening, pin `version` to a specific commit SHA rather than `latest`.
 
 See [`action.yml`](action.yml) for the full composite definition.
+
+
+### Claude Code plugin
+
+This repo ships a [Claude Code](https://claude.com/claude-code) plugin that exposes a `/gomutants:mutants` slash command. It runs gomutants on changed code, parses the JSON report, and proposes concrete `*_test.go` cases that would kill each surviving mutant — without editing any files. It also writes a self-contained interactive HTML report (the same one [`--html-output`](#stryker-format-reports) produces) to `/tmp/gomutants-report.html` for click-through inspection.
+
+Install:
+
+```
+/plugin marketplace add szhekpisov/gomutants
+/plugin install gomutants@gomutants
+```
+
+Use:
+
+```
+/gomutants:mutants                    # default: --changed-since main ./...
+/gomutants:mutants ./internal/foo     # scope to a package
+/gomutants:mutants --since HEAD~1     # scope by git ref
+```
+
+The plugin assumes `gomutants` is on `PATH` (`go install github.com/szhekpisov/gomutants@latest`), and falls back to `go run github.com/szhekpisov/gomutants@latest` otherwise. Plugin sources live under [`plugin/`](plugin/); the marketplace manifest is at [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json).
 
 
 ### Stryker-format reports

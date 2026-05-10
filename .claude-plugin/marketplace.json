@@ -1,0 +1,13 @@
+{
+  "name": "gomutants",
+  "owner": {
+    "name": "szhekpisov"
+  },
+  "plugins": [
+    {
+      "name": "gomutants",
+      "source": "./plugin",
+      "description": "Run gomutants mutation testing from Claude Code and propose tests for surviving mutants"
+    }
+  ]
+}
