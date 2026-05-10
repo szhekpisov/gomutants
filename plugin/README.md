@@ -39,7 +39,6 @@ func TestBar_BoundaryEquality(t *testing.T) {
     // ...
 }
 ```
-```
 
 The wrap-up line points at the HTML report: `open /tmp/gomutants-report.html` (macOS) or `xdg-open` (Linux).
 
