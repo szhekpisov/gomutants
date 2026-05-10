@@ -30,13 +30,18 @@ Run from the repo root (the directory containing `go.mod`). If the user invoked 
 ## Step 2 — run gomutants
 
 ```
-<gomutants> -quiet -output /tmp/gomutants-report.json [scope from step 1]
+<gomutants> -quiet \
+  -output /tmp/gomutants-report.json \
+  -html-output /tmp/gomutants-report.html \
+  [scope from step 1]
 ```
 
 Notes:
-- `-quiet` suppresses progress output; the JSON file has everything needed.
+- `-quiet` suppresses progress output; the JSON file has everything needed for analysis.
+- `-html-output` writes a self-contained, click-through HTML viewer (per-file efficacy sidebar, annotated source). Surface its path in step 5 so the user can open it.
 - Do **not** pass `-dry-run` — real KILLED/LIVED status is required.
-- Exit codes 10 / 11 mean the efficacy / coverage thresholds were not met. The report still wrote, so continue.
+- Do **not** pass `-cache=off`. The default `.gomutants-cache.json` is on, which makes repeat runs in the same session fast.
+- Exit codes 10 / 11 mean the efficacy / coverage thresholds were not met. Both reports still wrote, so continue.
 - If the run is taking visibly long on `./...`, narrow to the package with the most changed files and tell the user you did so.
 
 ## Step 3 — extract surviving mutants
@@ -89,7 +94,11 @@ For up to ~10 surviving mutants (prioritise files with the most survivors):
 
 ## Step 5 — wrap up
 
-End with a one-line summary:
-`N surviving mutants across M files; proposed K new tests.`
+End with a two-line summary:
+
+```
+N surviving mutants across M files; proposed K new tests.
+HTML report: /tmp/gomutants-report.html  (open with `open /tmp/gomutants-report.html` on macOS, or `xdg-open` on Linux)
+```
 
 Do **not** edit any files — proposals only. If the user wants them applied, they will ask.

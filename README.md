@@ -207,7 +207,7 @@ See [`action.yml`](action.yml) for the full composite definition.
 
 ### Claude Code plugin
 
-This repo ships a [Claude Code](https://claude.com/claude-code) plugin that exposes a `/gomutants:mutants` slash command. It runs gomutants on changed code, parses the JSON report, and proposes concrete `*_test.go` cases that would kill each surviving mutant — without editing any files.
+This repo ships a [Claude Code](https://claude.com/claude-code) plugin that exposes a `/gomutants:mutants` slash command. It runs gomutants on changed code, parses the JSON report, and proposes concrete `*_test.go` cases that would kill each surviving mutant — without editing any files. It also writes a self-contained interactive HTML report (the same one [`--html-output`](#stryker-format-reports) produces) to `/tmp/gomutants-report.html` for click-through inspection.
 
 Install:
 
