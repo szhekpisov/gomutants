@@ -22,6 +22,11 @@ timeout-coefficient: 10
 # JSON report output path (default: mutation-report.json).
 output: mutation-report.json
 
+# Suppress header, phase banners, per-mutant progress, and the trailing
+# "Report:" line. Only the final summary block lands on stdout; stderr
+# warnings are unaffected. Mutually exclusive with --verbose.
+# quiet: false
+
 # Scope mutation testing to lines changed since the given git ref
 # (e.g. "origin/main", "HEAD~1"). Empty disables; --changed-since on
 # the CLI overrides. Requires a git repository.

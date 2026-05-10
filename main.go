@@ -158,10 +158,12 @@ func run(ctx context.Context, args []string) error {
 		cachePath          string
 		annotations        string
 		strykerOutput      string
+		htmlOutput         string
 		thresholdEfficacy  float64
 		thresholdMcover    float64
 		dryRun             bool
 		verbose            bool
+		quiet              bool
 		showVersion        bool
 	)
 
@@ -192,11 +194,14 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&cachePath, "cache", "", "path to incremental-analysis cache file; skips mutants whose source and tests are byte-identical to the cached run. Default .gomutants-cache.json. Pass --cache=off to disable")
 	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
 	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
+	fs.StringVar(&htmlOutput, "html-output", "", "also write a self-contained interactive HTML mutation report at this path (Stryker mutation-testing-elements viewer, no network deps)")
 	fs.Float64Var(&thresholdEfficacy, "threshold-efficacy", 0, "minimum test efficacy %% (KILLED/(KILLED+LIVED)); exit 10 if not met. 0 disables (gremlins-compat)")
 	fs.Float64Var(&thresholdMcover, "threshold-mcover", 0, "minimum mutant coverage %% ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)); exit 11 if not met. 0 disables (gremlins-compat)")
 	fs.BoolVar(&dryRun, "dry-run", false, "list mutants without testing")
 	fs.BoolVar(&verbose, "verbose", false, "show each mutant as tested")
 	fs.BoolVar(&verbose, "v", false, "verbose (shorthand)")
+	fs.BoolVar(&quiet, "quiet", false, "suppress header, phase lines, and per-mutant progress; only the final summary prints (warnings still go to stderr)")
+	fs.BoolVar(&quiet, "q", false, "quiet (shorthand)")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -205,6 +210,10 @@ func run(ctx context.Context, args []string) error {
 
 	if testCPU < 0 {
 		return fmt.Errorf("--test-cpu must be >= 0, got %d", testCPU)
+	}
+
+	if quiet && verbose {
+		return fmt.Errorf("--quiet and --verbose cannot be used together")
 	}
 
 	switch annotations {
@@ -222,7 +231,7 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, timeoutMargin, timeoutMin, adaptiveTimeout, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose)
+	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, timeoutMargin, timeoutMin, adaptiveTimeout, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose, quiet)
 	cfg.ResolveCache()
 
 	packages := fs.Args()
@@ -255,7 +264,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	enabledMutators := reg.EnabledMutators(cfg.Only, cfg.Disable)
 
-	term := report.NewTerminal(stdout, 0, cfg.Verbose)
+	term := report.NewTerminal(stdout, 0, cfg.Verbose, cfg.Quiet)
 	term.Header(version, fmt.Sprintf("%v", packages), cfg.Workers, len(enabledMutators))
 
 	// 1. Resolve packages.
@@ -428,7 +437,9 @@ func run(ctx context.Context, args []string) error {
 
 		if hits := loadedCache.Lookup(mutants, hasher, testFilesFor); hits > 0 {
 			pendingCount -= hits
-			fmt.Fprintf(stdout, "Cache: %d mutant outcomes reused from %s\n", hits, cfg.Cache)
+			if !cfg.Quiet {
+				fmt.Fprintf(stdout, "Cache: %d mutant outcomes reused from %s\n", hits, cfg.Cache)
+			}
 		}
 	}
 
@@ -442,7 +453,7 @@ func run(ctx context.Context, args []string) error {
 		Min:      cfg.TimeoutMin,
 		Adaptive: cfg.AdaptiveTimeoutEnabled(),
 	}
-	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose)
+	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose, cfg.Quiet)
 	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, policy, tmpDir, srcCache, projectDir, testMap)
 	pool.Run(ctx, mutants, term2.OnResult)
 
@@ -464,13 +475,24 @@ func run(ctx context.Context, args []string) error {
 	if err := report.WriteJSON(r, cfg.Output); err != nil {
 		return fmt.Errorf("writing report: %w", err)
 	}
-	fmt.Fprintf(stdout, "Report: %s\n", cfg.Output)
+	if !cfg.Quiet {
+		fmt.Fprintf(stdout, "Report: %s\n", cfg.Output)
+	}
 
 	if strykerOutput != "" {
 		if err := report.WriteStryker(strykerOutput, mutants, projectDir, version); err != nil {
 			return fmt.Errorf("writing Stryker report: %w", err)
 		}
-		fmt.Fprintf(stdout, "Stryker report: %s\n", strykerOutput)
+		if !cfg.Quiet {
+			fmt.Fprintf(stdout, "Stryker report: %s\n", strykerOutput)
+		}
+	}
+
+	if htmlOutput != "" {
+		if err := report.WriteHTML(htmlOutput, mutants, projectDir, version); err != nil {
+			return fmt.Errorf("writing HTML report: %w", err)
+		}
+		fmt.Fprintf(stdout, "HTML report: %s\n", htmlOutput)
 	}
 
 	if annotations == "github" {

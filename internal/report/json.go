@@ -139,11 +139,17 @@ func WriteJSON(r *Report, path string) error {
 // writeJSONFile marshals v as JSON and writes it to path, creating parent
 // directories as needed. Shared by WriteJSON and WriteStryker.
 func writeJSONFile(path string, v any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := marshalJSON(v)
 	if err != nil {
+		return err
+	}
+	return writeFile(path, data)
+}
+
+// writeFile writes data to path, creating parent directories as needed.
+// Shared by writeJSONFile and WriteHTML.
+func writeFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)

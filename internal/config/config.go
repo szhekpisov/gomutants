@@ -37,6 +37,7 @@ type Config struct {
 	Output             string                    `yaml:"output"`
 	DryRun             bool                      `yaml:"dry-run"`
 	Verbose            bool                      `yaml:"verbose"`
+	Quiet              bool                      `yaml:"quiet"`
 	Disable            []string                  `yaml:"disable"`
 	Only               []string                  `yaml:"only"`
 	ChangedSince       string                    `yaml:"changed-since"`
@@ -141,7 +142,7 @@ type AdaptiveTimeoutFlag struct {
 	Value bool
 }
 
-func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, timeoutMargin float64, timeoutMin time.Duration, adaptive AdaptiveTimeoutFlag, coverPkg, output, disable, only, changedSince, cache string, dryRun, verbose bool) {
+func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, timeoutMargin float64, timeoutMin time.Duration, adaptive AdaptiveTimeoutFlag, coverPkg, output, disable, only, changedSince, cache string, dryRun, verbose, quiet bool) {
 	if workers > 0 {
 		c.Workers = workers
 	}
@@ -184,6 +185,9 @@ func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, timeoutMar
 	}
 	if verbose {
 		c.Verbose = true
+	}
+	if quiet {
+		c.Quiet = true
 	}
 }
 

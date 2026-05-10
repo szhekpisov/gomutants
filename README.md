@@ -22,6 +22,7 @@ Gomutants is a mutation testing tool for Go, supporting diff-scoped runs, increm
 * [GitHub Action](#github-action)
 * [Claude Code plugin](#claude-code-plugin)
 * [Stryker-format reports](#stryker-format-reports)
+* [HTML reports](#html-reports)
 * [CLI reference](#cli-reference)
 * [Configuration](#configuration)
 * [Mutators](#mutators)
@@ -125,6 +126,7 @@ PR-scoped runs are faster than gremlins for a different reason: gremlins has no 
 | OOM-safe subprocess control | 2 GiB RSS cap, process group | no | no |
 | gremlins-compatible JSON | yes | (native) | no |
 | Stryker dashboard format | yes | no | no |
+| Self-contained HTML report | yes | no | no |
 | Per-mutant timeout | yes | yes | yes |
 | Active maintenance | yes | yes | minimal |
 
@@ -247,6 +249,19 @@ $ curl -X PUT \
 Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutationScoreBadge` URL you can drop in this README — the same surface PIT, Stryker (JS/.NET/Scala), and Infection PHP plug into.
 
 
+### HTML reports
+
+```
+$ gomutants --html-output mutation-report.html ./...
+```
+
+Writes a single self-contained HTML file at the given path. Open it in any browser — no web server, no network access, no companion JSON file. The page bundles the [`<mutation-test-report-app>`](https://www.npmjs.com/package/mutation-testing-elements) web component and the report data into one document, so it works as a CI artifact you can upload from a job and link to from a PR check.
+
+Inside, you get a per-file efficacy sidebar and click-through annotated source: each mutated line is highlighted with the mutator name, status (KILLED / SURVIVED / NO_COVERAGE / TIMEOUT / COMPILE_ERROR), and the original-vs-replacement diff. The data shape is the same Stryker v2 report schema written by `--stryker-output`; the only difference is that `--html-output` ships the renderer alongside the data so the file is viewable without any other tooling.
+
+If you already publish to the [Stryker Dashboard](https://stryker-mutator.io/docs/General/dashboard/) you don't need this flag — the dashboard renders the same report with history and a hosted badge. `--html-output` is for local viewing and CI artifacts, especially in air-gapped environments where uploading to a third-party dashboard isn't an option.
+
+
 ### CLI reference
 
 | Flag | Short | Default | Description |
@@ -266,10 +281,12 @@ Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutation
 | `--cache` | | `.gomutants-cache.json` | Path to incremental-analysis cache file. Skips mutants whose source and tests are byte-identical to the cached run. Pass `--cache=off` to disable. |
 | `--annotations` | | | Emit annotations for LIVED mutants. Supported: `github` (workflow-command warnings on stdout). |
 | `--stryker-output` | | | Also write a [Stryker mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) report at this path (for the HTML viewer and Stryker Dashboard). |
+| `--html-output` | | | Also write a self-contained interactive HTML mutation report at this path (Stryker mutation-testing-elements viewer bundled inline; no network access required to open). |
 | `--threshold-efficacy` | | 0 | Minimum test efficacy (KILLED/(KILLED+LIVED)). Below threshold → exit 10 (gremlins-compat). 0 disables. |
 | `--threshold-mcover` | | 0 | Minimum mutant coverage ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)). Below threshold → exit 11 (gremlins-compat). 0 disables. |
 | `--dry-run` | | false | List mutants without testing |
 | `--verbose` | `-v` | false | Stream each mutant as tested |
+| `--quiet` | `-q` | false | Suppress header, phase lines, and per-mutant progress; only the final summary lands on stdout (warnings still go to stderr). Mutually exclusive with `--verbose`. |
 | `--version` | | | Print version and exit |
 
 Common invocations:
@@ -286,6 +303,9 @@ $ gomutants --dry-run ./...
 
 # Verbose stream of every mutant as it completes.
 $ gomutants -v ./...
+
+# Quiet for CI: only the final summary on stdout (exit code still gates).
+$ gomutants -q --threshold-efficacy 80 ./...
 
 # Limit to specific mutators (or exclude some).
 $ gomutants --only ARITHMETIC_BASE,CONDITIONALS_NEGATION ./...
