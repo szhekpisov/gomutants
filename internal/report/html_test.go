@@ -2,6 +2,7 @@ package report
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,8 +13,9 @@ import (
 )
 
 // reportScriptOpenTag is the opening tag of the <script> block that carries
-// the embedded report JSON in assets/template.html. If the template renames
-// or restyles the tag, update this constant; the round-trip tests rely on it.
+// the embedded report JSON, defined in html.go's htmlChromeMid fragment. If
+// that fragment renames or restyles the tag, update this constant; the
+// round-trip tests rely on it.
 const reportScriptOpenTag = `<script id="mutation-report-data" type="application/json">`
 
 // extractEmbeddedReport pulls the JSON payload out of the report data
@@ -70,6 +72,12 @@ func TestWriteHTML_RoundTrip(t *testing.T) {
 	}
 	html := string(raw)
 
+	// htmlChromePrefix is the only fragment that carries the doctype and
+	// page <head>; asserting it lands at the very start kills a mutant that
+	// drops the prefix write.
+	if !strings.HasPrefix(html, "<!DOCTYPE html>") {
+		t.Errorf("HTML missing <!DOCTYPE html> prefix; htmlChromePrefix not emitted")
+	}
 	if !strings.Contains(html, "<mutation-test-report-app") {
 		t.Errorf("HTML missing <mutation-test-report-app> element")
 	}
@@ -154,6 +162,27 @@ func TestWriteHTML_PropagatesReadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing.go") {
 		t.Errorf("error %q should mention missing file", err)
+	}
+}
+
+// TestWriteHTML_PropagatesMarshalError covers the marshalJSON error branch in
+// WriteHTML. marshalJSON is a package-level swappable var (json.go) for
+// exactly this purpose; without this test, the `return err` after marshalJSON
+// is dead code as far as the test suite can tell.
+func TestWriteHTML_PropagatesMarshalError(t *testing.T) {
+	orig := marshalJSON
+	marshalJSON = func(v any) ([]byte, error) {
+		return nil, fmt.Errorf("injected marshal error")
+	}
+	defer func() { marshalJSON = orig }()
+
+	out := filepath.Join(t.TempDir(), "r.html")
+	err := WriteHTML(out, nil, "/p", "0.1.0")
+	if err == nil {
+		t.Fatal("expected error from marshalJSON")
+	}
+	if !strings.Contains(err.Error(), "injected marshal error") {
+		t.Errorf("error %q should propagate the marshalJSON failure", err)
 	}
 }
 
