@@ -68,6 +68,17 @@ type strykerPosition struct {
 // frameworkVersion is recorded under .framework.version; pass the running
 // gomutants version.
 func WriteStryker(path string, mutants []mutator.Mutant, projectDir, frameworkVersion string) error {
+	rep, err := buildStrykerReport(mutants, projectDir, frameworkVersion)
+	if err != nil {
+		return err
+	}
+	return writeJSONFile(path, rep)
+}
+
+// buildStrykerReport constructs the in-memory Stryker v2 report from the
+// mutant list. Shared by WriteStryker (marshal + write JSON) and WriteHTML
+// (marshal + inject into the HTML viewer template).
+func buildStrykerReport(mutants []mutator.Mutant, projectDir, frameworkVersion string) (strykerReport, error) {
 	files := make(map[string]strykerFileResult)
 	// Cache a per-file index so each file is read once and offset->line/col
 	// lookups are O(log lines) instead of O(file_size) per mutant.
@@ -78,7 +89,7 @@ func WriteStryker(path string, mutants []mutator.Mutant, projectDir, frameworkVe
 		if !ok {
 			b, err := readFile(m.File)
 			if err != nil {
-				return fmt.Errorf("reading %s for Stryker report: %w", m.File, err)
+				return strykerReport{}, fmt.Errorf("reading %s for Stryker report: %w", m.File, err)
 			}
 			idx = newFileIndex(b)
 			indexCache[m.File] = idx
@@ -129,13 +140,13 @@ func WriteStryker(path string, mutants []mutator.Mutant, projectDir, frameworkVe
 		files[k] = f
 	}
 
-	return writeJSONFile(path, strykerReport{
+	return strykerReport{
 		SchemaVersion: "2",
 		Thresholds:    strykerThresholds{High: 80, Low: 60},
 		ProjectRoot:   projectDir,
 		Framework:     &strykerFramework{Name: "gomutants", Version: frameworkVersion},
 		Files:         files,
-	})
+	}, nil
 }
 
 // strykerStatus maps gomutants status values to the Stryker schema enum.

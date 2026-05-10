@@ -158,6 +158,7 @@ func run(ctx context.Context, args []string) error {
 		cachePath          string
 		annotations        string
 		strykerOutput      string
+		htmlOutput         string
 		thresholdEfficacy  float64
 		thresholdMcover    float64
 		dryRun             bool
@@ -193,6 +194,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&cachePath, "cache", "", "path to incremental-analysis cache file; skips mutants whose source and tests are byte-identical to the cached run. Default .gomutants-cache.json. Pass --cache=off to disable")
 	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
 	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
+	fs.StringVar(&htmlOutput, "html-output", "", "also write a self-contained interactive HTML mutation report at this path (Stryker mutation-testing-elements viewer, no network deps)")
 	fs.Float64Var(&thresholdEfficacy, "threshold-efficacy", 0, "minimum test efficacy %% (KILLED/(KILLED+LIVED)); exit 10 if not met. 0 disables (gremlins-compat)")
 	fs.Float64Var(&thresholdMcover, "threshold-mcover", 0, "minimum mutant coverage %% ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)); exit 11 if not met. 0 disables (gremlins-compat)")
 	fs.BoolVar(&dryRun, "dry-run", false, "list mutants without testing")
@@ -484,6 +486,13 @@ func run(ctx context.Context, args []string) error {
 		if !cfg.Quiet {
 			fmt.Fprintf(stdout, "Stryker report: %s\n", strykerOutput)
 		}
+	}
+
+	if htmlOutput != "" {
+		if err := report.WriteHTML(htmlOutput, mutants, projectDir, version); err != nil {
+			return fmt.Errorf("writing HTML report: %w", err)
+		}
+		fmt.Fprintf(stdout, "HTML report: %s\n", htmlOutput)
 	}
 
 	if annotations == "github" {
