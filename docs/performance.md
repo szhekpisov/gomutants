@@ -18,7 +18,7 @@ this page covers external codebases.
 | | |
 |---|---|
 | Host | macOS 26.3.1, Apple M1 Pro (10 cores) |
-| Go | go1.25.7 darwin/arm64 (forced via `GOTOOLCHAIN`; see caveat below) |
+| Go | go1.25.7 darwin/arm64 (cross-comparison rows) and go1.26.3 darwin/arm64 (gomutants-only rows) — forced via `GOTOOLCHAIN`. See "Go 1.26.x compatibility" below. |
 | gomutants | v0.2.2 |
 | gremlins | v0.6.0 (release tarball) |
 | Workers | 10 |
@@ -107,12 +107,13 @@ finish in seconds.
 
 ### Wall time
 
-| # | Tool | Mode | Wall time (mean ± σ) |
-|---|---|---|---|
-| 1 | gremlins v0.6.0 | 10w, 5 default ops, `--timeout-coefficient=20` | 27.48 ± 0.23 s |
-| 2 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off) | 77.35 ± 0.30 s |
-| 3 | gomutants v0.2.2 | like-for-like (10w, only the 5 ops, cache off) | 29.66 ± 0.28 s |
-| 4 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, 2nd+ run) | **3.22 ± 0.02 s** |
+| # | Tool | Mode | Go | Wall time (mean ± σ) |
+|---|---|---|---|---|
+| 1 | gremlins v0.6.0 | 10w, 5 default ops, `--timeout-coefficient=20` | 1.25.7 | 27.48 ± 0.23 s |
+| 2 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off) | 1.25.7 | 77.35 ± 0.30 s |
+| 3 | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off) | 1.25.7 | 29.66 ± 0.28 s |
+| 3a | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off) | **1.26.3** | **29.73 ± 0.11 s** |
+| 4 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, 2nd+ run) | 1.25.7 | **3.22 ± 0.02 s** |
 
 ### Mutant outcomes
 
@@ -121,6 +122,7 @@ finish in seconds.
 | 1 | 123 | 65 | 0 | 26 | **32** | 0 | 67.0% |
 | 2 | 464 | 306 | 94 | 34 | 12 | 18 | 76.5% |
 | 3 | 120 | 91 | 15 | 11 | **3** | 0 | 85.8% |
+| 3a | 120 | 90 | 16 | 11 | 3 | 0 | 84.9% |
 | 4 | 464 | 306 | 94 | 34 | 12 | 18 | 76.5% |
 
 ### Reading the uuid results
@@ -163,22 +165,25 @@ benchmark targets the root `cobra` package only (`.`), to match what
 gremlins can actually consume. A separate "full repo" measurement on
 `gomutants ./...` is included for context.
 
-Wall times here are single-run measurements, not hyperfine medians: a
-single OOB cold run takes ~7 minutes, so 3 runs + 1 warmup × 4 scenarios
-would be 70+ minutes of bench time per matrix. Variance on a workload
-this size is small relative to wall time, but treat ±5% as the rough
-confidence band on these numbers rather than the ±0.3% hyperfine reports
-on uuid.
+Wall times here are 3-run medians for the like-for-like and gremlins rows
+(each run takes 1–2 min, so 3 runs is affordable) and single-run for the
+OOB rows (each takes ~7 min, so a 3-run hyperfine matrix would be 70+
+minutes). Cobra's first run on each scenario is consistently 30–50%
+slower than runs 2–3 because gomutants pre-builds the test binary and the
+Go build cache is cold on first invocation; reporting the median of 3
+factors that out. Single-run OOB rows include that cold-cache artifact;
+treat them as upper bounds and ±15% rather than precise.
 
 ### Wall time
 
-| # | Tool | Mode | Target | Wall time |
-|---|---|---|---|---|
-| 1 | gremlins v0.6.0 | 10w, 5 default ops, `--timeout-coefficient=20` | `.` | 129.4 s |
-| 2 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off) | `.` | 410.2 s |
-| 3 | gomutants v0.2.2 | like-for-like (10w, only the 5 ops, cache off) | `.` | **90.0 s** |
-| 4 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, 2nd+ run, hyperfine 3×) | `.` | **2.73 ± 0.11 s** |
-| — | gomutants v0.2.2 | full repo, OOB (10w, all ops, cache off) | `./...` | 485.0 s (context only) |
+| # | Tool | Mode | Go | Target | Wall time |
+|---|---|---|---|---|---|
+| 1 | gremlins v0.6.0 | 10w, 5 default ops, `--timeout-coefficient=20` (median of 3) | 1.25.7 | `.` | 129.1 s |
+| 2 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off, single run) | 1.25.7 | `.` | 410.2 s |
+| 3 | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | 1.25.7 | `.` | **72.6 s** |
+| 3a | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | **1.26.3** | `.` | **73.0 s** |
+| 4 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, 2nd+ run, hyperfine 3×) | 1.25.7 | `.` | **2.73 ± 0.11 s** |
+| — | gomutants v0.2.2 | full repo, OOB (10w, all ops, cache off, single run) | 1.25.7 | `./...` | 485.0 s (context only) |
 
 ### Mutant outcomes
 
@@ -186,16 +191,17 @@ on uuid.
 |---|---:|---:|---:|---:|---:|---:|---:|
 | 1 | 556 | 402 | 88 | 65 | 1 | 0 | 81.9% |
 | 2 | 1706 | 1210 | 192 | 184 | 8 | 112 | 85.8% |
-| 3 | 461 | 344 | 39 | 48 | 0 | 30 | 89.8% |
+| 3 | 461 | 350 | 33 | 48 | 0 | 30 | 91.4% |
+| 3a | 461 | 346 | 37 | 48 | 0 | 30 | 90.3% |
 | 4 | 1706 | 1208 | 193 | 184 | 9 | 112 | 85.7% |
 
 ### Reading the cobra results
 
 - **Engine ordering flips on bigger packages.** On the like-for-like row
-  (1 vs 3), gomutants is **1.44× faster** in wall-clock — 90.0 s vs
-  129.4 s — opposite of uuid where gremlins narrowly led. Per-mutant cost
+  (1 vs 3), gomutants is **1.78× faster** in wall-clock — 72.6 s vs
+  129.1 s — opposite of uuid where gremlins narrowly led. Per-mutant cost
   for gremlins on cobra is ~264 ms (KILLED+LIVED only; ignores
-  NOT_COVERED); for gomutants it's ~235 ms. The gap comes from gomutants
+  NOT_COVERED); for gomutants it's ~190 ms. The gap comes from gomutants
   pre-building and reusing the test binary while gremlins fork-execs a
   fresh `go test` (with full compile) per mutant. That compile overhead
   amortizes badly on cobra's larger package.
@@ -222,8 +228,16 @@ on uuid.
   wall time of OOB gremlins on the same root package, but discovers
   ~3.1× the mutants (1706 vs 556) by running 16 operator types vs 5.
   Throughput per mutant tested is essentially equal between OOB and L4L
-  for gomutants (~290 ms vs ~235 ms); the wall-time delta is purely
+  for gomutants (~290 ms vs ~190 ms); the wall-time delta is purely
   workload size. Restrict with `-only` if you don't want it.
+
+- **Go 1.25.7 vs Go 1.26.3 (rows 3 and 3a) is a wash.** The like-for-like
+  cobra run measures 72.6 s on Go 1.25.7 and 73.0 s on Go 1.26.3, with
+  identical mutant counts (461) and KILLED/LIVED within run-to-run
+  noise. uuid shows the same equivalence (29.66 ± 0.28 vs 29.73 ± 0.11).
+  Whatever toolchain change broke gremlins on Go 1.26.x didn't measurably
+  affect gomutants's `go test`-driven loop. See "Go 1.26.x compatibility"
+  below.
 
 ## Why warm-cache time doesn't track project size
 
@@ -273,6 +287,24 @@ not project size. A future enhancement worth tracking: memoize the
 coverage profile on the cache so warm-cache no-op runs skip the
 `-count=1` step entirely. That would drop both targets below ~1 s.
 
+## Go 1.26.x compatibility
+
+The cross-comparison rows force `GOTOOLCHAIN=go1.25.7` because gremlins
+v0.6.0 silently produces zero mutants on Go 1.26.x — coverage gathering
+returns instantly, no error, no work done. To rule out a similar
+regression in gomutants, the like-for-like rows are duplicated under
+`GOTOOLCHAIN=go1.26.3` (rows 3a in both target tables).
+
+| Target | Go 1.25.7 | Go 1.26.3 | Delta |
+|---|---:|---:|---:|
+| google/uuid (L4L, hyperfine 3+1) | 29.66 ± 0.28 s | 29.73 ± 0.11 s | +0.2% (within σ) |
+| spf13/cobra (L4L, median of 3) | 72.60 s | 72.96 s | +0.5% |
+
+Mutant discovery is identical between toolchains (461 mutants on cobra,
+120 on uuid), and KILLED/LIVED counts vary only by run-to-run noise.
+gomutants's engine is unaffected by the Go 1.26 changes that break
+gremlins's coverage path.
+
 ## Caveats
 
 - **Gremlins v0.6.0 silently produces zero mutants on Go 1.26.x** (the
@@ -291,12 +323,15 @@ coverage profile on the cache so warm-cache no-op runs skip the
 - **Wall time is sensitive to thermal state and background load.** These
   numbers were taken on AC power with no other CPU-bound work; rerun under
   the same conditions before drawing conclusions.
-- **Cobra results are single-run.** Cold gomutants OOB on cobra is ~7
-  minutes per run; a 3-runs × 4-scenarios hyperfine matrix would be
-  >70 minutes of bench time, which isn't worth it for a workload where
-  variance is small relative to wall time. The warm-cache row uses
-  hyperfine 3× because each run finishes in seconds. Treat the cobra cold
-  numbers as ±5% rather than the ±0.3% hyperfine reports on uuid.
+- **Cobra OOB rows are single-run; L4L and gremlins rows are 3-run
+  medians.** Cold gomutants OOB on cobra is ~7 minutes per run, so the
+  OOB-row matrix would be >70 minutes if hyperfined. The shorter L4L and
+  gremlins runs are repeated 3 times and reported as medians because
+  gomutants's first run is consistently 30–50% slower than runs 2–3 — an
+  artifact of pre-building the test binary on a cold Go build cache.
+  Gremlins doesn't share that artifact (each mutant is a fresh
+  `go test`, so no warm-up effect; its 3 runs were 130/129/128 s). Treat
+  the cobra OOB numbers as ±15% upper bounds rather than precise.
 - **Coverage of external targets.** This page covers `google/uuid` and
   `spf13/cobra`. The in-repo `benchmarks/` harness covers two other
   targets (`./testdata/simple/` and `./internal/mutator`) and will give a
@@ -305,9 +340,9 @@ coverage profile on the cache so warm-cache no-op runs skip the
 ## Reproducing
 
 ```bash
-# Pin a Go that gremlins works with
+# Pin Go versions
 go install golang.org/dl/go1.25.7@latest && go1.25.7 download
-export GOTOOLCHAIN=go1.25.7
+go install golang.org/dl/go1.26.3@latest && go1.26.3 download
 
 # gomutants from this repo:
 go build -o ~/bin/gomutants .
@@ -317,25 +352,43 @@ go build -o ~/bin/gomutants .
 git clone https://github.com/google/uuid /tmp/uuid && cd /tmp/uuid
 git checkout 2d3c2a9cc518326daf99a383f07c4d3c44317e4d
 
-hyperfine --warmup 1 --runs 3 \
+# Go 1.25.7 (cross-comparison)
+GOTOOLCHAIN=go1.25.7 hyperfine --warmup 1 --runs 3 \
   --prepare 'rm -f .gomutants-cache.json' \
   -n gremlins 'gremlins unleash --workers 10 --timeout-coefficient 20 --silent -o /tmp/g.json .' \
   -n gom-oob  'gomutants -workers 10 --cache=off -quiet -o /tmp/m1.json .' \
   -n gom-l4l  'gomutants -workers 10 --cache=off -quiet -only=ARITHMETIC_BASE,CONDITIONALS_BOUNDARY,CONDITIONALS_NEGATION,INCREMENT_DECREMENT,INVERT_NEGATIVES -o /tmp/m2.json .'
 
-# --- spf13/cobra (single-run; each cold takes minutes) ---
+# Go 1.26.3 (gomutants L4L only — gremlins is broken on 1.26.x)
+GOTOOLCHAIN=go1.26.3 hyperfine --warmup 1 --runs 3 \
+  --prepare 'rm -f .gomutants-cache.json' \
+  -n gom-l4l-1263 'gomutants -workers 10 --cache=off -quiet -only=ARITHMETIC_BASE,CONDITIONALS_BOUNDARY,CONDITIONALS_NEGATION,INCREMENT_DECREMENT,INVERT_NEGATIVES -o /tmp/m3.json .'
+
+# --- spf13/cobra (3-run medians for L4L+gremlins; single-run for OOB) ---
 git clone https://github.com/spf13/cobra /tmp/cobra && cd /tmp/cobra
 git checkout ad460ea8f249db69c943a365fb84f3a59042d54e
 
+# OOB single-run (each takes ~7 min)
 rm -f .gomutants-cache.json
-time gremlins unleash --workers 10 --timeout-coefficient 20 --silent -o /tmp/c-grem.json .
-rm -f .gomutants-cache.json
-time gomutants -workers 10 --cache=off -quiet -o /tmp/c-oob.json .
-rm -f .gomutants-cache.json
-time gomutants -workers 10 --cache=off -quiet -only=ARITHMETIC_BASE,CONDITIONALS_BOUNDARY,CONDITIONALS_NEGATION,INCREMENT_DECREMENT,INVERT_NEGATIVES -o /tmp/c-l4l.json .
+GOTOOLCHAIN=go1.25.7 time gomutants -workers 10 --cache=off -quiet -o /tmp/c-oob.json .
+
+# L4L: 3 runs each, take median (run 1 includes a cold-cache artifact)
+GREM_OPS=ARITHMETIC_BASE,CONDITIONALS_BOUNDARY,CONDITIONALS_NEGATION,INCREMENT_DECREMENT,INVERT_NEGATIVES
+for v in 1.25.7 1.26.3; do
+  for r in 1 2 3; do
+    rm -f .gomutants-cache.json
+    GOTOOLCHAIN=go$v time gomutants -workers 10 --cache=off -quiet -only=$GREM_OPS -o /tmp/c-l4l-$v-$r.json .
+  done
+done
+
+# Gremlins: 3 runs (no toolchain auto-select; force 1.25.7)
+for r in 1 2 3; do
+  rm -f .gomutants-cache.json
+  GOTOOLCHAIN=go1.25.7 time gremlins unleash --workers 10 --timeout-coefficient 20 --silent -o /tmp/c-grem-$r.json .
+done
 
 # Warm-cache run (prime once, then hyperfine):
 rm -f .gomutants-cache.json
-gomutants -workers 10 -quiet -o /tmp/c-prime.json . >/dev/null
-hyperfine --warmup 0 --runs 3 'gomutants -workers 10 -quiet -o /tmp/c-warm.json .'
+GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/c-prime.json . >/dev/null
+hyperfine --warmup 0 --runs 3 'GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/c-warm.json .'
 ```
