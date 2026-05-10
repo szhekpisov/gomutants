@@ -85,8 +85,9 @@ jobs:
       - name: Run tests with coverage
         # Scope to internal/ to match where mutation testing runs and to
         # exclude main.go (heavy on signal/CLI plumbing that's not unit-
-        # testable) and testdata/ (intentionally weak fixtures). Measured
-        # locally at 97.6% with the same -short test set.
+        # testable) and testdata/ (intentionally weak fixtures). Held at
+        # 100% — every defensive branch in this scope has a dedicated
+        # test.
         run: go test -short -coverprofile=coverage.out ./internal/...
 
       - name: Upload coverage to Codecov
@@ -103,10 +104,10 @@ jobs:
             total += $(NF-1)
             if ($NF > 0) covered += $(NF-1)
           } END {
-            printf "%.1f", (total > 0 ? covered * 100 / total : 0)
+            printf "%.4f", (total > 0 ? covered * 100 / total : 0)
           }' coverage.out)
 
-          REQUIRED=97.6
+          REQUIRED=100
           echo "Total coverage: ${TOTAL_COV}% (required: ${REQUIRED}%)"
 
           if [ "$(echo "${TOTAL_COV} < ${REQUIRED}" | bc -l)" -eq 1 ]; then

@@ -513,6 +513,44 @@ func TestPoolRunCancelled(t *testing.T) {
 	}
 }
 
+// TestPoolRunCancelledFeederExitsViaCtxDone drives the work-feeder
+// goroutine's `case <-ctx.Done()` branch in Run. The work channel is
+// buffered to len(pending), so sends never block — both select cases
+// are ready every iteration once ctx is cancelled. With N=64 pending
+// mutants and ctx pre-cancelled, Go's uniform pseudo-random select
+// picks ctx.Done at least once with probability 1 - 0.5^64 (~5e-20),
+// which is well below any cosmic-ray flake threshold.
+func TestPoolRunCancelledFeederExitsViaCtxDone(t *testing.T) {
+	dir := setupTestProject(t)
+	srcPath := filepath.Join(dir, "add.go")
+	src, _ := os.ReadFile(srcPath)
+	cache := map[string][]byte{srcPath: src}
+	plusIdx := strings.IndexByte(string(src), '+')
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	p := NewPool(1, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+
+	const n = 64
+	mutants := make([]mutator.Mutant, n)
+	for i := range mutants {
+		mutants[i] = mutator.Mutant{
+			ID:          i + 1,
+			File:        srcPath,
+			Pkg:         "testmod",
+			StartOffset: plusIdx,
+			EndOffset:   plusIdx + 1,
+			Replacement: "-",
+			Status:      mutator.StatusPending,
+		}
+	}
+
+	runWithDeadline(t, 30*time.Second, func() {
+		p.Run(ctx, mutants, nil)
+	})
+}
+
 func TestMeasureBaseline(t *testing.T) {
 	dir := setupTestProject(t)
 	duration, err := MeasureBaseline(context.Background(), dir, []string{"testmod"})

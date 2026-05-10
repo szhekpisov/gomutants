@@ -2,6 +2,7 @@ package discover
 
 import (
 	"bytes"
+	"go/parser"
 	"go/token"
 	"io"
 	"os"
@@ -1235,5 +1236,70 @@ func B(a, b int) int {
 	}
 	if suppressedFiles[pathB] == 0 {
 		t.Errorf("b.go directive must suppress via the cache; suppressed=%v", suppressedFiles)
+	}
+}
+
+// TestFilterByDirectivesMalformedGoFile drives the parser-error fallback
+// in indexFor: a file with the `gomutants:` prefix passes the byte-level
+// gate but fails parser.ParseFile, which must yield an empty index — no
+// error, no suppression — rather than aborting the run.
+func TestFilterByDirectivesMalformedGoFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broken.go")
+	src := "package p\n// gomutants:disable ARITHMETIC_BASE\nfunc F() { @ }\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := mutator.Mutant{
+		File:    path,
+		RelFile: "broken.go",
+		Line:    3,
+		Type:    mutator.ArithmeticBase,
+	}
+	fset := token.NewFileSet()
+	kept, suppressed, err := filterByDirectives(fset, []mutator.Mutant{m}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("filterByDirectives: %v", err)
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("malformed file must yield empty index, got %d suppressions", len(suppressed))
+	}
+	if len(kept) != 1 {
+		t.Errorf("mutant should survive an empty index, got %d kept", len(kept))
+	}
+}
+
+// TestFilterByDirectivesWithCacheNoPrefixFastPath drives the no-prefix
+// fast-path in buildFileIndex: a cached ParsedFile whose source has no
+// `gomutants:` prefix must short-circuit to an empty index, leaving the
+// mutant un-suppressed without scanning comments.
+func TestFilterByDirectivesWithCacheNoPrefixFastPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clean.go")
+	src := []byte("package p\n\nfunc F(a, b int) int { return a + b }\n")
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parsing fixture: %v", err)
+	}
+	cache := map[string]*ParsedFile{path: {Src: src, File: file}}
+	m := mutator.Mutant{
+		File:    path,
+		RelFile: "clean.go",
+		Line:    3,
+		Type:    mutator.ArithmeticBase,
+	}
+	kept, suppressed, err := FilterByDirectivesWithCache(fset, []mutator.Mutant{m}, cache)
+	if err != nil {
+		t.Fatalf("FilterByDirectivesWithCache: %v", err)
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("no-prefix source must yield no suppressions, got %d", len(suppressed))
+	}
+	if len(kept) != 1 {
+		t.Errorf("mutant should survive, got %d kept", len(kept))
 	}
 }
