@@ -98,12 +98,7 @@ func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, files map
 	kept := make([]mutator.Mutant, 0, len(mutants))
 	var suppressed []Suppression
 	for _, m := range mutants {
-		idx, ok := indexes[m.File]
-		// gomutants:disable-next-line BRANCH_IF,INVERT_LOGICAL,EXPRESSION_REMOVE reason="defensive guard: the loop above stores a non-nil idx for every unique m.File, so `!ok` and `idx == nil` are unreachable"
-		if !ok || idx == nil {
-			kept = append(kept, m)
-			continue
-		}
+		idx := indexes[m.File]
 		if d, ok := matchMutant(idx, m); ok {
 			suppressed = append(suppressed, Suppression{Mutant: m, Reason: d.Reason})
 			continue
@@ -319,8 +314,7 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 	}
 	d.Reason = reasonStr
 
-	// gomutants:disable-next-line EXPRESSION_REMOVE reason="`mutatorsStr != \"\" → true` is equivalent: the empty mutator list flows through SplitSeq+TrimSpace skipping every entry, leaving Mutators nil (= all), same as the skipped block"
-	if mutatorsStr != "" && mutatorsStr != "*" {
+	if mutatorsStr != "*" {
 		d.Mutators = make(map[mutator.MutationType]struct{})
 		for name := range strings.SplitSeq(mutatorsStr, ",") {
 			name = strings.TrimSpace(name)
