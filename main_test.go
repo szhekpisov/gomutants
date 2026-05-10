@@ -489,6 +489,127 @@ func TestRunFullPipeline(t *testing.T) {
 	}
 }
 
+// TestRunQuietConflictsWithVerbose pins the early-return on the
+// --quiet --verbose conflict. The check runs before any work, so the
+// error must come back without any setup or stdout side effects.
+func TestRunQuietConflictsWithVerbose(t *testing.T) {
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{"--quiet", "--verbose"})
+	})
+	if err == nil {
+		t.Fatal("expected --quiet --verbose to error")
+	}
+	if !strings.Contains(err.Error(), "--quiet and --verbose") {
+		t.Errorf("error should call out the conflicting flags, got: %v", err)
+	}
+	if out != "" {
+		t.Errorf("conflict check must short-circuit before any stdout, got %q", out)
+	}
+}
+
+// TestRunQuietSuppressesProgressKeepsSummary mirrors TestRunFullPipeline's
+// fixture so any drift in non-quiet output is caught by that test, not this one.
+func TestRunQuietSuppressesProgressKeepsSummary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping subprocess-spawning test in short mode (self-mutation guard)")
+	}
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	outPath := filepath.Join(dir, "report.json")
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", outPath,
+			"--cache=off",
+			"--quiet",
+			"testmod",
+		})
+	})
+	if err != nil {
+		t.Fatalf("run --quiet: %v", err)
+	}
+
+	mustNotContain := []string{
+		"gomutants v",
+		"Target:",
+		"Workers:",
+		"Resolving packages...",
+		"Collecting coverage...",
+		"Measuring baseline...",
+		"Discovering mutants...",
+		"Building per-test coverage map...",
+		"Report:",
+	}
+	for _, s := range mustNotContain {
+		if strings.Contains(out, s) {
+			t.Errorf("--quiet stdout must not contain %q; full output:\n%s", s, out)
+		}
+	}
+
+	mustContain := []string{
+		"Killed:",
+		"Lived:",
+		"Efficacy:",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(out, s) {
+			t.Errorf("--quiet stdout must still contain %q; full output:\n%s", s, out)
+		}
+	}
+
+	// Report file is still written — quiet trims chatter, not artifacts.
+	if _, err := os.Stat(outPath); err != nil {
+		t.Fatalf("report not written under --quiet: %v", err)
+	}
+}
+
+// TestRunQuietShorthand kills STATEMENT_REMOVE on the `-q` fs.BoolVar
+// shorthand registration. The end-to-end behavior is exhaustively
+// covered by TestRunQuietSuppressesProgressKeepsSummary; here we only
+// need a single smoking-gun assertion that `-q` plumbed cfg.Quiet
+// through to the Terminal.
+func TestRunQuietShorthand(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
+		"add_test.go": "package testmod\nimport \"testing\"\nfunc TestAdd(t *testing.T) { if Add(1,2) != 3 { t.Fatal(\"wrong\") } }\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	out, err := captureOutput(t, func() error {
+		return run(context.Background(), []string{"-q", "--dry-run", "--only", "ARITHMETIC_BASE", "testmod"})
+	})
+	if err != nil {
+		t.Fatalf("run -q --dry-run: %v", err)
+	}
+	if strings.Contains(out, "gomutants v") {
+		t.Errorf("-q should suppress header, got: %q", out)
+	}
+}
+
 // TestRunThresholdEfficacy asserts that --threshold-efficacy=100 turns a
 // surviving mutant into exit code 10 (gremlins-compat), and that the
 // report is still written before that error fires. The "test" here calls

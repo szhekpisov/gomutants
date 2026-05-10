@@ -43,6 +43,7 @@ coverpkg: "./pkg/..."
 output: report.json
 dry-run: true
 verbose: true
+quiet: true
 disable:
   - BRANCH_IF
 only:
@@ -77,6 +78,9 @@ only:
 	}
 	if !cfg.Verbose {
 		t.Error("Verbose should be true")
+	}
+	if !cfg.Quiet {
+		t.Error("Quiet should be true")
 	}
 	if len(cfg.Disable) != 1 || cfg.Disable[0] != "BRANCH_IF" {
 		t.Errorf("Disable=%v, want [BRANCH_IF]", cfg.Disable)
@@ -135,7 +139,7 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
-	cfg.ApplyFlags(8, 4, 15, 4.5, 5*time.Second, AdaptiveTimeoutFlag{Set: true, Value: false}, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", "cache.json", true, true)
+	cfg.ApplyFlags(8, 4, 15, 4.5, 5*time.Second, AdaptiveTimeoutFlag{Set: true, Value: false}, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", "cache.json", true, true, true)
 
 	if cfg.Workers != 8 {
 		t.Errorf("Workers=%d, want 8", cfg.Workers)
@@ -179,6 +183,9 @@ func TestApplyFlags(t *testing.T) {
 	if !cfg.Verbose {
 		t.Error("Verbose should be true")
 	}
+	if !cfg.Quiet {
+		t.Error("Quiet should be true")
+	}
 }
 
 func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
@@ -187,7 +194,7 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
-	cfg.ApplyFlags(0, 0, 0, 0, 0, AdaptiveTimeoutFlag{}, "", "", "", "", "", "", false, false)
+	cfg.ApplyFlags(0, 0, 0, 0, 0, AdaptiveTimeoutFlag{}, "", "", "", "", "", "", false, false, false)
 
 	if cfg.Workers != orig.Workers {
 		t.Errorf("Workers changed from %d to %d", orig.Workers, cfg.Workers)

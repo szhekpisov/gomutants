@@ -247,6 +247,7 @@ Once registered on `dashboard.stryker-mutator.io`, your project gets a `mutation
 | `--threshold-mcover` | | 0 | Minimum mutant coverage ((KILLED+LIVED)/(KILLED+LIVED+NOT_COVERED)). Below threshold → exit 11 (gremlins-compat). 0 disables. |
 | `--dry-run` | | false | List mutants without testing |
 | `--verbose` | `-v` | false | Stream each mutant as tested |
+| `--quiet` | `-q` | false | Suppress header, phase lines, and per-mutant progress; only the final summary lands on stdout (warnings still go to stderr). Mutually exclusive with `--verbose`. |
 | `--version` | | | Print version and exit |
 
 Common invocations:
@@ -263,6 +264,9 @@ $ gomutants --dry-run ./...
 
 # Verbose stream of every mutant as it completes.
 $ gomutants -v ./...
+
+# Quiet for CI: only the final summary on stdout (exit code still gates).
+$ gomutants -q --threshold-efficacy 80 ./...
 
 # Limit to specific mutators (or exclude some).
 $ gomutants --only ARITHMETIC_BASE,CONDITIONALS_NEGATION ./...
