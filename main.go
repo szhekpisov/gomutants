@@ -27,12 +27,20 @@ import (
 	"github.com/szhekpisov/gomutants/internal/runner"
 )
 
-// devVersion is the sentinel default; effectiveVersion() falls back to
-// build info when version still equals it.
-const devVersion = "dev"
+// Sentinel defaults; the effective* helpers upgrade these from build
+// info when the corresponding ldflag wasn't injected.
+const (
+	devVersion   = "dev"
+	devCommit    = "none"
+	devBuildDate = "unknown"
+)
 
-// version is overridden at release time via -ldflags '-X main.version=...'.
-var version = devVersion
+// Overridden at release time via -ldflags '-X main.<field>=...'.
+var (
+	version   = devVersion
+	commit    = devCommit
+	buildDate = devBuildDate
+)
 
 // effectiveVersion returns the user-visible version. Ldflags-injected
 // builds win; otherwise we try Main.Version from build info (set by
@@ -47,6 +55,51 @@ func effectiveVersion() string {
 		}
 	}
 	return version
+}
+
+// effectiveCommit returns the source commit. Ldflags win; otherwise
+// vcs.revision from build info (populated for `go build` from a git
+// tree, but not for `go install module@vX.Y.Z`); otherwise devCommit.
+func effectiveCommit() string {
+	if commit != devCommit {
+		return commit
+	}
+	if v := vcsSetting("vcs.revision"); v != "" {
+		return v
+	}
+	return commit
+}
+
+// effectiveBuildDate returns the build date. Ldflags win; otherwise
+// vcs.time from build info; otherwise devBuildDate.
+func effectiveBuildDate() string {
+	if buildDate != devBuildDate {
+		return buildDate
+	}
+	if v := vcsSetting("vcs.time"); v != "" {
+		return v
+	}
+	return buildDate
+}
+
+func vcsSetting(key string) string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, s := range info.Settings {
+		if s.Key == key {
+			return s.Value
+		}
+	}
+	return ""
+}
+
+// formatVersion renders the rich `--version` line: name + version,
+// then commit and build date when known.
+func formatVersion() string {
+	return fmt.Sprintf("gomutants v%s (commit: %s, built: %s)\n",
+		effectiveVersion(), effectiveCommit(), effectiveBuildDate())
 }
 
 // cacheToolVersion is the identifier stamped into the cache's
@@ -241,7 +294,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if showVersion {
-		fmt.Fprintf(stdout, "gomutants v%s\n", effectiveVersion())
+		fmt.Fprint(stdout, formatVersion())
 		return nil
 	}
 

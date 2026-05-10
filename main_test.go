@@ -46,9 +46,15 @@ func TestRunVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run --version: %v", err)
 	}
-	want := "gomutants vdev\n"
-	if out != want {
-		t.Errorf("version output: got %q, want %q", out, want)
+	// Under `go test`, version falls back to "dev" (Main.Version is
+	// "(devel)"); commit/buildDate may be either the sentinel defaults
+	// or vcs.revision/vcs.time depending on how the test was built, so
+	// only assert structure, not exact values.
+	if !strings.HasPrefix(out, "gomutants vdev (commit: ") {
+		t.Errorf("version output prefix: got %q", out)
+	}
+	if !strings.Contains(out, ", built: ") || !strings.HasSuffix(out, ")\n") {
+		t.Errorf("version output structure: got %q", out)
 	}
 }
 
