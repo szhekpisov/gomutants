@@ -122,7 +122,7 @@ gomutants is published as a composite action:
     args: --changed-since origin/${{ github.base_ref }} ./...
 ```
 
-Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...::` workflow command, which GitHub renders inline on the "Files changed" view. The action fails if any LIVED is reported (override with `fail-on-lived: false`).
+Each LIVED mutant on a changed line is emitted as a `::warning file=...,line=...::` workflow command, which GitHub renders inline on the "Files changed" view. The action fails on any LIVED mutant by default (`threshold-efficacy: 100`); set `threshold-efficacy: ""` to surface annotations without failing the job.
 
 | Input | Default | Description |
 |---|---|---|
