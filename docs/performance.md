@@ -342,12 +342,15 @@ histogram chunk encoding, fast tests), `index` (b-tree posting lists,
 this page and the one that exercises the per-test coverage map build
 across multiple packages.
 
-**No gremlins comparison row.** gremlins's `unleash` CLI accepts at most
-one target argument, so it cannot replicate this multi-package
-invocation in a single run. Running gremlins per-package and summing
-would change the comparison shape (each subpackage pays its own setup
-cost; gomutants pays it once across all four). The full row is omitted
-rather than presented under a different methodology.
+**Gremlins methodology note.** gremlins's `unleash` CLI accepts at most
+one target argument, so it cannot replicate this multi-package run in
+one invocation. The gremlins row is the **sum of 3 outer runs × 4
+per-subpackage invocations** (12 gremlins calls total) — what a user
+would actually wait for if they decided to mutation-test these 4
+packages with gremlins today. This methodology disadvantages gremlins
+on setup (it pays per-subpackage coverage gather, baseline, and AST
+parse 4× per outer run) but is the honest user-experience comparison.
+The gomutants rows pay multi-package setup once per invocation.
 
 ### Wall time
 
@@ -357,6 +360,7 @@ rather than presented under a different methodology.
 | 2 | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | 1.25.7 | 1272 s (~21.2 min) |
 | 2a | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | **1.26.3** | **855 s (~14.3 min)** |
 | 3 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, hyperfine 3×) | 1.25.7 | **19.0 ± 0.47 s** |
+| 4 | gremlins v0.6.0 | per-subpkg × 4, 10w, 5 default ops, `--timeout-coefficient=20`, sum-of-medians | 1.25.7 | **951 s (~15.9 min)** |
 
 The Go 1.25.7 and 1.26.3 L4L numbers are **not directly comparable** —
 the 6 L4L runs were executed sequentially in order (1.25.7 r1, r2, r3,
@@ -376,8 +380,34 @@ toolchain difference here (test outcomes, not wall time).
 | 2 | 2149 | 1571 | 334 | 191 | 45 | 8 | 80.6% |
 | 2a | 2149 | 1514 | 389 | 191 | 47 | 8 | 77.6% |
 | 3 | 6155 | 3771 | 1197 | 735 | 187 | 265 | 73.0% |
+| 4 | 2172 | 1379 | 243 | 354 | 196 | 0 | 75.9% |
 
 ### Reading the tsdb-4 results
+
+- **Engine-vs-engine wall time is essentially tied here.** L4L steady-state
+  (gomutants Go 1.26.3 = 855 s) and gremlins sum-of-4 (951 s, median of
+  3 outer runs) sit within ~10% of each other on this multi-package
+  target. Much tighter than on single-package targets where gomutants's
+  one-shot setup amortization pulled it ahead by 1.55–1.78× (model/labels
+  and cobra). Why the gap closes here: gomutants pays multi-package setup
+  cost once per invocation; gremlins pays per-subpackage setup ×4 per
+  outer run. Those costs roughly cancel at this scope. **If you wanted
+  gomutants's full advantage on tsdb-4, the warm-cache rerun (row 3,
+  19 s) is the relevant comparison — gremlins has no cache equivalent.**
+
+- **Gremlins still produces 4× more TIMED_OUT** (196 vs 45 / 47 in
+  gomutants L4L). Consistent with the uuid finding: fixed
+  `--timeout-coefficient` doesn't size per-mutant timeouts as well as
+  gomutants's adaptive sizing under worker contention. The 196 timeouts
+  are concentrated in `./tsdb/index` (177 of them), where the per-test
+  cost is high enough that 20× the baseline gets hit on a non-trivial
+  fraction of mutants.
+
+- **Mutant discovery is close but not identical.** 2149 (gomutants) vs
+  2172 (gremlins), 1% difference — within normal AST-visitor variation.
+  But gremlins reports 0 NOT_VIABLE vs gomutants's 8, and 354 NOT_COVERED
+  vs gomutants's 191 — same package-level-vs-per-test coverage definition
+  difference documented for model/labels.
 
 - **OOB is 46 min, warm-cache is 19 s — ~145× faster on re-run.** Same
   cache mechanism as the other targets, same byte-keyed invariants. On
@@ -543,11 +573,16 @@ don't show this shift.
   `prometheus/tsdb` slice. The in-repo `benchmarks/` harness covers two
   other targets (`./testdata/simple/` and `./internal/mutator`) and will
   give a different picture on different code.
-- **No gremlins comparison on tsdb-4.** gremlins's `unleash` CLI accepts
-  at most one target argument, so it can't replicate the multi-package
-  invocation. Running it per-subpackage and summing would change the
-  comparison shape (each subpackage pays its own setup cost). Left as a
-  gap rather than mixed-methodology.
+- **Gremlins on tsdb-4 is a methodology compromise.** gremlins's
+  `unleash` CLI accepts at most one target argument, so the row reports
+  the sum of 4 per-subpackage invocations × 3 outer runs (12 calls
+  total), median of the three outer-run sums. That's the realistic
+  user-experience number, but the per-subpackage setup penalty (paid 4×
+  per outer run) is a cost gomutants's multi-package mode doesn't have.
+  Read the wall-time row as "what gremlins users would actually wait
+  for," not "gremlins engine speed normalized to gomutants's scope." The
+  per-subpackage data is in `/tmp/tsdb4-grem-*.json` if you want to
+  inspect.
 - **Cache state contaminates wall-time comparisons across batched
   runs.** Each `rm -f .gomutants-cache.json` clears gomutants's own cache
   but not Go's build cache, which warms monotonically across consecutive
@@ -661,5 +696,13 @@ rm -f .gomutants-cache.json
 GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/t-prime.json $TARGETS >/dev/null
 hyperfine --warmup 0 --runs 3 "GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/t-warm.json $TARGETS"
 
-# (No gremlins row — gremlins accepts at most 1 target argument.)
+# Gremlins per-subpkg × 3 outer runs (gremlins accepts only 1 target arg):
+for r in 1 2 3; do
+  for p in chunkenc index chunks record; do
+    rm -f .gomutants-cache.json
+    GOTOOLCHAIN=go1.25.7 time gremlins unleash --workers 10 --timeout-coefficient 20 \
+      --silent -o /tmp/t-grem-$p-$r.json ./tsdb/$p
+  done
+done
+# Sum each outer run's per-subpkg wall times; take the median of the 3 sums.
 ```
