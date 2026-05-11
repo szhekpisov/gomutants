@@ -1,11 +1,13 @@
 # Performance
 
 Mutation testing on real, third-party Go packages. This page documents the
-methodology and the numbers it produced on three targets — a small fast
-one (`google/uuid`), a medium CLI (`spf13/cobra`), and a foundational
-package inside a large monorepo (`prometheus/model/labels`) — so you can
-reproduce them on your own hardware. Repo-internal benchmarks live in
-`benchmarks/`; this page covers external codebases.
+methodology and the numbers it produced on four targets — a small fast
+one (`google/uuid`), a medium CLI (`spf13/cobra`), a foundational package
+inside a large monorepo (`prometheus/model/labels`), and a 4-package
+combined run inside the same monorepo's tsdb layer
+(`prometheus/{tsdb/chunkenc, tsdb/index, tsdb/chunks, tsdb/record}`, ~24k
+LOC) — so you can reproduce them on your own hardware. Repo-internal
+benchmarks live in `benchmarks/`; this page covers external codebases.
 
 ## Targets at a glance
 
@@ -14,6 +16,7 @@ reproduce them on your own hardware. Repo-internal benchmarks live in
 | google/uuid (root) | ~2.3k | 1 | ~1.0 s | 464 |
 | spf13/cobra (root) | ~6.1k | 1 | ~3.0 s | 1706 |
 | prometheus/model/labels | ~4.0k | 1 | ~3.0 s | 1324 |
+| prometheus tsdb-4 (combined chunkenc / index / chunks / record) | ~24k | 4 | ~5.0 s | 6155 |
 
 ## Environment
 
@@ -321,13 +324,107 @@ run for OOB.
   (1324) re-emerge instantly on second run; if you've fixed flake causes,
   pass `--cache=off` to re-test from scratch.
 
+## Results: prometheus tsdb-4 (combined)
+
+- Pinned commit: `ecab2f45a8b7a1f12b8a16590a56590c96422f44` (same as
+  `prometheus/model/labels`).
+- Target: 4 packages run as a single gomutants invocation —
+  `./tsdb/chunkenc ./tsdb/index ./tsdb/chunks ./tsdb/record`.
+- Source size: ~24k LOC across the 4 packages.
+- Baseline `go test -short` on the combined target: ~5.0 s (wall;
+  parallel across 10 cores).
+
+The point of this target is to show gomutants on a workload that
+straddles four packages with mixed test characters: `chunkenc` (XOR /
+histogram chunk encoding, fast tests), `index` (b-tree posting lists,
+~4 s tests), `chunks` (on-disk chunk format, ~4 s tests), `record`
+(write-ahead record format, fast tests). It's the largest target on
+this page and the one that exercises the per-test coverage map build
+across multiple packages.
+
+**No gremlins comparison row.** gremlins's `unleash` CLI accepts at most
+one target argument, so it cannot replicate this multi-package
+invocation in a single run. Running gremlins per-package and summing
+would change the comparison shape (each subpackage pays its own setup
+cost; gomutants pays it once across all four). The full row is omitted
+rather than presented under a different methodology.
+
+### Wall time
+
+| # | Tool | Mode | Go | Wall time |
+|---|---|---|---|---|
+| 1 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off, single run) | 1.25.7 | 2768 s (~46.1 min) |
+| 2 | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | 1.25.7 | 1272 s (~21.2 min) |
+| 2a | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | **1.26.3** | **855 s (~14.3 min)** |
+| 3 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, hyperfine 3×) | 1.25.7 | **19.0 ± 0.47 s** |
+
+The Go 1.25.7 and 1.26.3 L4L numbers are **not directly comparable** —
+the 6 L4L runs were executed sequentially in order (1.25.7 r1, r2, r3,
+then 1.26.3 r1, r2, r3) and the Go build cache warmed monotonically
+across all 6: wall times went 1343 → 1272 → 1107 → 938 → 855 → 852 s,
+so the 1.25.7 numbers paid more cold-cache cost. The steady-state L4L
+wall on this target is **~850 s regardless of toolchain version**, with
+the kind of run-1-of-each-batch overhead pattern documented in the
+cobra caveats. See "Go 1.26.x compatibility" below for what *is* a real
+toolchain difference here (test outcomes, not wall time).
+
+### Mutant outcomes
+
+| # | Total | KILLED | LIVED | NOT_COVERED | TIMED_OUT | NOT_VIABLE | Efficacy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 6155 | 3770 | 1199 | 735 | 186 | 265 | 73.0% |
+| 2 | 2149 | 1571 | 334 | 191 | 45 | 8 | 80.6% |
+| 2a | 2149 | 1514 | 389 | 191 | 47 | 8 | 77.6% |
+| 3 | 6155 | 3771 | 1197 | 735 | 187 | 265 | 73.0% |
+
+### Reading the tsdb-4 results
+
+- **OOB is 46 min, warm-cache is 19 s — ~145× faster on re-run.** Same
+  cache mechanism as the other targets, same byte-keyed invariants. On
+  a real codebase of this size, that's the difference between "I'll
+  rerun overnight" and "I'll rerun before my next git commit." Warm
+  wall time is ~6× higher than on the smaller targets (3 s on uuid /
+  cobra / model/labels) because the pre-flight `go test
+  -count=1 -coverprofile` over 4 packages with ~5 s of cumulative
+  cached-test time is correspondingly bigger — see "Why warm-cache time
+  doesn't track project size" below for the breakdown logic.
+
+- **Go 1.26.3 changes test outcomes here.** Row 2 (1.25.7 median):
+  1571 K / 334 L. Row 2a (1.26.3 median): 1514 K / 389 L. About 57
+  mutants flip from KILLED to LIVED under 1.26.3 — a real ~3.1 percentage-
+  point efficacy drop with identical mutant sets. Distinct from
+  prometheus/model/labels, where 1.26.3 changed wall time but not
+  outcomes; here it's the opposite (outcomes change, wall time is
+  confounded by cache warming). Most likely cause: some tsdb tests are
+  sensitive to stdlib behavior changes in 1.26 (regex, time, or sync
+  primitives are the usual suspects) and survive mutations that 1.25.7
+  used to kill. Worth investigating which mutants flip — it's a
+  pointer to test/code that depends on undocumented Go runtime
+  behavior.
+
+- **NOT_VIABLE is dramatically lower than NOT_COVERED.** Across all
+  rows, NV is 265 / 6155 in OOB (~4%) and 8 / 2149 in L4L (~0.4%). Most
+  AST-level "would-have-been mutants" are syntactically valid here —
+  good signal that gomutants's discovery operators are well-tuned for
+  production Go.
+
+- **TIMED_OUT count (186 in OOB) is 3% of the mutant set.** Higher than
+  cobra (8 / 1706 = 0.5%) but lower than model/labels (33 / 1324 =
+  2.5%). The index and chunks packages have a handful of slow
+  table-driven tests near the per-mutant adaptive timeout ceiling. Most
+  timeouts are stable across reruns (the warm-cache rerun reproduces
+  187 of the 186 — same set ±1 from rerun variance), so they're a
+  real test-suite signal, not just transient contention.
+
 ## Why warm-cache time doesn't track project size
 
-Warm-cache wall times are remarkably similar across all three targets
-despite radically different sizes — uuid 3.22 s, cobra 2.73 s,
-prometheus/model/labels 2.84 s — and cobra is *faster* than uuid despite
-having ~3.7× more mutants and ~7× more LOC. That looks wrong until you
-measure where the seconds actually go.
+Warm-cache wall times are remarkably similar across the three small-to-
+medium targets despite radically different sizes — uuid 3.22 s, cobra
+2.73 s, prometheus/model/labels 2.84 s — and cobra is *faster* than uuid
+despite having ~3.7× more mutants and ~7× more LOC. That looks wrong
+until you measure where the seconds actually go. The 4-package tsdb-4
+target finally breaks the pattern at 19.0 s warm-cache wall time, for
+reasons the breakdown below makes clear.
 
 On a warm-cache run, gomutants's per-mutant work is genuinely free — every
 mutant short-circuits to its cached status. The wall time is almost
@@ -366,10 +463,20 @@ have small real-time floors which don't shrink with parallelism. Cobra's
 tests are pure CPU-bound command-parsing unit tests that scale across
 all 10 cores and finish in 0.91 s despite running ~4× more functions.
 
-So warm-cache wall time is currently a function of test-suite character,
-not project size. A future enhancement worth tracking: memoize the
-coverage profile on the cache so warm-cache no-op runs skip the
-`-count=1` step entirely. That would drop both targets below ~1 s.
+So warm-cache wall time is currently a function of test-suite character
+**and number of packages**, not LOC. On single-package targets the
+fixed setup is ~3 s. On the tsdb-4 multi-package target it scales to
+~19 s because `go test -count=1 -coverprofile` is invoked once across
+all 4 packages, the per-test coverage map build runs per-package, and
+the baseline-timing call accumulates each package's test wall time. The
+cached-mutant phase remains zero work; the linear-in-packages cost is
+in the toolchain calls.
+
+A future enhancement worth tracking: memoize the coverage profile on
+the cache so warm-cache no-op runs skip the `-count=1` step entirely.
+That would drop the single-package targets below ~1 s and the tsdb-4
+target to single-digit seconds. Filed as
+[issue #38](https://github.com/szhekpisov/gomutants/issues/38).
 
 ## Go 1.26.x compatibility
 
@@ -379,20 +486,30 @@ returns instantly, no error, no work done. To rule out a similar
 regression in gomutants, the like-for-like rows are duplicated under
 `GOTOOLCHAIN=go1.26.3` (rows 3a in both target tables).
 
-| Target | Go 1.25.7 | Go 1.26.3 | Delta |
-|---|---:|---:|---:|
-| google/uuid (L4L, hyperfine 3+1) | 29.66 ± 0.28 s | 29.73 ± 0.11 s | +0.2% (within σ) |
-| spf13/cobra (L4L, median of 3) | 72.60 s | 72.96 s | +0.5% |
-| prometheus/model/labels (L4L, median of 3) | 89.79 s | 96.38 s | **+7.3%** |
+| Target | Go 1.25.7 | Go 1.26.3 | Delta | Note |
+|---|---:|---:|---:|---|
+| google/uuid (L4L, hyperfine 3+1) | 29.66 ± 0.28 s | 29.73 ± 0.11 s | +0.2% (within σ) | clean |
+| spf13/cobra (L4L, median of 3) | 72.60 s | 72.96 s | +0.5% | clean |
+| prometheus/model/labels (L4L, median of 3) | 89.79 s | 96.38 s | **+7.3%** | real wall-time delta |
+| prometheus tsdb-4 (L4L, median of 3) | 1272 s | 855 s | (confounded) | see below |
 
-Mutant discovery is identical between toolchains across all three targets
-(120 / 461 / 500 mutants) and KILLED/LIVED counts match either exactly or
-within run-to-run noise. The 7.3% prometheus slowdown is real and
-reproducible (per-version stddev across runs 2–3 is ~0.3 s on each side).
-gomutants's engine is the same on both toolchains, so the slowdown lives
-in the underlying `go test` for that specific package — likely a
-regex-related stdlib change in 1.26, since model/labels's hot path is
-regex-heavy. Hasn't been pinpointed. uuid and cobra are unaffected.
+Mutant discovery is identical between toolchains across all four targets
+(120 / 461 / 500 / 2149 mutants). KILLED/LIVED counts match exactly or
+within run-to-run noise on uuid, cobra, and model/labels.
+
+**The 7.3% slowdown on prometheus/model/labels** is a clean delta — tight
+per-version stddevs (~0.3 s on each side), same mutant outcomes. Probably
+a regex-related stdlib change in 1.26 hitting model/labels's regex-heavy
+hot path. Hasn't been pinpointed.
+
+**The tsdb-4 row's wall-time difference is confounded** by cache warming
+— the 6 L4L runs were sequential, so 1.25.7 paid cold-cache cost that
+1.26.3 didn't. Steady-state L4L is ~850 s on both toolchains. What *is* a
+real 1.26.3 effect on tsdb-4 is the **mutant outcome shift**: ~57 of 1905
+covered mutants flip from KILLED to 1.26.3-LIVED (3.1 percentage points of
+efficacy). Same mutant set, different test outcomes — pointer to tests
+that depend on undocumented stdlib behavior. uuid, cobra, and model/labels
+don't show this shift.
 
 ## Caveats
 
@@ -422,10 +539,25 @@ regex-heavy. Hasn't been pinpointed. uuid and cobra are unaffected.
   `go test`, so no warm-up effect; its 3 runs were 130/129/128 s). Treat
   the cobra OOB numbers as ±15% upper bounds rather than precise.
 - **Coverage of external targets.** This page covers `google/uuid`,
-  `spf13/cobra`, and `prometheus/model/labels`. The in-repo `benchmarks/`
-  harness covers two other targets (`./testdata/simple/` and
-  `./internal/mutator`) and will give a different picture on different
-  code.
+  `spf13/cobra`, `prometheus/model/labels`, and a 4-package
+  `prometheus/tsdb` slice. The in-repo `benchmarks/` harness covers two
+  other targets (`./testdata/simple/` and `./internal/mutator`) and will
+  give a different picture on different code.
+- **No gremlins comparison on tsdb-4.** gremlins's `unleash` CLI accepts
+  at most one target argument, so it can't replicate the multi-package
+  invocation. Running it per-subpackage and summing would change the
+  comparison shape (each subpackage pays its own setup cost). Left as a
+  gap rather than mixed-methodology.
+- **Cache state contaminates wall-time comparisons across batched
+  runs.** Each `rm -f .gomutants-cache.json` clears gomutants's own cache
+  but not Go's build cache, which warms monotonically across consecutive
+  invocations. On tsdb-4 the 6 L4L runs went 1343 → 1272 → 1107 → 938 →
+  855 → 852 s as the build cache filled. For fair toolchain-vs-toolchain
+  comparison, interleave runs (1.25.7-r1, 1.26.3-r1, 1.25.7-r2, …) or
+  pre-warm by running the full target once before measurement. The
+  per-toolchain numbers in this doc were measured back-to-back; treat
+  same-toolchain medians as steady-state and cross-toolchain wall-time
+  deltas with care.
 
 ## Reproducing
 
@@ -507,4 +639,27 @@ done
 rm -f .gomutants-cache.json
 GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/p-prime.json ./model/labels >/dev/null
 hyperfine --warmup 0 --runs 3 'GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/p-warm.json ./model/labels'
+
+# --- prometheus tsdb-4 (combined 4-package multi-target) ---
+# Same repo as above; targets: ./tsdb/chunkenc ./tsdb/index ./tsdb/chunks ./tsdb/record
+TARGETS="./tsdb/chunkenc ./tsdb/index ./tsdb/chunks ./tsdb/record"
+
+# OOB single-run (~46 min)
+rm -f .gomutants-cache.json
+GOTOOLCHAIN=go1.25.7 time gomutants -workers 10 --cache=off -quiet -o /tmp/t-oob.json $TARGETS
+
+# L4L 3-run median per Go version (~15-22 min each, cache warms across runs)
+for v in 1.25.7 1.26.3; do
+  for r in 1 2 3; do
+    rm -f .gomutants-cache.json
+    GOTOOLCHAIN=go$v time gomutants -workers 10 --cache=off -quiet -only=$GREM_OPS -o /tmp/t-l4l-$v-$r.json $TARGETS
+  done
+done
+
+# Warm cache: prime (~40 min) then hyperfine (~19 s each)
+rm -f .gomutants-cache.json
+GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/t-prime.json $TARGETS >/dev/null
+hyperfine --warmup 0 --runs 3 "GOTOOLCHAIN=go1.25.7 gomutants -workers 10 -quiet -o /tmp/t-warm.json $TARGETS"
+
+# (No gremlins row — gremlins accepts at most 1 target argument.)
 ```
