@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Security & Static Analysis](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml)
 
-Gomutants is a mutation testing tool for Go, designed to scale to larger codebases — pre-built test binaries amortize compile cost across mutants, and a content-addressed cache makes incremental reruns ~100× faster on unchanged code. It supports diff-scoped runs (`--changed-since`), per-test coverage routing, and block-level mutators. It's a near drop-in for [gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` command, same gremlins-compatible JSON output, same threshold exit codes — so existing CI scripts keep working.
+Gomutants is a mutation testing tool for Go, designed to scale to larger codebases — pre-built test binaries amortize compile cost across mutants, and a content-addressed cache makes incremental reruns ~120–150× faster than cold runs on real-world targets (cobra, prometheus/model/labels, a 4-package prometheus/tsdb slice — see [`docs/performance.md`](docs/performance.md)). It supports diff-scoped runs (`--changed-since`), per-test coverage routing, and block-level mutators. It's a near drop-in for [gremlins](https://github.com/go-gremlins/gremlins) — same `unleash` command, same gremlins-compatible JSON output, same threshold exit codes — so existing CI scripts keep working.
 
 ### Documentation quick links
 

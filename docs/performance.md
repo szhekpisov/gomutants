@@ -1,5 +1,9 @@
 # Performance
 
+_Last measured: 2026-05-11 on a 10-core Apple M1 Pro under macOS 26.3.1.
+Toolchain numbers shift with each Go release; treat as a snapshot, not a
+spec._
+
 Mutation testing on real, third-party Go packages. This page documents the
 methodology and the numbers it produced on four targets — a small fast
 one (`google/uuid`), a medium CLI (`spf13/cobra`), a foundational package
@@ -9,6 +13,31 @@ combined run inside the same monorepo's tsdb layer
 LOC) — so you can reproduce them on your own hardware. Repo-internal
 benchmarks live in `benchmarks/`; this page covers external codebases.
 
+## Headlines
+
+If you only read one section:
+
+- **Engine wall time** is roughly tied with gremlins on the smallest
+  target (gomutants 0.93× on uuid), pulls ahead **1.55–1.78×** on
+  single-package medium targets (model/labels, cobra), and ties again on
+  the 4-package target (~10% delta either way) because gomutants's
+  one-shot multi-package setup amortization is balanced by gremlins's
+  per-subpackage setup cost paid 4×.
+- **Warm-cache rerun** is **~120–150× faster** than cold OOB on real-
+  world targets (cobra, model/labels, tsdb-4); ~24× on uuid because the
+  fixed setup floor is a larger fraction of uuid's tiny cold run.
+  gremlins has no cache equivalent.
+- **Go 1.25.7 vs 1.26.3 is mostly a wash for gomutants's engine**:
+  identical on uuid and cobra (within run noise); real **+7.3% slowdown**
+  on prometheus/model/labels (regex-heavy hot path, suspected stdlib
+  change); on tsdb-4 the wall-time delta is confounded by sequential-run
+  cache warming, but mutant outcomes shift (~30–60 mutants reclassify
+  KILLED → LIVED — see caveats on noise).
+- **Methodology gaps to know about up front**: cobra and tsdb-4 OOB rows
+  are single-run (each takes 7–46 min, so a 3-run matrix wasn't
+  affordable); the tsdb-4 gremlins row is sum-of-4-subpackage-invocations
+  because `gremlins unleash` accepts only one target argument.
+
 ## Targets at a glance
 
 | Target | LOC | Packages | Baseline `go test` | Mutants (gomutants OOB) |
@@ -17,6 +46,12 @@ benchmarks live in `benchmarks/`; this page covers external codebases.
 | spf13/cobra (root) | ~6.1k | 1 | ~3.0 s | 1706 |
 | prometheus/model/labels | ~4.0k | 1 | ~3.0 s | 1324 |
 | prometheus tsdb-4 (combined chunkenc / index / chunks / record) | ~24k | 4 | ~5.0 s | 6155 |
+
+The "Mutants (gomutants OOB)" column counts the full mutant set —
+KILLED + LIVED + NOT_COVERED + TIMED_OUT + NOT_VIABLE — recovered by
+walking the per-mutant JSON. gomutants's top-level `mutants_total` JSON
+field excludes NOT_COVERED, so it reads lower than the walked total;
+each per-target table below uses the walked total.
 
 ## Environment
 
@@ -29,6 +64,14 @@ benchmarks live in `benchmarks/`; this page covers external codebases.
 | Workers | 10 |
 | Hyperfine | 3 runs + 1 warmup on uuid; single-run on cobra (8-min cold runs make repeats expensive) |
 | Power | AC, no other CPU-bound load |
+
+The M1 Pro mixes performance and efficiency cores and pipes them through
+the same `runtime.NumCPU()` count, so 10 workers oversubscribe slightly
+under sustained load. On a Linux x86 box with 10 homogeneous cores you
+should expect somewhat lower per-mutant wall times and a slightly
+different cold-cache penalty profile. Absolute numbers won't transfer;
+the relative ordering between tools and the warm-cache-vs-cold ratios
+should.
 
 ## Methodology
 
@@ -316,8 +359,8 @@ run for OOB.
   The mutant set and KILLED/LIVED counts are identical (500 mutants, 356
   killed, 85 lived), so this isn't an engine difference — it's the
   underlying `go test` getting slightly slower on this codebase under the
-  newer toolchain. Likely a regex-related performance change in stdlib;
-  hasn't been pinpointed.
+  newer toolchain. Cause not bisected; regex is a plausible suspect
+  given model/labels's hot path, but I didn't verify.
 
 - **Cache lands the same way as on cobra.** Run 4: 2.84 s vs 342 s OOB —
   **~120× faster**. The 33 cached timeouts and the heavy mutant set
@@ -419,18 +462,20 @@ toolchain difference here (test outcomes, not wall time).
   cached-test time is correspondingly bigger — see "Why warm-cache time
   doesn't track project size" below for the breakdown logic.
 
-- **Go 1.26.3 changes test outcomes here.** Row 2 (1.25.7 median):
-  1571 K / 334 L. Row 2a (1.26.3 median): 1514 K / 389 L. About 57
-  mutants flip from KILLED to LIVED under 1.26.3 — a real ~3.1 percentage-
-  point efficacy drop with identical mutant sets. Distinct from
-  prometheus/model/labels, where 1.26.3 changed wall time but not
-  outcomes; here it's the opposite (outcomes change, wall time is
-  confounded by cache warming). Most likely cause: some tsdb tests are
-  sensitive to stdlib behavior changes in 1.26 (regex, time, or sync
-  primitives are the usual suspects) and survive mutations that 1.25.7
-  used to kill. Worth investigating which mutants flip — it's a
-  pointer to test/code that depends on undocumented Go runtime
-  behavior.
+- **Go 1.26.3 appears to shift test outcomes here, but the signal is
+  noisy.** Row 2 (1.25.7 median): 1571 K / 334 L. Row 2a (1.26.3 median):
+  1514 K / 389 L. The cross-toolchain delta is ~57 mutants K → L, but
+  *within* a single toolchain the three runs already varied by ~22
+  mutants (1.25.7: 1593 / 1571 / 1574; 1.26.3: 1516 / 1514 / 1515). The
+  toolchain-attributable shift is therefore closer to **~30–60 mutants**
+  (cross-toolchain delta minus intra-toolchain noise), not a clean 57.
+  Distinct from prometheus/model/labels, where 1.26.3 changed wall time
+  but not outcomes; here it's the opposite (outcomes appear to shift,
+  wall time is confounded by cache warming). **Cause is unknown** — I
+  did not bisect which mutants reclassify. Candidates worth checking if
+  someone digs in are stdlib changes in 1.26 (regex, time, sync
+  primitives are common suspects for tests that depend on undocumented
+  runtime behavior), but that's conjecture, not finding.
 
 - **NOT_VIABLE is dramatically lower than NOT_COVERED.** Across all
   rows, NV is 265 / 6155 in OOB (~4%) and 8 / 2149 in L4L (~0.4%). Most
@@ -518,8 +563,8 @@ regression in gomutants, the like-for-like rows are duplicated under
 
 | Target | Go 1.25.7 | Go 1.26.3 | Delta | Note |
 |---|---:|---:|---:|---|
-| google/uuid (L4L, hyperfine 3+1) | 29.66 ± 0.28 s | 29.73 ± 0.11 s | +0.2% (within σ) | clean |
-| spf13/cobra (L4L, median of 3) | 72.60 s | 72.96 s | +0.5% | clean |
+| google/uuid (L4L, hyperfine 3+1) | 29.66 ± 0.28 s | 29.73 ± 0.11 s | +0.2% (well below 1σ of combined run noise) | clean |
+| spf13/cobra (L4L, median of 3) | 72.60 s | 72.96 s | +0.5% (run-to-run noise) | clean |
 | prometheus/model/labels (L4L, median of 3) | 89.79 s | 96.38 s | **+7.3%** | real wall-time delta |
 | prometheus tsdb-4 (L4L, median of 3) | 1272 s | 855 s | (confounded) | see below |
 
@@ -528,18 +573,20 @@ Mutant discovery is identical between toolchains across all four targets
 within run-to-run noise on uuid, cobra, and model/labels.
 
 **The 7.3% slowdown on prometheus/model/labels** is a clean delta — tight
-per-version stddevs (~0.3 s on each side), same mutant outcomes. Probably
-a regex-related stdlib change in 1.26 hitting model/labels's regex-heavy
-hot path. Hasn't been pinpointed.
+per-version stddevs (~0.3 s on each side), same mutant outcomes. Cause
+not bisected; regex is a plausible suspect given model/labels's hot path,
+but that's conjecture.
 
 **The tsdb-4 row's wall-time difference is confounded** by cache warming
 — the 6 L4L runs were sequential, so 1.25.7 paid cold-cache cost that
-1.26.3 didn't. Steady-state L4L is ~850 s on both toolchains. What *is* a
-real 1.26.3 effect on tsdb-4 is the **mutant outcome shift**: ~57 of 1905
-covered mutants flip from KILLED to 1.26.3-LIVED (3.1 percentage points of
-efficacy). Same mutant set, different test outcomes — pointer to tests
-that depend on undocumented stdlib behavior. uuid, cobra, and model/labels
-don't show this shift.
+1.26.3 didn't. Steady-state L4L is ~850 s on both toolchains.
+
+The tsdb-4 row also shows a **probable mutant-outcome shift under
+1.26.3**: cross-toolchain median K is 57 lower (1571 → 1514). Intra-
+toolchain variance is ~22 mutants across 3 runs, so the toolchain-
+attributable delta is ~30–60 mutants — real but smaller than the raw
+cross-median number suggests. Cause not bisected. uuid, cobra, and
+model/labels don't show this shift.
 
 ## Caveats
 
