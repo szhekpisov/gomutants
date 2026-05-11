@@ -71,7 +71,7 @@ Beware of small workloads though. gomutants's one-time setup cost (coverage coll
 
 The `--changed-since <ref>` flag scopes a run to mutants on lines added or modified since the given ref. Use `gomutants --changed-since origin/main ./...` to gate every pull request without re-running the full mutation suite on untouched code.
 
-See [`benchmarks/results.md`](benchmarks/results.md) for the full per-scenario breakdown, methodology, hyperfine output, and caveats; reproduce with `bash benchmarks/run.sh`. For runs against external Go projects (`google/uuid`, `spf13/cobra`, `prometheus/model/labels`) showing how the engine speedup grows with project size and how warm-cache reruns land in seconds, see [`docs/performance.md`](docs/performance.md).
+See [`benchmarks/results.md`](benchmarks/results.md) for the full per-scenario breakdown, methodology, hyperfine output, and caveats; reproduce with `bash benchmarks/run.sh`. For runs against four external Go projects — `google/uuid` (~2.3k LOC, single package), `spf13/cobra` (~6k LOC, single package), `prometheus/model/labels` (~4k LOC, single package inside a 245-pkg monorepo), and a 4-package `prometheus/tsdb` slice (`chunkenc`, `index`, `chunks`, `record`, ~24k LOC) — showing how the engine speedup grows with project size and how warm-cache reruns land in seconds (e.g. tsdb-4 cold run is 46 min, warm rerun is 19 s, ~145× faster), see [`docs/performance.md`](docs/performance.md).
 
 
 ### Why should I use gomutants?
