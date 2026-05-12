@@ -18,6 +18,7 @@
 ## Table of Contents
 
 - [Why gomutants?](#why-gomutants)
+- [Where gomutants isn't the fit?](#where-gomutants-isnt-the-fit)
 - [How It Compares](#how-it-compares)
 - [Installation](#installation)
   - [Go Install](#go-install)
