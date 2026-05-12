@@ -206,13 +206,13 @@ RESULTS_MD="$REPO_ROOT/benchmarks/results.md"
   cat <<'EOF'
 ## Reading the results
 
-- **Wall-clock** is what the user waits for. On out-of-the-box defaults gomutants runs more mutators (10 vs 5), so it does more total work and finishes later despite per-mutant being faster.
+- **Wall-clock** is what the user waits for. On out-of-the-box defaults gomutants runs more mutators (16 vs 5), so it does more total work and finishes later despite per-mutant being faster.
 - **Time per tested mutant** normalizes for that — it's the metric that isolates engine speed from the size of the workload. gomutants wins this consistently because it pre-builds and reuses test binaries; gremlins shells out a fresh `go test` per mutant.
 - The `mutator-matched` scenario removes the workload difference entirely. It's the cleanest engine-only comparison.
 
 ## Caveats
 
-- gomutants implements 10 mutator types vs gremlins' 5 default mutators, so "defaults" scenarios compare different workloads. The `mutator-matched` scenario restricts gomutants to gremlins' five default mutators for an apples-to-apples engine comparison.
+- gomutants implements 16 mutator types vs gremlins' 5 default mutators, so "defaults" scenarios compare different workloads. The `mutator-matched` scenario restricts gomutants to gremlins' five default mutators for an apples-to-apples engine comparison.
 - gomutants's one-time setup (coverage collection, baseline measurement, per-test coverage map build) adds fixed overhead that only pays off when many mutants share that cost.
 - The harness uses `--timeout-coefficient 50`. With gremlins' default of 10, gremlins silently TIMED OUT on 18/19 mutants on this machine because each mutant run shells out a fresh `go test` (no cached test binary). The lower coefficient makes gremlins look fast but the kills are missing.
 - Results are sensitive to CPU load and thermal state. Re-run under quiet conditions for publishable numbers.
