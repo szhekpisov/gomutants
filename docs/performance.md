@@ -1,32 +1,46 @@
 # Performance
 
-_Last measured: 2026-05-11 on a 10-core Apple M1 Pro under macOS 26.3.1.
+_Last measured: 2026-05-12 on a 10-core Apple M1 Pro under macOS 26.3.1.
 Toolchain numbers shift with each Go release; treat as a snapshot, not a
 spec._
 
-Mutation testing on real, third-party Go packages. This page documents the
-methodology and the numbers it produced on four targets — a small fast
-one (`google/uuid`), a medium CLI (`spf13/cobra`), a foundational package
-inside a large monorepo (`prometheus/model/labels`), and a 4-package
-combined run inside the same monorepo's tsdb layer
+Mutation testing on real Go packages. This page documents the methodology
+and the numbers it produced on six targets — a tiny in-repo fixture
+(`./testdata/simple/`), a small fast project (`google/uuid`), a medium
+CLI (`spf13/cobra`), a single-package YAML diff tool
+(`szhekpisov/diffyml`), a foundational package inside a large monorepo
+(`prometheus/model/labels`), and a 4-package combined run inside the same
+monorepo's tsdb layer
 (`prometheus/{tsdb/chunkenc, tsdb/index, tsdb/chunks, tsdb/record}`, ~24k
-LOC) — so you can reproduce them on your own hardware. Repo-internal
-benchmarks live in `benchmarks/`; this page covers external codebases.
+LOC) — so you can reproduce them on your own hardware. The in-repo
+harness at `benchmarks/` covers a couple of additional in-repo targets
+(`./internal/mutator`).
 
 ## Headlines
 
 If you only read one section:
 
-- **Engine wall time** is roughly tied with gremlins on the smallest
-  target (gomutants 0.93× on uuid), pulls ahead **1.55–1.78×** on
-  single-package medium targets (model/labels, cobra), and ties again on
-  the 4-package target (~10% delta either way) because gomutants's
-  one-shot multi-package setup amortization is balanced by gremlins's
-  per-subpackage setup cost paid 4×.
-- **Warm-cache rerun** is **~120–150× faster** than cold OOB on real-
-  world targets (cobra, model/labels, tsdb-4); ~24× on uuid because the
-  fixed setup floor is a larger fraction of uuid's tiny cold run.
-  gremlins has no cache equivalent.
+- **Engine wall time** depends on workload size. Gomutants is **1.89×
+  slower** than gremlins on the trivial in-repo `./testdata/simple/`
+  (19 mutants), **0.93× on uuid** (~120 mutants), pulls ahead
+  **1.55–1.78×** on single-package medium targets (model/labels, cobra,
+  diffyml), and ties again on the 4-package tsdb target (~10% delta
+  either way) where gomutants's one-shot multi-package setup balances
+  against gremlins's per-subpackage setup paid 4×. The crossover is the
+  point where there are enough mutants to amortize gomutants's one-time
+  setup (coverage gather, baseline measurement, per-test coverage map).
+- **Warm-cache rerun** is **~120–225× faster** than cold OOB on real-
+  world targets with many mutants (cobra ~150×, model/labels ~120×,
+  tsdb-4 ~145×, diffyml ~225×); ~24× on uuid and only ~3.5× on
+  `./testdata/simple/` because the fixed pre-flight floor (`go list`,
+  `go test -count=1 -coverprofile`, `go test -list`) is a larger
+  fraction of tiny cold runs. Gremlins has no cache equivalent.
+- **Adaptive timeouts shift more weight as targets get faster.** Gremlins
+  with the default `--timeout-coefficient=20` lost mutants to its fixed
+  ceiling on every fast target: 70% on `./testdata/simple/`, 30.7% on
+  diffyml, 26% on uuid. Gomutants's adaptive per-mutant timeout sizes
+  each deadline from per-test runtimes × margin and hit zero timeouts on
+  the matched-operator scope of all three.
 - **Go 1.25.7 vs 1.26.3 is mostly a wash for gomutants's engine**:
   identical on uuid and cobra (within run noise); real **+7.3% slowdown**
   on prometheus/model/labels (regex-heavy hot path, suspected stdlib
@@ -42,8 +56,10 @@ If you only read one section:
 
 | Target | LOC | Packages | Baseline `go test` | Mutants (gomutants OOB) |
 |---|---:|---:|---:|---:|
+| `./testdata/simple/` (in-repo) | ~70 | 1 | ~1.0 s | 36 |
 | google/uuid (root) | ~2.3k | 1 | ~1.0 s | 464 |
 | spf13/cobra (root) | ~6.1k | 1 | ~3.0 s | 1706 |
+| szhekpisov/diffyml (`./pkg/diffyml/`) | ~8.0k | 1 | ~0.5 s | 2276 |
 | prometheus/model/labels | ~4.0k | 1 | ~3.0 s | 1324 |
 | prometheus tsdb-4 (combined chunkenc / index / chunks / record) | ~24k | 4 | ~5.0 s | 6155 |
 
@@ -142,6 +158,65 @@ efficacy = KILLED / (KILLED + LIVED + TIMED_OUT)
 Including `TIMED_OUT` in the denominator avoids treating a timed-out mutant
 as a free pass. Gremlins's JSON otherwise reports 100% in scenarios where a
 quarter of its mutants timed out, which overstates the result.
+
+## Results: ./testdata/simple/
+
+- In-repo fixture used as a smoke test for both engines.
+- Source size: ~70 LOC, single package with one trivial function and a
+  small companion test file.
+- Baseline `go test ./testdata/simple/`: ~1.0 s.
+
+A deliberately tiny target. The point isn't engine throughput — there's
+barely enough mutation work to compare — it's to show what gomutants's
+fixed setup floor costs when there are too few mutants to amortize it.
+Also exposes how gremlins's fixed-coefficient timeout behaves at the
+fastest end of the spectrum.
+
+### Wall time
+
+| # | Tool | Mode | Wall time (mean ± σ, 3 runs) |
+|---|---|---|---|
+| 1 | gremlins (dev) | 10w, 5 default ops, `--timeout-coefficient=20` | 4.95 ± 0.08 s |
+| 1a | gremlins (dev) | 10w, 5 default ops, `--timeout-coefficient=50` | 7.53 ± 0.48 s |
+| 2 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off) | 21.34 ± 0.47 s |
+| 3 | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off) | **14.26 ± 1.49 s** |
+| 4 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, 2nd+ run) | **6.15 ± 2.02 s** |
+
+### Mutant outcomes
+
+| # | Total | KILLED | LIVED | NOT_COVERED | TIMED_OUT | NOT_VIABLE | Efficacy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 20 | 0 | 0 | 6 | **14** | 0 | 0.0% |
+| 1a | 20 | 11 | 3 | 6 | 0 | 0 | 78.6% |
+| 2 | 36 | 29 | 3 | 0 | 0 | 4 | 90.6% |
+| 3 | 19 | 16 | 3 | 0 | 0 | 0 | 84.2% |
+| 4 | 36 | 29 | 3 | 0 | 0 | 4 | 90.6% |
+
+### Reading the testdata/simple results
+
+- **Small-workload caveat is real.** Like-for-like (1a vs 3), gomutants
+  is **1.89× slower** wall-clock than gremlins (14.26 vs 7.53 s) on this
+  19-mutant target. Per-mutant cost (KILLED+LIVED): gomutants ~750 ms vs
+  gremlins ~540 ms. Same direction as uuid (gomutants 0.93×) at smaller
+  scale — gomutants's one-time setup (coverage gather, baseline timing,
+  per-test coverage map) is fixed cost that only amortizes when many
+  mutants share it.
+- **Adaptive timeouts dominate at the default coefficient.** Row 1
+  (gremlins, coef=20): 14 / 20 mutants timed out (70%); efficacy collapses
+  to 0%. Row 1a bumps the coefficient to 50 to land a workable result. On
+  fast targets, fixed-coefficient timeout sizing fails under any worker
+  contention. Gomutants's adaptive per-mutant timeout hit 0 timeouts at
+  the same `--timeout-coefficient=20` ceiling.
+- **Warm cache is only ~3.5× faster here**, not the 120–225× the bigger
+  targets show. Warm-rerun wall time is dominated by pre-flight toolchain
+  calls (`go list`, `go test -count=1 -coverprofile`, `go test -list`) —
+  see "Why warm-cache time doesn't track project size" below for the
+  breakdown. On a 36-mutant target the cached short-circuit phase is
+  effectively instant, but the setup floor (~3 s) is hard to undercut.
+- **NOT_COVERED interpretation differs.** Gremlins flags 6 not-covered
+  mutants; gomutants flags 0. Same lines: gomutants's per-test coverage
+  finds tests that touch them, gremlins's package-level filter doesn't —
+  the same delta documented for model/labels.
 
 ## Results: google/uuid
 
@@ -286,6 +361,89 @@ treat them as upper bounds and ±15% rather than precise.
   Whatever toolchain change broke gremlins on Go 1.26.x didn't measurably
   affect gomutants's `go test`-driven loop. See "Go 1.26.x compatibility"
   below.
+
+## Results: diffyml
+
+- Pinned commit: `1367f6df81bf1bf85360824682bcab96388c6b38`.
+- Source size: ~8.0k LOC in a single package (`./pkg/diffyml/`), 100%
+  statement coverage in tests.
+- Baseline `go test ./pkg/diffyml/`: ~0.5 s.
+
+A YAML diff tool. Single-package, fast test suite, fully covered — a
+useful counterpoint to model/labels (where heavy regex tests dominate)
+and cobra (where the test suite is larger and slower). Per-test wall
+times are short enough that gremlins's fixed-coefficient timeout becomes
+the dominant factor on the L4L scope.
+
+**Methodology note.** diffyml's `go.mod` requires `go 1.26.2`, so this
+target uses `GOTOOLCHAIN=go1.26.3` rather than the `go1.25.7` other
+tables use. The cross-comparison rows use a locally-built
+`gremlins version dev` — gremlins v0.6.0 release silently produces zero
+mutants on Go 1.26.x (the same issue documented under "Go 1.26.x
+compatibility" below); the dev build escapes that regression and
+discovered 824 mutants on diffyml in dry-run. Numbers are therefore not
+directly comparable to the gremlins-v0.6.0 release-tarball rows on
+other targets, but the L4L ordering is consistent with cobra and
+model/labels.
+
+L4L is single-run-per-tool here, with gomutants L4L reported as a 3-run
+median because run 1 paid cold-Go-build-cache cost (213 / 123 / 182 s
+across the three runs).
+
+### Wall time
+
+| # | Tool | Mode | Wall time |
+|---|---|---|---|
+| 1 | gremlins dev | 10w, 5 default ops, `--timeout-coefficient=20`, single run | 317 s |
+| 2 | gomutants v0.2.2 | like-for-like (10w, 5 ops, cache off, median of 3) | **182 s** |
+| 3 | gomutants v0.2.2 | out-of-box (10w, all ops, cache off, single run) | 642 s (~10.7 min) |
+| 4 | gomutants v0.2.2 | warm cache (10w, all ops, cache on, hyperfine 3×) | **2.85 ± 0.15 s** |
+
+### Mutant outcomes
+
+| # | Total | KILLED | LIVED | NOT_COVERED | TIMED_OUT | NOT_VIABLE | Efficacy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 824 | 551 | 0 | 20 | **253** | 0 | 68.5%¹ |
+| 2 | 611 | 571 | 0 | 0 | 0 | 40 | **100%** |
+| 3 | 2276 | 1683 | 247 | 1 | 19 | 326 | 87.2% |
+| 4 | 2276 | 1683 | 247 | 1 | 19 | 326 | 87.2% |
+
+¹ Gremlins's own JSON reports `test_efficacy: 100%` here — its formula
+is `K / (K+L)` and there are 0 LIVED. The 68.5% in this table uses this
+page's `K / (K+L+TO)` denominator, which folds in the 253 timed-out
+mutants.
+
+### Reading the diffyml results
+
+- **L4L wall time: gomutants 1.74× faster.** 182 s median vs 317 s for
+  gremlins. Per-mutant cost (KILLED+LIVED): gomutants ~319 ms vs gremlins
+  ~575 ms (1.80× faster per mutant). Same pattern as cobra and
+  model/labels — gomutants's pre-built test binary amortizes across the
+  ~600-mutant L4L set while gremlins compiles `go test` fresh per
+  mutant.
+- **Adaptive timeouts are the headline at coef=20.** Gremlins burned
+  253 / 824 mutants (30.7%) in the fixed timeout ceiling at the default
+  coefficient — within the same regime as uuid (26%) and below
+  `./testdata/simple/` (70%), where per-test wall times are even
+  shorter. Gomutants's adaptive per-mutant timeout (deadline =
+  `sum(selected test durations) × --timeout-margin`, clamped to
+  `[--timeout-min, global ceiling]`) hit zero timeouts at L4L scope.
+  Even at OOB scope across 16 operators on 2276 mutants, only 19
+  timeouts surface (0.8%).
+- **OOB runs 16 ops vs 5.** 2276 mutants in 642 s — per-K+L cost ~334 ms
+  is close to the L4L number (319 ms), so the extra wall time is
+  workload size, not engine drift on the wider operator set.
+- **Warm cache is ~225× faster than cold OOB** (2.85 s vs 642 s) — the
+  largest warm-rerun multiple on this page. Diffyml's baseline `go test`
+  finishes in ~0.5 s, so the pre-flight `go test -count=1
+  -coverprofile` (the dominant warm-cache cost per "Why warm-cache time
+  doesn't track project size") is similarly short.
+- **L4L kills 100% on this target.** Diffyml's test suite is
+  well-instrumented enough that the matched 5-operator set finds no
+  surviving mutants on its line-covered code. At OOB scope, 247 LIVED
+  surface from gomutants's block-level operators (`STATEMENT_REMOVE`,
+  `BRANCH_*`) exposing tests with weak assertions — the 87.2% OOB
+  efficacy is the honest score on a wider operator surface.
 
 ## Results: prometheus/model/labels
 
