@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1409,7 +1410,7 @@ func TestRun_CoverageCacheMiss_RunsCoverage(t *testing.T) {
 		return origRC(ctx, projectDir, packages, coverPkg, tmpDir)
 	}
 
-	staleCache := `{"schema_version":` + itoa(cache.SchemaVersion) +
+	staleCache := `{"schema_version":` + strconv.Itoa(cache.SchemaVersion) +
 		`,"go_module":"testmod","tool_version":"` + cacheToolVersion() +
 		`","coverage_key":"definitelywrongkey","coverage_profile":"mode: set\n","entries":[]}`
 	if err := os.WriteFile(cachePath, []byte(staleCache), 0o644); err != nil {
@@ -1459,31 +1460,6 @@ func TestRun_CacheOff_NeverWritesCoverageFields(t *testing.T) {
 	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
 		t.Errorf("cache file unexpectedly created with --cache=off: stat err=%v", err)
 	}
-}
-
-// itoa is a tiny strconv.Itoa wrapper used by the cache-seeding test so
-// we don't pull strconv into the import set when the rest of the file
-// already has strings/strconv elsewhere.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }
 
 // setupTinyProject creates a minimal Go project with one TestAdd that

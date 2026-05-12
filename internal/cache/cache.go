@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -81,8 +82,10 @@ type saveSink interface {
 // `go test -count=1 -coverprofile` so warm no-op runs can skip the
 // coverage subprocess. The key fingerprints every input that could
 // change the profile (see HashCoverageInputs); on a match the stored
-// profile is parsed via coverage.ParseBytes instead. omitempty so old
-// v3 caches without the fields round-trip cleanly.
+// profile is parsed via coverage.ParseBytes instead. The omitempty
+// tags are defensive forward-compat: a future code path that skips
+// writing the coverage fields (e.g. when the user disables coverage
+// caching) won't pollute the JSON with empty strings.
 type Cache struct {
 	SchemaVersion   int     `json:"schema_version"`
 	GoModule        string  `json:"go_module"`
@@ -173,6 +176,16 @@ func NewHasher(srcCache map[string][]byte) *Hasher {
 		files:    make(map[string]string),
 		srcCache: srcCache,
 	}
+}
+
+// SetSrcCache attaches an in-memory source map (typically populated by
+// discover.PreReadFiles) after the hasher was constructed. Used by
+// callers that need a Hasher before pre-read completes (e.g. the
+// coverage-key calc runs before discovery) and want subsequent File()
+// calls to skip the disk read. Already-memoized hashes in h.files are
+// preserved.
+func (h *Hasher) SetSrcCache(srcCache map[string][]byte) {
+	h.srcCache = srcCache
 }
 
 // File returns the hash of absPath, computing it on first call.
@@ -312,7 +325,7 @@ func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tool
 	sumHex := ""
 	if v, err := h.File(filepath.Join(projectDir, "go.sum")); err == nil {
 		sumHex = v
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("hashing go.sum: %w", err)
 	}
 	fmt.Fprintf(hh, "gosum:%d:%s|", len(sumHex), sumHex)

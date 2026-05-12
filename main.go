@@ -339,7 +339,11 @@ func run(ctx context.Context, args []string) error {
 	)
 	if cfg.Cache != "" {
 		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion())
-		hasher = cache.NewHasher(nil) // srcCache is populated below; nil is fine — File falls back to disk.
+		// Hasher is created before discovery's PreReadFiles so the
+		// coverage-key calc can use it. SetSrcCache is called once
+		// the in-memory source map exists (after step 6), so
+		// per-mutant Lookup's prodHash calls reuse already-loaded bytes.
+		hasher = cache.NewHasher(nil)
 	}
 
 	// Get enabled mutators. Validate names first so a typo in --only /
@@ -506,6 +510,14 @@ func run(ctx context.Context, args []string) error {
 	srcCache, err := preReadFilesFunc(pkgs)
 	if err != nil {
 		return fmt.Errorf("pre-reading source files: %w", err)
+	}
+	if hasher != nil {
+		// Hasher was created early (before PreReadFiles) for the
+		// coverage-key calc; attach the in-memory source map now so
+		// per-mutant Lookup's prodHash calls skip disk reads. Files
+		// hashed during the coverage-key phase remain in the hasher's
+		// internal memo, so this only affects newly seen paths.
+		hasher.SetSrcCache(srcCache)
 	}
 
 	// 7. Build per-test coverage map.
@@ -687,11 +699,16 @@ func run(ctx context.Context, args []string) error {
 // can fingerprint the toolchain that actually compiles the tests
 // (independent of runtime.Version() for the gomutants binary itself).
 // Swappable via goVersionFunc for tests that want deterministic output.
+//
+// Returns a sentinel on failure so the "go binary unavailable" mode is
+// distinct from any conceivable successful empty output — collapsing
+// both into "" would let the cache survive a toolchain swap if the
+// other inputs happen to stay constant.
 func runGoVersion(ctx context.Context) string {
 	cmd := exec.CommandContext(ctx, "go", "version")
 	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		return "go-version-unavailable"
 	}
 	return strings.TrimSpace(string(out))
 }

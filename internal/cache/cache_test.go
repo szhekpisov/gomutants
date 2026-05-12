@@ -75,6 +75,33 @@ func TestHasher_UsesSrcCacheBeforeDisk(t *testing.T) {
 	}
 }
 
+// TestHasher_SetSrcCacheAttachesAfterConstruction verifies the post-hoc
+// srcCache wire-up used by main.go (Hasher is created before
+// PreReadFiles for the coverage-key calc, then srcCache is attached
+// once discovery completes). A subsequent File() call on a brand-new
+// path must hit the in-memory bytes rather than the disk file.
+func TestHasher_SetSrcCacheAttachesAfterConstruction(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.go")
+	mustWrite(t, p, "DISK CONTENT\n")
+
+	h := NewHasher(nil) // empty srcCache up front
+	memBody := []byte("MEMORY CONTENT\n")
+	h.SetSrcCache(map[string][]byte{p: memBody})
+
+	got, err := h.File(p)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	disk, err := HashFile(p)
+	if err != nil {
+		t.Fatalf("disk hash: %v", err)
+	}
+	if got == disk {
+		t.Fatalf("SetSrcCache attachment didn't take effect — hasher hashed the disk file")
+	}
+}
+
 func TestHashTestFiles_OrderInvariantAndContentSensitive(t *testing.T) {
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a_test.go")
