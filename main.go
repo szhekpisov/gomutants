@@ -154,7 +154,8 @@ func main() {
 
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "gomutants: %v\n", err)
-		if ee, ok := errors.AsType[*exitError](err); ok {
+		var ee *exitError
+		if errors.As(err, &ee) {
 			os.Exit(ee.code)
 		}
 		os.Exit(1)

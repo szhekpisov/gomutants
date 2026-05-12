@@ -316,11 +316,13 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 
 	if mutatorsStr != "*" {
 		d.Mutators = make(map[mutator.MutationType]struct{})
+		named := 0
 		for name := range strings.SplitSeq(mutatorsStr, ",") {
 			name = strings.TrimSpace(name)
 			if name == "" {
 				continue
 			}
+			named++
 			if !isKnownMutator(name) {
 				if d.Kind == directiveRegexp {
 					warnf(warn, relPath, line, "unknown mutator %q in disable-regexp directive (note: patterns cannot contain whitespace; use \\s) (skipped)", name)
@@ -331,9 +333,13 @@ func parseDirective(text string, line int, relPath string, warn io.Writer) (dire
 			}
 			d.Mutators[mutator.MutationType(name)] = struct{}{}
 		}
-		// If every name was rejected, fall back to "all" so the directive isn't a silent no-op.
-		if len(d.Mutators) == 0 {
-			d.Mutators = nil
+		// If the user named at least one mutator and every name was unknown,
+		// drop the directive — falling back to "all" would let a typo like
+		// `TYPP_O` silently disable every mutator on the line, masking the
+		// exact failure mode mutation testing is meant to surface.
+		if named > 0 && len(d.Mutators) == 0 {
+			warnf(warn, relPath, line, "all named mutators unknown (skipped)")
+			return directive{}, false
 		}
 	}
 

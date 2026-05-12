@@ -367,7 +367,7 @@ QUOTED     = any Go-quoted string ("...", `...`, or 'c') with standard escape ha
 
 - Omitting `MUTATORS` (or supplying `*`) suppresses every mutator at the directive's target.
 - `reason="..."` is optional; recommended for self-documentation. Reasons surface to stderr under `--verbose`.
-- Unknown mutator name → warning to stderr, that name is dropped, the rest of the directive still applies. If *every* named mutator is unknown, the directive falls back to suppressing all mutators so the warning is visible but intent is preserved. Forward-compatible across mutator renames.
+- Unknown mutator name → warning to stderr, that name is dropped, the rest of the directive still applies. If *every* named mutator is unknown, the directive is dropped entirely with a summary warning — a typo like `TYPP_O` must not silently disable every mutator on the line. Forward-compatible across mutator renames (rename one mutator at a time; stale names are individually skipped).
 - `disable-func` placed on a non-function comment → warning, directive ignored.
 - `disable-regexp` with an invalid pattern → warning, directive ignored.
 - `disable-next-line` on the last line of a file (or with only blanks/comments after it) → warning, directive ignored.
