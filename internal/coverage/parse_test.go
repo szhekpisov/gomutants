@@ -199,6 +199,45 @@ func TestParseReaderEmpty(t *testing.T) {
 	}
 }
 
+func TestParseBytes_RoundTripWithParseFile(t *testing.T) {
+	body := "mode: set\nfile.go:10.2,15.3 2 1\nfile.go:20.1,25.5 1 0\n"
+	pFromBytes, err := ParseBytes([]byte(body))
+	if err != nil {
+		t.Fatalf("ParseBytes: %v", err)
+	}
+	if len(pFromBytes.blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(pFromBytes.blocks))
+	}
+	// Cross-check against ParseFile on the same content so a divergent
+	// implementation (e.g. ParseBytes silently dropping a line) surfaces.
+	tmp := t.TempDir() + "/cov.out"
+	if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	pFromFile, err := ParseFile(tmp)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(pFromFile.blocks) != len(pFromBytes.blocks) {
+		t.Fatalf("ParseBytes/ParseFile block-count mismatch: %d vs %d", len(pFromBytes.blocks), len(pFromFile.blocks))
+	}
+	for i := range pFromFile.blocks {
+		if pFromFile.blocks[i] != pFromBytes.blocks[i] {
+			t.Errorf("block %d mismatch: file=%+v bytes=%+v", i, pFromFile.blocks[i], pFromBytes.blocks[i])
+		}
+	}
+}
+
+func TestParseBytes_EmptyInput(t *testing.T) {
+	p, err := ParseBytes(nil)
+	if err != nil {
+		t.Fatalf("ParseBytes(nil): %v", err)
+	}
+	if len(p.blocks) != 0 {
+		t.Errorf("expected 0 blocks from nil input, got %d", len(p.blocks))
+	}
+}
+
 // Ensure io import is used.
 var _ io.Reader = (*errorReader)(nil)
 

@@ -10,8 +10,10 @@ import (
 	"go/token"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -188,12 +190,14 @@ var buildTestMapFunc = coverage.BuildTestMap
 var (
 	runCoverageFunc     = runner.RunCoverage
 	measureBaselineFunc = runner.MeasureBaseline
-	parseProfileFunc    = coverage.ParseFile
+	parseBytesFunc      = coverage.ParseBytes
 	preReadFilesFunc    = discover.PreReadFiles
 	mkdirTempFunc       = os.MkdirTemp
 	getwdFunc           = os.Getwd
 	cacheLoadFunc       = cache.Load
 	cacheSaveFunc       = cache.Save
+	resolveCoverPkgFunc = discover.ResolvePackages
+	goVersionFunc       = runGoVersion
 )
 
 // phaseDurationDisplay rounds a duration to 100ms precision for display
@@ -322,6 +326,22 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
+	// Load the cache early so the coverage phase can short-circuit on a
+	// matching profile key. The per-mutant Lookup runs later off the same
+	// *Cache; load failures fall through to a nil cache, which the rest
+	// of the pipeline treats as "no cache at all". A single Hasher is
+	// reused across the coverage-key calc and Lookup so per-file sha256s
+	// are memoized only once.
+	var (
+		loadedCache  *cache.Cache
+		hasher       *cache.Hasher
+		testFilesFor cache.TestFilesForFn
+	)
+	if cfg.Cache != "" {
+		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion())
+		hasher = cache.NewHasher(nil) // srcCache is populated below; nil is fine — File falls back to disk.
+	}
+
 	// Get enabled mutators. Validate names first so a typo in --only /
 	// --disable (or in the config file) surfaces as a stderr warning
 	// instead of a silent filter miss. EnabledMutators already ignores
@@ -353,18 +373,63 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	// 3. Collect coverage.
+	// 3. Collect coverage. With --cache enabled, the profile is memoized
+	// under a content-hash key that fingerprints every input that can
+	// change `go test -coverprofile` output (sources, go.mod/sum, toolchain,
+	// env, -coverpkg). A key match parses the cached profile in-process and
+	// skips the multi-second `go test` invocation.
 	term.Phase("Collecting coverage...")
 	coverStart := time.Now()
-	profilePath, err := runCoverageFunc(ctx, projectDir, packages, cfg.CoverPkg, tmpDir)
-	if err != nil {
-		return err
+
+	var (
+		profile      *coverage.Profile
+		profileBytes []byte
+		coverageKey  string
+		coverFromCache bool
+	)
+	if loadedCache != nil {
+		// Hash failures (unreadable file/dir) fall through to a fresh
+		// coverage run rather than aborting — same conservative policy
+		// as the per-mutant Lookup path.
+		if pkgDirs, derr := coveragePkgDirs(ctx, projectDir, pkgs, cfg.CoverPkg); derr == nil {
+			toolchain := fmt.Sprintf("gomutants/%s|go/%s", runtime.Version(), goVersionFunc(ctx))
+			if k, herr := hasher.HashCoverageInputs(pkgDirs, projectDir, cfg.CoverPkg, toolchain, captureCoverageEnv()); herr == nil {
+				coverageKey = k
+			}
+		}
+		if coverageKey != "" && coverageKey == loadedCache.CoverageKey && loadedCache.CoverageProfile != "" {
+			if p, perr := parseBytesFunc([]byte(loadedCache.CoverageProfile)); perr == nil {
+				profile = p
+				profileBytes = []byte(loadedCache.CoverageProfile)
+				coverFromCache = true
+			}
+		}
 	}
-	profile, err := parseProfileFunc(profilePath)
-	if err != nil {
-		return err
+
+	if profile == nil {
+		profilePath, rerr := runCoverageFunc(ctx, projectDir, packages, cfg.CoverPkg, tmpDir)
+		if rerr != nil {
+			return rerr
+		}
+		// Read the profile bytes once and reuse them for parsing + cache
+		// persistence. Avoids a second file read at cache-write time.
+		bs, rerr := os.ReadFile(profilePath)
+		if rerr != nil {
+			return fmt.Errorf("reading coverage profile: %w", rerr)
+		}
+		p, perr := parseBytesFunc(bs)
+		if perr != nil {
+			return perr
+		}
+		profile = p
+		profileBytes = bs
 	}
-	term.PhaseDone(fmt.Sprintf("done (%s)", phaseDurationDisplay(time.Since(coverStart))))
+
+	coverSuffix := ""
+	if coverFromCache {
+		coverSuffix = ", cached"
+	}
+	term.PhaseDone(fmt.Sprintf("done (%s%s)", phaseDurationDisplay(time.Since(coverStart)), coverSuffix))
 
 	// 4. Measure baseline test duration.
 	term.Phase("Measuring baseline...")
@@ -458,15 +523,10 @@ func run(ctx context.Context, args []string) error {
 	// 7a. Apply incremental-analysis cache (opt-in via --cache). Hits
 	// flip the mutant from Pending to its prior terminal status, which
 	// makes the runner's Pending-only filter naturally skip them.
-	var (
-		loadedCache  *cache.Cache
-		hasher       *cache.Hasher
-		testFilesFor cache.TestFilesForFn
-	)
-	if cfg.Cache != "" {
-		hasher = cache.NewHasher(srcCache)
-		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion())
-
+	// loadedCache + hasher were created at module-read time so the
+	// coverage phase could already consult them — here we just build
+	// the test-files resolver and run the lookup.
+	if loadedCache != nil {
 		// TestIndex is built from every package's directory so cross-
 		// package coverage (tests in pkg B exercising code in pkg A
 		// via -coverpkg) resolves correctly.
@@ -533,6 +593,16 @@ func run(ctx context.Context, args []string) error {
 	// a stale or missing cache only costs speed on the next run.
 	if loadedCache != nil {
 		loadedCache.Update(mutants, hasher, projectDir, testFilesFor)
+		// Stamp the coverage memo on every successful run where we
+		// computed a key — both the cache-hit branch (re-emitting the
+		// same bytes) and the fresh-run branch (storing newly captured
+		// bytes). An empty coverageKey means hashing failed earlier and
+		// we silently fell back to a fresh run; don't poison the cache
+		// with a missing key.
+		if coverageKey != "" && len(profileBytes) > 0 {
+			loadedCache.CoverageKey = coverageKey
+			loadedCache.CoverageProfile = string(profileBytes)
+		}
 		if err := cacheSaveFunc(loadedCache, cfg.Cache); err != nil {
 			fmt.Fprintf(stderr, "warning: writing cache to %s: %v\n", cfg.Cache, err)
 		}
@@ -611,6 +681,63 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+// runGoVersion shells out to `go version` once so the coverage cache key
+// can fingerprint the toolchain that actually compiles the tests
+// (independent of runtime.Version() for the gomutants binary itself).
+// Swappable via goVersionFunc for tests that want deterministic output.
+func runGoVersion(ctx context.Context) string {
+	cmd := exec.CommandContext(ctx, "go", "version")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// captureCoverageEnv returns an allowlisted snapshot of go-related env
+// vars that can change the coverage profile. Restricted to a small set
+// so that irrelevant churn (GOPROXY rotation, GOCACHE path changes)
+// doesn't invalidate the cache. New entries must actually affect what
+// `go test -coverprofile` produces.
+func captureCoverageEnv() string {
+	keys := []string{"GOEXPERIMENT", "GOFLAGS", "GOOS", "GOARCH", "CGO_ENABLED"}
+	var b strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s=%s|", k, os.Getenv(k))
+	}
+	return b.String()
+}
+
+// coveragePkgDirs returns the set of package directories whose source
+// could land in the coverage profile. With cfg.CoverPkg unset (or
+// matching the target patterns), this is exactly `pkgs`. With a
+// broader -coverpkg pattern, we resolve it separately so the hash
+// covers every package that go test will instrument.
+func coveragePkgDirs(ctx context.Context, projectDir string, pkgs []discover.Package, coverPkg string) ([]string, error) {
+	dirs := make([]string, 0, len(pkgs))
+	seen := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		if !seen[p.Dir] {
+			seen[p.Dir] = true
+			dirs = append(dirs, p.Dir)
+		}
+	}
+	if coverPkg == "" {
+		return dirs, nil
+	}
+	expanded, err := resolveCoverPkgFunc(ctx, projectDir, []string{coverPkg})
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range expanded {
+		if !seen[p.Dir] {
+			seen[p.Dir] = true
+			dirs = append(dirs, p.Dir)
+		}
+	}
+	return dirs, nil
 }
 
 // readModuleName extracts the module path from go.mod by scanning for
