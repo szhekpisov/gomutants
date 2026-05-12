@@ -752,3 +752,22 @@ func TestPaintIdleLineSkipsAfterFirstResult(t *testing.T) {
 		t.Errorf("paintIdleLine must no-op when done>0, got %q", buf.String())
 	}
 }
+
+// A second StartHeartbeat must be a no-op: hbStopOnce has already fired
+// after the first StopHeartbeat (or will), so a re-spawned goroutine
+// could never be stopped. The guard prevents the leak.
+func TestStartHeartbeatSecondCallIsNoOp(t *testing.T) {
+	withHeartbeatInterval(t, time.Hour)
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now()}
+	term.StartHeartbeat()
+	firstStop := term.hbStop
+	if firstStop == nil {
+		t.Fatal("first StartHeartbeat should have assigned hbStop")
+	}
+	term.StartHeartbeat() // must not spawn a second goroutine or reassign channels
+	if term.hbStop != firstStop {
+		t.Error("second StartHeartbeat reassigned hbStop — would orphan first goroutine")
+	}
+	term.StopHeartbeat()
+}

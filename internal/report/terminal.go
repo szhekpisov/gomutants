@@ -18,7 +18,8 @@ const barWidth = 30
 
 // heartbeatInterval is the cadence at which the idle "(compiling)" line
 // re-paints so the elapsed counter advances. var (not const) so tests can
-// shrink it without forcing a real-time wait.
+// shrink it without forcing a real-time wait. Tests that mutate this var
+// must NOT call t.Parallel() — the package-level write would race.
 var heartbeatInterval = time.Second
 
 // Terminal handles progress output to the terminal.
@@ -94,6 +95,10 @@ func (t *Terminal) PhaseDone(msg string) {
 // arrives; callers should still defer StopHeartbeat in case zero
 // mutants ever complete (e.g., upstream cancel, or all-cached run).
 //
+// Must be called at most once per Terminal: a second call is a no-op
+// (hbStopOnce is already fired after the first StopHeartbeat, so a
+// re-spawned goroutine could not be stopped).
+//
 // No-op when quiet, verbose, off-TTY, or total == 0 — those modes
 // either suppress output entirely or print line-per-mutant, where a
 // \r-based spinner would corrupt the transcript.
@@ -101,19 +106,29 @@ func (t *Terminal) StartHeartbeat() {
 	if t.quiet || t.verbose || !t.isTTY || t.total == 0 {
 		return
 	}
+	t.mu.Lock()
+	if t.hbStop != nil {
+		t.mu.Unlock()
+		return
+	}
 	t.hbStop = make(chan struct{})
 	t.hbDone = make(chan struct{})
-	go t.heartbeatLoop()
+	stop, done := t.hbStop, t.hbDone
+	t.mu.Unlock()
+	// Pass channels as args so the goroutine never races on t.hbStop /
+	// t.hbDone field reads — the guard above prevents reassignment, but
+	// keeping the goroutine's view local makes the invariant obvious.
+	go t.heartbeatLoop(stop, done)
 }
 
-func (t *Terminal) heartbeatLoop() {
-	defer close(t.hbDone)
+func (t *Terminal) heartbeatLoop(stop, done chan struct{}) {
+	defer close(done)
 	t.paintIdleLine() // immediate paint so the line shows up without waiting one tick
 	ticker := time.NewTicker(heartbeatInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-t.hbStop:
+		case <-stop:
 			return
 		case <-ticker.C:
 			t.paintIdleLine()
@@ -140,11 +155,18 @@ func (t *Terminal) paintIdleLine() {
 // call from any goroutine and multiple times.
 func (t *Terminal) StopHeartbeat() {
 	t.hbStopOnce.Do(func() {
-		if t.hbStop == nil {
+		// Snapshot under t.mu so the read pairs with StartHeartbeat's
+		// write — establishes happens-before without relying on caller
+		// goroutine topology. Release before <-done to avoid deadlock
+		// with the heartbeat goroutine, which acquires t.mu to paint.
+		t.mu.Lock()
+		stop, done := t.hbStop, t.hbDone
+		t.mu.Unlock()
+		if stop == nil {
 			return
 		}
-		close(t.hbStop)
-		<-t.hbDone
+		close(stop)
+		<-done
 		// Clear-to-end-of-line: the idle placeholder ends with
 		// "  (compiling)" which is wider than the live progress bar,
 		// so a bare \r-overwrite would leave that suffix on screen.
