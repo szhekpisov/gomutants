@@ -20,11 +20,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/szhekpisov/gomutants/internal/mutator"
@@ -36,7 +38,10 @@ import (
 //
 //	v1: package-dir tests_hash (replaced — undercounted cross-package coverage).
 //	v2: per-mutant tests_hash via TestFilesForFn; TIMED_OUT now gated on tests_hash.
-const SchemaVersion = 2
+//	v3: top-level CoverageKey/CoverageProfile so warm no-op runs can skip
+//	    `go test -coverprofile`. HashCoverageInputs framing is part of the
+//	    invariant — any algorithm change there demands another bump.
+const SchemaVersion = 3
 
 // I/O syscalls used by Save are exposed as package-level function
 // variables so tests can inject failures into each error path
@@ -72,11 +77,22 @@ type saveSink interface {
 
 // Cache is the on-disk artifact. Entries are keyed by mutant identity
 // (rel_file, line, col, type, start_offset, original, replacement).
+//
+// CoverageKey/CoverageProfile (v3+) memoize the output of
+// `go test -count=1 -coverprofile` so warm no-op runs can skip the
+// coverage subprocess. The key fingerprints every input that could
+// change the profile (see HashCoverageInputs); on a match the stored
+// profile is parsed via coverage.ParseBytes instead. The omitempty
+// tags are defensive forward-compat: a future code path that skips
+// writing the coverage fields (e.g. when the user disables coverage
+// caching) won't pollute the JSON with empty strings.
 type Cache struct {
-	SchemaVersion int     `json:"schema_version"`
-	GoModule      string  `json:"go_module"`
-	ToolVersion   string  `json:"tool_version"`
-	Entries       []Entry `json:"entries"`
+	SchemaVersion   int     `json:"schema_version"`
+	GoModule        string  `json:"go_module"`
+	ToolVersion     string  `json:"tool_version"`
+	CoverageKey     string  `json:"coverage_key,omitempty"`
+	CoverageProfile string  `json:"coverage_profile,omitempty"`
+	Entries         []Entry `json:"entries"`
 }
 
 // Entry is one cached mutant outcome.
@@ -162,6 +178,16 @@ func NewHasher(srcCache map[string][]byte) *Hasher {
 	}
 }
 
+// SetSrcCache attaches an in-memory source map (typically populated by
+// discover.PreReadFiles) after the hasher was constructed. Used by
+// callers that need a Hasher before pre-read completes (e.g. the
+// coverage-key calc runs before discovery) and want subsequent File()
+// calls to skip the disk read. Already-memoized hashes in h.files are
+// preserved.
+func (h *Hasher) SetSrcCache(srcCache map[string][]byte) {
+	h.srcCache = srcCache
+}
+
 // File returns the hash of absPath, computing it on first call.
 func (h *Hasher) File(absPath string) (string, error) {
 	if v, ok := h.files[absPath]; ok {
@@ -217,6 +243,99 @@ func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
 		base := filepath.Base(p)
 		fmt.Fprintf(hh, "%d:%s|%s|", len(base), base, fileHex)
 	}
+	return hex.EncodeToString(hh.Sum(nil)), nil
+}
+
+// HashCoverageInputs returns a stable fingerprint of every input that
+// could change the coverage profile produced by `go test -coverprofile`.
+// A mismatch on the next run invalidates the cached profile.
+//
+// pkgDirs must contain every directory whose source could land in the
+// profile, not just the user's target packages. With -coverpkg=<pattern>
+// covering a broader set than the target, the caller is responsible for
+// resolving the expanded list (e.g. via a second go-list call) before
+// invoking this method.
+//
+// Each input dimension is hashed with the same length-prefixed framing
+// used by HashTestFiles so STATEMENT_REMOVE / boundary-alias mutations
+// against the new writes are observable from the tests. A read error on
+// any required file is propagated — callers should treat it as a miss
+// and re-run coverage.
+//
+// go.sum is optional: a missing file contributes the empty-content hash.
+// This keeps the helper usable on modules with no recorded checksums
+// (single-module repos with no external deps) without an extra branch
+// at every call site.
+func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, toolchain, envSnapshot string) (string, error) {
+	// 1. Collect every .go file under pkgDirs. pkgDirs is deduped first
+	// so the per-file walk doesn't need a seen-map: within a single dir,
+	// ReadDir entries already have unique names, and across distinct
+	// dirs the abs paths can't collide. Sort at the end so different
+	// pkgDir orderings produce the same hash — Use h.File when hashing
+	// each file so the per-run sha256 memo is shared with HashTestFiles
+	// and Lookup's prodHash calls.
+	dirSet := make(map[string]bool, len(pkgDirs))
+	uniqDirs := make([]string, 0, len(pkgDirs))
+	for _, dir := range pkgDirs {
+		if dirSet[dir] {
+			continue
+		}
+		dirSet[dir] = true
+		uniqDirs = append(uniqDirs, dir)
+	}
+
+	var files []string
+	for _, dir := range uniqDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return "", fmt.Errorf("listing %s: %w", dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if !strings.HasSuffix(name, ".go") {
+				continue
+			}
+			files = append(files, filepath.Join(dir, name))
+		}
+	}
+	slices.Sort(files)
+
+	hh := sha256.New()
+	for _, p := range files {
+		fileHex, err := h.File(p)
+		if err != nil {
+			return "", err
+		}
+		// Mirror HashTestFiles framing: length-prefixed basename + hash.
+		// The same anti-aliasing reasoning applies.
+		base := filepath.Base(p)
+		fmt.Fprintf(hh, "%d:%s|%s|", len(base), base, fileHex)
+	}
+
+	// 2. Hash go.mod (required) and go.sum (optional).
+	modHex, err := h.File(filepath.Join(projectDir, "go.mod"))
+	if err != nil {
+		return "", fmt.Errorf("hashing go.mod: %w", err)
+	}
+	fmt.Fprintf(hh, "gomod:%d:%s|", len(modHex), modHex)
+
+	sumHex := ""
+	if v, err := h.File(filepath.Join(projectDir, "go.sum")); err == nil {
+		sumHex = v
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("hashing go.sum: %w", err)
+	}
+	fmt.Fprintf(hh, "gosum:%d:%s|", len(sumHex), sumHex)
+
+	// 3. Mix in the configuration / toolchain dimensions with the same
+	// length-prefixed framing so adjacent values can't alias.
+	fmt.Fprintf(hh, "coverpkg:%d:%s|", len(coverPkg), coverPkg)
+	fmt.Fprintf(hh, "toolchain:%d:%s|", len(toolchain), toolchain)
+	fmt.Fprintf(hh, "env:%d:%s|", len(envSnapshot), envSnapshot)
+
 	return hex.EncodeToString(hh.Sum(nil)), nil
 }
 

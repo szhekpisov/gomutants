@@ -6,10 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/szhekpisov/gomutants/internal/cache"
 	"github.com/szhekpisov/gomutants/internal/coverage"
 	"github.com/szhekpisov/gomutants/internal/discover"
 )
@@ -897,26 +899,26 @@ func TestRunMeasureBaselineErrorMessage(t *testing.T) {
 	}
 }
 
-// TestRunParseProfileErrorMessage kills BRANCH_IF on the coverage.ParseFile
-// err return.
+// TestRunParseProfileErrorMessage kills BRANCH_IF on the coverage.ParseBytes
+// err return for the fresh-coverage branch (no --cache).
 func TestRunParseProfileErrorMessage(t *testing.T) {
 	dir := setupTinyProject(t)
 	orig, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	origParse := parseProfileFunc
-	defer func() { parseProfileFunc = origParse }()
-	parseProfileFunc = func(string) (*coverage.Profile, error) {
+	origParse := parseBytesFunc
+	defer func() { parseBytesFunc = origParse }()
+	parseBytesFunc = func([]byte) (*coverage.Profile, error) {
 		return nil, errors.New("inject parse failure: marker_abc")
 	}
 
 	err := run(context.Background(), []string{"--only", "ARITHMETIC_BASE", "-w", "1", "-o", filepath.Join(dir, "r.json"), "testmod"})
 	if err == nil {
-		t.Fatal("expected error from ParseProfile stub")
+		t.Fatal("expected error from ParseBytes stub")
 	}
 	if !strings.Contains(err.Error(), "marker_abc") {
-		t.Errorf("err lost the ParseProfile message; got: %v", err)
+		t.Errorf("err lost the ParseBytes message; got: %v", err)
 	}
 }
 
@@ -1318,6 +1320,145 @@ func TestReadModuleNameScannerError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "scanning go.mod") {
 		t.Errorf("expected scanner-error wrapping, got: %v", err)
+	}
+}
+
+// TestRun_CoverageCacheHit_SkipsRunCoverage stubs runCoverageFunc to
+// fail; the only way `run` succeeds is if the cached coverage profile
+// short-circuits the call. We pre-seed the cache by running once with
+// --cache enabled (real runCoverageFunc), then swap in a poisoned stub
+// for the second run.
+func TestRun_CoverageCacheHit_SkipsRunCoverage(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+
+	cachePath := filepath.Join(dir, ".gomutants-cache.json")
+	args := []string{
+		"--only", "ARITHMETIC_BASE",
+		"-w", "1",
+		"-o", filepath.Join(dir, "r.json"),
+		"--cache", cachePath,
+		"testmod",
+	}
+
+	// First run: real runCoverageFunc populates the cache.
+	if _, err := captureOutput(t, func() error { return run(context.Background(), args) }); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Sanity-check: cache file exists and has a coverage profile in it.
+	cacheBytes, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	if !strings.Contains(string(cacheBytes), `"coverage_key":`) {
+		t.Fatalf("cache missing coverage_key after first run: %s", cacheBytes)
+	}
+
+	// Second run: any call to runCoverageFunc would surface as an error.
+	origRC := runCoverageFunc
+	defer func() { runCoverageFunc = origRC }()
+	runCoverageFunc = func(context.Context, string, []string, string, string) (string, error) {
+		return "", errors.New("runCoverageFunc must NOT be called on a cache hit")
+	}
+
+	out, err := captureOutput(t, func() error { return run(context.Background(), args) })
+	if err != nil {
+		t.Fatalf("second run: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(out, "cached") {
+		t.Errorf("second-run output should show 'cached' suffix on coverage phase; got: %s", out)
+	}
+}
+
+// TestRun_CoverageCacheMiss_RunsCoverage seeds the cache with a stale
+// CoverageKey, then runs gomutants. The stub captures whether
+// runCoverageFunc was invoked — the miss path must invoke it.
+func TestRun_CoverageCacheMiss_RunsCoverage(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+
+	cachePath := filepath.Join(dir, ".gomutants-cache.json")
+	args := []string{
+		"--only", "ARITHMETIC_BASE",
+		"-w", "1",
+		"-o", filepath.Join(dir, "r.json"),
+		"--cache", cachePath,
+		"testmod",
+	}
+
+	// First seed: a hand-written cache file with a *wrong* CoverageKey
+	// but a syntactically valid (yet content-wrong) cached profile. The
+	// key mismatch should force a fresh coverage run; if the key check
+	// were missing or inverted, the stale profile would be used and
+	// FilterByCoverage would mark every mutant NOT_COVERED, producing
+	// "0 to test" — which would still pass run() but with wrong stats.
+	// We detect the miss by stubbing runCoverageFunc to set a flag.
+	called := false
+	origRC := runCoverageFunc
+	defer func() { runCoverageFunc = origRC }()
+	runCoverageFunc = func(ctx context.Context, projectDir string, packages []string, coverPkg, tmpDir string) (string, error) {
+		called = true
+		return origRC(ctx, projectDir, packages, coverPkg, tmpDir)
+	}
+
+	staleCache := `{"schema_version":` + strconv.Itoa(cache.SchemaVersion) +
+		`,"go_module":"testmod","tool_version":"` + cacheToolVersion() +
+		`","coverage_key":"definitelywrongkey","coverage_profile":"mode: set\n","entries":[]}`
+	if err := os.WriteFile(cachePath, []byte(staleCache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := captureOutput(t, func() error { return run(context.Background(), args) }); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !called {
+		t.Fatal("runCoverageFunc not called despite stale coverage_key — cache key check is missing or inverted")
+	}
+
+	// And: the rewritten cache should contain a non-stale coverage_key.
+	cacheBytes, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	if strings.Contains(string(cacheBytes), "definitelywrongkey") {
+		t.Errorf("stale coverage_key was not overwritten after miss: %s", cacheBytes)
+	}
+}
+
+// TestRun_CacheOff_NeverWritesCoverageFields confirms the disabled
+// path: with --cache=off, runCoverageFunc is called every time and no
+// cache file is created.
+func TestRun_CacheOff_NeverWritesCoverageFields(t *testing.T) {
+	dir := setupTinyProject(t)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+
+	cachePath := filepath.Join(dir, ".gomutants-cache.json")
+	args := []string{
+		"--only", "ARITHMETIC_BASE",
+		"-w", "1",
+		"-o", filepath.Join(dir, "r.json"),
+		"--cache", "off",
+		"testmod",
+	}
+
+	if _, err := captureOutput(t, func() error { return run(context.Background(), args) }); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Errorf("cache file unexpectedly created with --cache=off: stat err=%v", err)
 	}
 }
 

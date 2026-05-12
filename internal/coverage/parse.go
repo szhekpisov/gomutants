@@ -2,6 +2,7 @@ package coverage
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -34,6 +35,13 @@ func ParseFile(path string) (*Profile, error) {
 	}
 	defer func() { _ = f.Close() }()
 	return parseReader(f)
+}
+
+// ParseBytes parses a Go coverage profile already in memory. Lets
+// callers reusing a cached profile from disk JSON skip the temp-file
+// round-trip ParseFile requires.
+func ParseBytes(data []byte) (*Profile, error) {
+	return parseReader(bytes.NewReader(data))
 }
 
 func parseReader(r io.Reader) (*Profile, error) {

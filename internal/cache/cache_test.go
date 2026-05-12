@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,33 @@ func TestHasher_UsesSrcCacheBeforeDisk(t *testing.T) {
 	}
 	if got == want {
 		t.Fatalf("hasher used disk content, expected srcCache hit")
+	}
+}
+
+// TestHasher_SetSrcCacheAttachesAfterConstruction verifies the post-hoc
+// srcCache wire-up used by main.go (Hasher is created before
+// PreReadFiles for the coverage-key calc, then srcCache is attached
+// once discovery completes). A subsequent File() call on a brand-new
+// path must hit the in-memory bytes rather than the disk file.
+func TestHasher_SetSrcCacheAttachesAfterConstruction(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "x.go")
+	mustWrite(t, p, "DISK CONTENT\n")
+
+	h := NewHasher(nil) // empty srcCache up front
+	memBody := []byte("MEMORY CONTENT\n")
+	h.SetSrcCache(map[string][]byte{p: memBody})
+
+	got, err := h.File(p)
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	disk, err := HashFile(p)
+	if err != nil {
+		t.Fatalf("disk hash: %v", err)
+	}
+	if got == disk {
+		t.Fatalf("SetSrcCache attachment didn't take effect — hasher hashed the disk file")
 	}
 }
 
@@ -176,6 +204,32 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestSaveLoad_RoundTripCoverageFields locks down the v3 CoverageKey /
+// CoverageProfile fields: a Save then Load must preserve them byte-for-byte,
+// otherwise a future warm-cache hit would parse a different profile than
+// the one captured (silent stale-skip bug).
+func TestSaveLoad_RoundTripCoverageFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.json")
+	profileBody := "mode: set\npkg/x.go:1.2,3.4 1 1\n"
+	c := &Cache{
+		SchemaVersion:   SchemaVersion,
+		GoModule:        testModule,
+		ToolVersion:     testVersion,
+		CoverageKey:     "deadbeefcafe",
+		CoverageProfile: profileBody,
+	}
+	if err := Save(c, path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got := Load(path, testModule, testVersion)
+	if got.CoverageKey != "deadbeefcafe" {
+		t.Errorf("CoverageKey not preserved: got %q", got.CoverageKey)
+	}
+	if got.CoverageProfile != profileBody {
+		t.Errorf("CoverageProfile not preserved: got %q", got.CoverageProfile)
+	}
+}
+
 func TestLoad_EmptyPath(t *testing.T) {
 	c := Load("", testModule, testVersion)
 	if c == nil || len(c.Entries) != 0 {
@@ -214,7 +268,7 @@ func TestLoad_SchemaVersionMismatch(t *testing.T) {
 
 func TestLoad_ModuleMismatch(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "cache.json")
-	mustWrite(t, p, `{"schema_version":2,"go_module":"other/mod","tool_version":"`+testVersion+`","entries":[{"rel_file":"x.go","status":"KILLED"}]}`)
+	mustWrite(t, p, fmt.Sprintf(`{"schema_version":%d,"go_module":"other/mod","tool_version":"%s","entries":[{"rel_file":"x.go","status":"KILLED"}]}`, SchemaVersion, testVersion))
 	c := Load(p, testModule, testVersion)
 	if len(c.Entries) != 0 {
 		t.Fatal("expected empty cache for module mismatch")
@@ -223,10 +277,25 @@ func TestLoad_ModuleMismatch(t *testing.T) {
 
 func TestLoad_ToolVersionMismatch(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "cache.json")
-	mustWrite(t, p, `{"schema_version":2,"go_module":"`+testModule+`","tool_version":"0.0.9","entries":[{"rel_file":"x.go","status":"KILLED"}]}`)
+	mustWrite(t, p, fmt.Sprintf(`{"schema_version":%d,"go_module":"%s","tool_version":"0.0.9","entries":[{"rel_file":"x.go","status":"KILLED"}]}`, SchemaVersion, testModule))
 	c := Load(p, testModule, testVersion)
 	if len(c.Entries) != 0 {
 		t.Fatal("expected empty cache for tool-version mismatch")
+	}
+}
+
+// TestLoad_V2CacheRejectedAfterV3Bump locks down the v2→v3 silent-discard
+// path. A v2 file with otherwise-matching metadata must surface as an
+// empty cache once the running tool's SchemaVersion is 3+.
+func TestLoad_V2CacheRejectedAfterV3Bump(t *testing.T) {
+	if SchemaVersion < 3 {
+		t.Skip("only relevant once SchemaVersion has been bumped past 2")
+	}
+	p := filepath.Join(t.TempDir(), "cache.json")
+	mustWrite(t, p, fmt.Sprintf(`{"schema_version":2,"go_module":"%s","tool_version":"%s","entries":[{"rel_file":"x.go","status":"KILLED"}]}`, testModule, testVersion))
+	c := Load(p, testModule, testVersion)
+	if len(c.Entries) != 0 {
+		t.Fatalf("expected empty cache (v2 rejected by v%d Load); got %d entries", SchemaVersion, len(c.Entries))
 	}
 }
 
@@ -737,5 +806,356 @@ func mkMutantAt(prodPath, relFile string, line, col int, status mutator.MutantSt
 		Replacement: "-",
 		Status:      status,
 		Duration:    1 * time.Millisecond,
+	}
+}
+
+// setupCoverageProject lays out a minimal module suitable for
+// HashCoverageInputs: one prod file, one test file, go.mod, go.sum.
+// Returns the project dir and the package dir (here, the same).
+func setupCoverageProject(t *testing.T) (projectDir string, pkgDir string) {
+	t.Helper()
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module testmod\n\ngo 1.26\n")
+	mustWrite(t, filepath.Join(dir, "go.sum"), "")
+	mustWrite(t, filepath.Join(dir, "x.go"), "package testmod\nfunc Add(a, b int) int { return a + b }\n")
+	mustWrite(t, filepath.Join(dir, "x_test.go"), "package testmod\nimport \"testing\"\nfunc TestAdd(t *testing.T) {}\n")
+	return dir, dir
+}
+
+func TestHashCoverageInputs_StableAcrossCalls(t *testing.T) {
+	dir, pkg := setupCoverageProject(t)
+	// Two fresh hashers — the memo can't shortcut the result.
+	h1, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "toolchain-x", "env-x")
+	if err != nil {
+		t.Fatalf("hash1: %v", err)
+	}
+	h2, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "toolchain-x", "env-x")
+	if err != nil {
+		t.Fatalf("hash2: %v", err)
+	}
+	if h1 != h2 {
+		t.Fatalf("hash not stable across runs: %s vs %s", h1, h2)
+	}
+}
+
+// TestHashCoverageInputs_DetectsEachInputChange is the safety net for the
+// coverage-cache invalidation contract. Each row mutates one and only one
+// input dimension and asserts the resulting hash differs from the baseline.
+// Surviving STATEMENT_REMOVE on any Fprintf inside HashCoverageInputs would
+// collapse one of these dimensions; the table forces every Fprintf to be
+// observable.
+func TestHashCoverageInputs_DetectsEachInputChange(t *testing.T) {
+	baseline := func(t *testing.T) (string, string) {
+		dir, pkg := setupCoverageProject(t)
+		h, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "./...", "go1.26", "GOEXPERIMENT=|")
+		if err != nil {
+			t.Fatalf("baseline: %v", err)
+		}
+		return dir, h
+	}
+
+	tests := []struct {
+		name string
+		// mutate runs against a freshly-set-up project, then re-hashes and
+		// returns the new hash. The test asserts hashNew != baselineHash.
+		mutate func(t *testing.T, dir string) string
+	}{
+		{
+			name: "prod file content",
+			mutate: func(t *testing.T, dir string) string {
+				mustWrite(t, filepath.Join(dir, "x.go"), "package testmod\nfunc Add(a, b int) int { return b + a }\n")
+				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "go1.26", "GOEXPERIMENT=|")
+				if err != nil {
+					t.Fatalf("rehash: %v", err)
+				}
+				return h
+			},
+		},
+		{
+			name: "test file content",
+			mutate: func(t *testing.T, dir string) string {
+				mustWrite(t, filepath.Join(dir, "x_test.go"), "package testmod\nimport \"testing\"\nfunc TestAdd(t *testing.T) { _ = 1 }\n")
+				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "go1.26", "GOEXPERIMENT=|")
+				if err != nil {
+					t.Fatalf("rehash: %v", err)
+				}
+				return h
+			},
+		},
+		{
+			name: "go.mod bytes",
+			mutate: func(t *testing.T, dir string) string {
+				mustWrite(t, filepath.Join(dir, "go.mod"), "module testmod\n\ngo 1.27\n")
+				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "go1.26", "GOEXPERIMENT=|")
+				if err != nil {
+					t.Fatalf("rehash: %v", err)
+				}
+				return h
+			},
+		},
+		{
+			name: "go.sum bytes",
+			mutate: func(t *testing.T, dir string) string {
+				mustWrite(t, filepath.Join(dir, "go.sum"), "h1:fakefakefake=\n")
+				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "go1.26", "GOEXPERIMENT=|")
+				if err != nil {
+					t.Fatalf("rehash: %v", err)
+				}
+				return h
+			},
+		},
+		{
+			name: "coverPkg",
+			mutate: func(t *testing.T, dir string) string {
+				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "testmod/sub", "go1.26", "GOEXPERIMENT=|")
+				if err != nil {
+					t.Fatalf("rehash: %v", err)
+				}
+				return h
+			},
+		},
+		{
+			name: "toolchain",
+			mutate: func(t *testing.T, dir string) string {
+				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "go1.27", "GOEXPERIMENT=|")
+				if err != nil {
+					t.Fatalf("rehash: %v", err)
+				}
+				return h
+			},
+		},
+		{
+			name: "env snapshot",
+			mutate: func(t *testing.T, dir string) string {
+				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "go1.26", "GOEXPERIMENT=loopvar|")
+				if err != nil {
+					t.Fatalf("rehash: %v", err)
+				}
+				return h
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, base := baseline(t)
+			got := tc.mutate(t, dir)
+			if got == base {
+				t.Errorf("hash unchanged after mutating %s — STATEMENT_REMOVE on the corresponding Fprintf collapses this dimension", tc.name)
+			}
+		})
+	}
+}
+
+// TestHashCoverageInputs_GoSumOptional ensures a module without go.sum
+// (e.g. no external deps yet) still hashes successfully and stays
+// distinguishable from one whose go.sum is empty-but-present. Both cases
+// produce the empty-content sum hash, so they hash to the same value —
+// the test asserts both succeed and match. The point is: no error.
+func TestHashCoverageInputs_GoSumOptional(t *testing.T) {
+	dir, pkg := setupCoverageProject(t)
+	if err := os.Remove(filepath.Join(dir, "go.sum")); err != nil {
+		t.Fatalf("rm go.sum: %v", err)
+	}
+	if _, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env"); err != nil {
+		t.Errorf("hash with missing go.sum should succeed, got: %v", err)
+	}
+}
+
+// TestHashCoverageInputs_MissingGoModFails locks the required-go.mod
+// path: a project with no go.mod must surface an error (not a silent
+// "empty content" hash that would let two unrelated projects collide).
+func TestHashCoverageInputs_MissingGoModFails(t *testing.T) {
+	dir, pkg := setupCoverageProject(t)
+	if err := os.Remove(filepath.Join(dir, "go.mod")); err != nil {
+		t.Fatalf("rm go.mod: %v", err)
+	}
+	_, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err == nil {
+		t.Fatal("expected error when go.mod is missing")
+	}
+	if !strings.Contains(err.Error(), "go.mod") {
+		t.Errorf("error should mention go.mod, got: %v", err)
+	}
+}
+
+// TestHashCoverageInputs_MissingPkgDirFails ensures a stale package dir
+// is reported, not silently elided.
+func TestHashCoverageInputs_MissingPkgDirFails(t *testing.T) {
+	dir, _ := setupCoverageProject(t)
+	bogus := filepath.Join(dir, "no-such-pkg")
+	_, err := NewHasher(nil).HashCoverageInputs([]string{bogus}, dir, "", "tc", "env")
+	if err == nil {
+		t.Fatal("expected error for missing pkgDir")
+	}
+}
+
+// TestHashCoverageInputs_UnreadableProdFile locks the error-return inside
+// the file loop: a .go file that ReadDir surfaced but HashFile cannot
+// read must propagate the error, not be silently skipped (which would
+// produce a hash that collides with the same project minus that file).
+func TestHashCoverageInputs_UnreadableProdFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses file-mode permissions; chmod 000 does not block reads")
+	}
+	dir, pkg := setupCoverageProject(t)
+	bad := filepath.Join(pkg, "x.go")
+	if err := os.Chmod(bad, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	// Restore so t.TempDir() cleanup can remove the file.
+	defer func() { _ = os.Chmod(bad, 0o644) }()
+
+	_, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err == nil {
+		t.Fatal("expected error from unreadable .go file")
+	}
+}
+
+// TestHashCoverageInputs_IgnoresSubdirs locks down the `if e.IsDir()
+// continue` branch. The subdir is given a `.go` suffix so the trailing
+// suffix check would NOT skip it on its own — only the IsDir check
+// keeps us from treating the directory itself as a Go file and trying
+// to read its bytes. Without the IsDir guard, h.File on the directory
+// errors and HashCoverageInputs propagates that error.
+func TestHashCoverageInputs_IgnoresSubdirs(t *testing.T) {
+	dir, pkg := setupCoverageProject(t)
+	base, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	// `.go`-suffixed directory: defeats the suffix filter, exercises the
+	// IsDir branch specifically.
+	if err := os.Mkdir(filepath.Join(pkg, "vendor_tools.go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("after: %v — IsDir branch removed, hasher tried to read a directory as a file", err)
+	}
+	if base != after {
+		t.Errorf("subdir name leaked into hash: base=%s after=%s", base, after)
+	}
+}
+
+// TestHashCoverageInputs_SortStableAcrossPkgDirOrder kills STATEMENT_REMOVE
+// on slices.Sort(files): two pkgDir orderings must produce the same hash.
+// Without the sort, files would be in walk-order ([pkg1 files..., pkg2
+// files...]) and reversing pkgDirs would reverse that order, changing the
+// hash.
+func TestHashCoverageInputs_SortStableAcrossPkgDirOrder(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "go.mod"), "module testmod\n\ngo 1.26\n")
+	mustWrite(t, filepath.Join(root, "go.sum"), "")
+	pkgA := filepath.Join(root, "a")
+	pkgB := filepath.Join(root, "b")
+	if err := os.MkdirAll(pkgA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pkgB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(pkgA, "alpha.go"), "package a\n")
+	mustWrite(t, filepath.Join(pkgB, "beta.go"), "package b\n")
+
+	hAB, err := NewHasher(nil).HashCoverageInputs([]string{pkgA, pkgB}, root, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("AB: %v", err)
+	}
+	hBA, err := NewHasher(nil).HashCoverageInputs([]string{pkgB, pkgA}, root, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("BA: %v", err)
+	}
+	if hAB != hBA {
+		t.Errorf("hash depends on pkgDir order — STATEMENT_REMOVE on slices.Sort(files) survived: AB=%s BA=%s", hAB, hBA)
+	}
+}
+
+// TestHashCoverageInputs_DeduplicatesPkgDirs locks the pkgDir dedupe
+// loop, including its `continue`-on-dup branch.
+//
+// We test three shapes:
+//   - one pkgDir
+//   - the same pkgDir twice (dup at position 1, no further entries)
+//   - the same pkgDir twice followed by a NEW pkgDir (dup at position 1,
+//     real entry at position 2). This last shape distinguishes `continue`
+//     from `break`: with `continue` the new pkgDir is appended; with
+//     `break` the loop exits at the dup and the new pkgDir is dropped.
+func TestHashCoverageInputs_DeduplicatesPkgDirs(t *testing.T) {
+	dir, pkg := setupCoverageProject(t)
+	other := filepath.Join(dir, "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(other, "z.go"), "package other\n")
+
+	once, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("once: %v", err)
+	}
+	twice, err := NewHasher(nil).HashCoverageInputs([]string{pkg, pkg}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("twice: %v", err)
+	}
+	if once != twice {
+		t.Errorf("duplicate pkgDirs not deduped: once=%s twice=%s", once, twice)
+	}
+
+	// Reference: pkg + other, no duplicates.
+	canonical, err := NewHasher(nil).HashCoverageInputs([]string{pkg, other}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("canonical: %v", err)
+	}
+	// Same set, but with a duplicate pkg entry mid-list. With `continue`
+	// the loop keeps going and appends `other`. With `break` (mutant) the
+	// loop exits at the dup, `other` is dropped, and the hash differs.
+	dupThenNew, err := NewHasher(nil).HashCoverageInputs([]string{pkg, pkg, other}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("dupThenNew: %v", err)
+	}
+	if canonical != dupThenNew {
+		t.Errorf("dup followed by new pkgDir not handled — INVERT_LOOP_CTRL on the dedupe `continue` survived: canonical=%s dupThenNew=%s", canonical, dupThenNew)
+	}
+}
+
+// TestHashCoverageInputs_GoSumReadErrorSurfaced locks the
+// `else if !os.IsNotExist(err)` branch: a go.sum that exists but can't
+// be read (here, replaced with a directory of the same name) must
+// propagate as an error — not be silently swallowed like a missing file.
+func TestHashCoverageInputs_GoSumReadErrorSurfaced(t *testing.T) {
+	dir, pkg := setupCoverageProject(t)
+	if err := os.Remove(filepath.Join(dir, "go.sum")); err != nil {
+		t.Fatalf("rm go.sum: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "go.sum"), 0o755); err != nil {
+		t.Fatalf("mkdir go.sum: %v", err)
+	}
+	_, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err == nil {
+		t.Fatal("expected error when go.sum is unreadable (is-a-directory)")
+	}
+	if !strings.Contains(err.Error(), "go.sum") {
+		t.Errorf("error should mention go.sum, got: %v", err)
+	}
+}
+
+// TestHashCoverageInputs_IgnoresNonGoFiles confirms only .go files are
+// folded into the hash. A README change in the package dir must not
+// invalidate the coverage profile (it can't affect what `go test
+// -coverprofile` produces).
+func TestHashCoverageInputs_IgnoresNonGoFiles(t *testing.T) {
+	dir, pkg := setupCoverageProject(t)
+	base, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	mustWrite(t, filepath.Join(pkg, "README.md"), "hello")
+	mustWrite(t, filepath.Join(pkg, "data.json"), `{"x": 1}`)
+	after, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "", "tc", "env")
+	if err != nil {
+		t.Fatalf("after: %v", err)
+	}
+	if base != after {
+		t.Errorf("non-.go files leaked into hash: base=%s after=%s", base, after)
 	}
 }
