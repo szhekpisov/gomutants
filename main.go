@@ -154,8 +154,7 @@ func main() {
 
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "gomutants: %v\n", err)
-		var ee *exitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exitError](err); ok {
 			os.Exit(ee.code)
 		}
 		os.Exit(1)
@@ -597,6 +596,12 @@ func run(ctx context.Context, args []string) error {
 		Adaptive: cfg.AdaptiveTimeoutEnabled(),
 	}
 	term2 := report.NewTerminal(stdout, pendingCount, cfg.Verbose, cfg.Quiet)
+	// Idle "(compiling)" heartbeat so the TTY doesn't sit silent during
+	// the first per-package go-test compile (no OnResult until the first
+	// mutant completes). First OnResult auto-stops it; the defer covers
+	// the all-cached / zero-pending paths where OnResult never fires.
+	term2.StartHeartbeat()
+	defer term2.StopHeartbeat()
 	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, policy, tmpDir, srcCache, projectDir, testMap)
 	pool.Run(ctx, mutants, term2.OnResult)
 

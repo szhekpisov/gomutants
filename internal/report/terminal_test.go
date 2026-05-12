@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -523,4 +524,250 @@ func TestOnResultZeroTotalNoPanic(t *testing.T) {
 	term := &Terminal{w: &buf, isTTY: true, total: 0, start: time.Now(), verbose: false}
 	// Must not panic. Under mutation (>= 0), pctDone = done*100/0 -> panic.
 	term.OnResult(mutator.Mutant{})
+}
+
+// syncBuf is a goroutine-safe io.Writer for heartbeat tests where the
+// loop goroutine writes concurrently with the test reading the buffer.
+// bytes.Buffer alone races under -race.
+type syncBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+func (s *syncBuf) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Len()
+}
+
+// waitForCond polls until f returns true, failing the test after timeout.
+// Used to wait on the first heartbeat paint without sprinkling sleeps.
+func waitForCond(t *testing.T, f func() bool, timeout time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if f() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s: %s", timeout, msg)
+}
+
+// withHeartbeatInterval swaps the package-level cadence for the test's
+// duration so multi-tick assertions don't wait real seconds.
+func withHeartbeatInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := heartbeatInterval
+	heartbeatInterval = d
+	t.Cleanup(func() { heartbeatInterval = orig })
+}
+
+// TestStartHeartbeatNoOpWhenNonTTY: off-TTY writers (files, pipes, the
+// test buffer) don't get the heartbeat — its \r-overwrite would clutter
+// non-terminal logs and the bar is suppressed there anyway.
+func TestStartHeartbeatNoOpWhenNonTTY(t *testing.T) {
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: false, total: 5, start: time.Now()}
+	term.StartHeartbeat()
+	if term.hbStop != nil {
+		t.Error("non-TTY: StartHeartbeat must not spawn a goroutine")
+	}
+	term.StopHeartbeat() // must not deadlock on a nil channel
+	if buf.Len() != 0 {
+		t.Errorf("non-TTY: expected no output, got %q", buf.String())
+	}
+}
+
+func TestStartHeartbeatNoOpWhenQuiet(t *testing.T) {
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now(), quiet: true}
+	term.StartHeartbeat()
+	if term.hbStop != nil {
+		t.Error("quiet: StartHeartbeat must not spawn a goroutine")
+	}
+	term.StopHeartbeat()
+	if buf.Len() != 0 {
+		t.Errorf("quiet: expected no output, got %q", buf.String())
+	}
+}
+
+// Verbose prints a line per mutant; an interleaved \r-spinner would
+// scramble the transcript.
+func TestStartHeartbeatNoOpWhenVerbose(t *testing.T) {
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now(), verbose: true}
+	term.StartHeartbeat()
+	if term.hbStop != nil {
+		t.Error("verbose: StartHeartbeat must not spawn a goroutine")
+	}
+	term.StopHeartbeat()
+	if buf.Len() != 0 {
+		t.Errorf("verbose: expected no output, got %q", buf.String())
+	}
+}
+
+// Total==0 means no pending mutants — nothing to wait on, so no heartbeat.
+func TestStartHeartbeatNoOpWhenZeroTotal(t *testing.T) {
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 0, start: time.Now()}
+	term.StartHeartbeat()
+	if term.hbStop != nil {
+		t.Error("total=0: StartHeartbeat must not spawn a goroutine")
+	}
+	term.StopHeartbeat()
+	if buf.Len() != 0 {
+		t.Errorf("total=0: expected no output, got %q", buf.String())
+	}
+}
+
+// TestStartHeartbeatPaintsIdleLine pins the exact format of the idle line
+// and the clear-to-EOL trailer that StopHeartbeat emits. Sets the ticker
+// to one hour so only the immediate paint runs — keeps the assertion on
+// a single, deterministic frame.
+func TestStartHeartbeatPaintsIdleLine(t *testing.T) {
+	withHeartbeatInterval(t, time.Hour)
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 7, start: time.Now()}
+	term.StartHeartbeat()
+	waitForCond(t, func() bool { return buf.Len() > 0 }, time.Second, "initial heartbeat paint")
+	term.StopHeartbeat()
+
+	got := buf.String()
+	if !strings.HasPrefix(got, "\rTesting mutants [") {
+		t.Errorf("expected '\\rTesting mutants [' prefix, got %q", got)
+	}
+	wantEmptyBar := strings.Repeat(" ", barWidth)
+	if !strings.Contains(got, "["+wantEmptyBar+"]") {
+		t.Errorf("expected %d-wide empty bar, got %q", barWidth, got)
+	}
+	if !strings.Contains(got, "] 0/7  0%  ") {
+		t.Errorf("expected '0/7  0%%  ' segment, got %q", got)
+	}
+	if !strings.Contains(got, "  (compiling)") {
+		t.Errorf("expected '  (compiling)' suffix, got %q", got)
+	}
+	if !strings.HasSuffix(got, "\r\033[K") {
+		t.Errorf("expected '\\r\\033[K' clear-to-EOL trailer from StopHeartbeat, got %q", got)
+	}
+}
+
+// TestHeartbeatTicksMultipleTimes proves the ticker actually fires —
+// without it, the elapsed counter would freeze at 0s and the heartbeat
+// would visually look identical to a real hang.
+func TestHeartbeatTicksMultipleTimes(t *testing.T) {
+	withHeartbeatInterval(t, time.Millisecond)
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now()}
+	term.StartHeartbeat()
+	waitForCond(t,
+		func() bool { return strings.Count(buf.String(), "\rTesting mutants") >= 3 },
+		2*time.Second, "≥3 heartbeat paints")
+	term.StopHeartbeat()
+}
+
+// TestOnResultStopsHeartbeat is the load-bearing test: once the first
+// mutant completes, the heartbeat must yield the line to OnResult — no
+// more "(compiling)" paints, and the progress-bar frame is visible.
+func TestOnResultStopsHeartbeat(t *testing.T) {
+	withHeartbeatInterval(t, time.Millisecond)
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now()}
+	term.StartHeartbeat()
+	waitForCond(t, func() bool { return buf.Len() > 0 }, time.Second, "initial heartbeat paint")
+
+	term.OnResult(mutator.Mutant{ID: 1, Status: mutator.StatusKilled})
+
+	// OnResult's internal StopHeartbeat blocks on <-hbDone, so the
+	// goroutine has already exited by the time the snapshot is taken —
+	// no further "(compiling)" frames are possible.
+	snap := buf.String()
+	clearIdx := strings.Index(snap, "\r\033[K")
+	if clearIdx < 0 {
+		t.Fatalf("expected clear-to-EOL marker after first OnResult, got %q", snap)
+	}
+	if !strings.Contains(snap[clearIdx:], " 1/5  20%  ") {
+		t.Errorf("expected '1/5  20%%' progress bar after clear, got %q", snap[clearIdx:])
+	}
+	if strings.Contains(snap[clearIdx:], "(compiling)") {
+		t.Errorf("heartbeat painted after StopHeartbeat: %q", snap[clearIdx:])
+	}
+}
+
+// Multiple StopHeartbeat calls + a trailing OnResult must each be safe.
+// sync.Once protects the close+wait so double-stop can't double-close
+// the channel, and OnResult's internal stop is a no-op past the first.
+func TestStopHeartbeatIdempotent(t *testing.T) {
+	withHeartbeatInterval(t, time.Hour)
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now()}
+	term.StartHeartbeat()
+	waitForCond(t, func() bool { return buf.Len() > 0 }, time.Second, "initial paint")
+
+	term.StopHeartbeat()
+	term.StopHeartbeat() // second call: sync.Once → no-op, must not panic or hang
+	term.OnResult(mutator.Mutant{ID: 1, Status: mutator.StatusKilled})
+
+	// Exactly one clear-to-EOL emitted (the first StopHeartbeat). OnResult
+	// and the second StopHeartbeat take the sync.Once-short-circuit path.
+	if got := strings.Count(buf.String(), "\r\033[K"); got != 1 {
+		t.Errorf("expected exactly one clear marker, got %d: %q", got, buf.String())
+	}
+}
+
+// StopHeartbeat without a prior Start (e.g., heartbeat suppressed by
+// quiet/verbose/non-TTY) must be a clean no-op rather than blocking on
+// a nil channel receive.
+func TestStopHeartbeatNoOpWithoutStart(t *testing.T) {
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now()}
+	term.StopHeartbeat()
+	if buf.Len() != 0 {
+		t.Errorf("StopHeartbeat without Start should emit nothing, got %q", buf.String())
+	}
+}
+
+// paintIdleLine must refuse to paint when done>0. With OnResult's
+// current ordering (StopHeartbeat → wait for goroutine exit → mu.Lock
+// → done++) this state is unreachable from the live code path, so the
+// test exercises the guard directly by pre-setting done. It pins the
+// invariant for any future reordering of OnResult.
+func TestPaintIdleLineSkipsAfterFirstResult(t *testing.T) {
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now(), done: 1}
+	term.paintIdleLine()
+	if buf.Len() != 0 {
+		t.Errorf("paintIdleLine must no-op when done>0, got %q", buf.String())
+	}
+}
+
+// A second StartHeartbeat must be a no-op: hbStopOnce has already fired
+// after the first StopHeartbeat (or will), so a re-spawned goroutine
+// could never be stopped. The guard prevents the leak.
+func TestStartHeartbeatSecondCallIsNoOp(t *testing.T) {
+	withHeartbeatInterval(t, time.Hour)
+	var buf syncBuf
+	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now()}
+	term.StartHeartbeat()
+	firstStop := term.hbStop
+	if firstStop == nil {
+		t.Fatal("first StartHeartbeat should have assigned hbStop")
+	}
+	term.StartHeartbeat() // must not spawn a second goroutine or reassign channels
+	if term.hbStop != firstStop {
+		t.Error("second StartHeartbeat reassigned hbStop — would orphan first goroutine")
+	}
+	term.StopHeartbeat()
 }
