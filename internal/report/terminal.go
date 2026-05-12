@@ -95,9 +95,9 @@ func (t *Terminal) PhaseDone(msg string) {
 // arrives; callers should still defer StopHeartbeat in case zero
 // mutants ever complete (e.g., upstream cancel, or all-cached run).
 //
-// Must be called at most once per Terminal: a second call is a no-op
-// (hbStopOnce is already fired after the first StopHeartbeat, so a
-// re-spawned goroutine could not be stopped).
+// Second call is a no-op: hbStopOnce fires on the first StopHeartbeat,
+// so a re-spawned goroutine could never be stopped — the hbStop != nil
+// guard prevents the leak.
 //
 // No-op when quiet, verbose, off-TTY, or total == 0 — those modes
 // either suppress output entirely or print line-per-mutant, where a
@@ -137,8 +137,12 @@ func (t *Terminal) heartbeatLoop(stop, done chan struct{}) {
 }
 
 // paintIdleLine renders a 0%-progress placeholder with a "(compiling)"
-// suffix. Skips if OnResult has already counted a result — OnResult
-// owns the line from then on.
+// suffix. The done>0 guard is defensive: OnResult always stops the
+// heartbeat (waiting on <-hbDone, so the loop goroutine has exited)
+// before it acquires t.mu to increment done, so under the current
+// call order a tick can never observe done>0. Kept as an invariant
+// pin so a future reordering of OnResult cannot silently clobber a
+// live progress frame with an idle placeholder.
 func (t *Terminal) paintIdleLine() {
 	t.mu.Lock()
 	defer t.mu.Unlock()

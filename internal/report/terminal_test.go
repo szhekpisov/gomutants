@@ -690,6 +690,9 @@ func TestOnResultStopsHeartbeat(t *testing.T) {
 
 	term.OnResult(mutator.Mutant{ID: 1, Status: mutator.StatusKilled})
 
+	// OnResult's internal StopHeartbeat blocks on <-hbDone, so the
+	// goroutine has already exited by the time the snapshot is taken —
+	// no further "(compiling)" frames are possible.
 	snap := buf.String()
 	clearIdx := strings.Index(snap, "\r\033[K")
 	if clearIdx < 0 {
@@ -698,13 +701,8 @@ func TestOnResultStopsHeartbeat(t *testing.T) {
 	if !strings.Contains(snap[clearIdx:], " 1/5  20%  ") {
 		t.Errorf("expected '1/5  20%%' progress bar after clear, got %q", snap[clearIdx:])
 	}
-
-	// Settle past several heartbeat tick periods; the goroutine must be
-	// gone, so no further "(compiling)" frames appear after the clear.
-	time.Sleep(20 * time.Millisecond)
-	final := buf.String()
-	if strings.Contains(final[clearIdx:], "(compiling)") {
-		t.Errorf("heartbeat painted after StopHeartbeat: %q", final[clearIdx:])
+	if strings.Contains(snap[clearIdx:], "(compiling)") {
+		t.Errorf("heartbeat painted after StopHeartbeat: %q", snap[clearIdx:])
 	}
 }
 
@@ -741,9 +739,11 @@ func TestStopHeartbeatNoOpWithoutStart(t *testing.T) {
 	}
 }
 
-// paintIdleLine must refuse to paint once OnResult has counted a result,
-// to handle the race where a tick fires after the result was processed
-// but before the goroutine sees the stop signal.
+// paintIdleLine must refuse to paint when done>0. With OnResult's
+// current ordering (StopHeartbeat → wait for goroutine exit → mu.Lock
+// → done++) this state is unreachable from the live code path, so the
+// test exercises the guard directly by pre-setting done. It pins the
+// invariant for any future reordering of OnResult.
 func TestPaintIdleLineSkipsAfterFirstResult(t *testing.T) {
 	var buf syncBuf
 	term := &Terminal{w: &buf, isTTY: true, total: 5, start: time.Now(), done: 1}
