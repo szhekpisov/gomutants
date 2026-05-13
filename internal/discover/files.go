@@ -1,6 +1,9 @@
 package discover
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 // readFileBytesFunc is swappable for testing.
 var readFileBytesFunc = os.ReadFile
@@ -15,7 +18,7 @@ func PreReadFiles(pkgs []Package) (map[string][]byte, error) {
 	files := make(map[string][]byte)
 	for _, pkg := range pkgs {
 		for _, filename := range pkg.GoFiles {
-			absPath := pkg.Dir + "/" + filename
+			absPath := filepath.Join(pkg.Dir, filename)
 			if _, ok := files[absPath]; ok {
 				continue
 			}

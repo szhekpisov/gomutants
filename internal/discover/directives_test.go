@@ -123,17 +123,23 @@ func TestParseDirectiveUnknownMutatorWarns(t *testing.T) {
 	}
 }
 
-func TestParseDirectiveAllUnknownFallsBackToAll(t *testing.T) {
-	// If every name is rejected, the directive applies to all mutators
-	// rather than silently matching nothing — surfaces the warning while
-	// keeping intent ("ignore here") intact.
+func TestParseDirectiveAllUnknownDropsDirective(t *testing.T) {
+	// When every named mutator is unknown, the directive is dropped (no
+	// suppression) and a summary warning is emitted. Safer default than
+	// matching all: a typo like `TYPP_O` must not silently disable every
+	// mutator on the line — that would mask the exact failure mode
+	// mutation testing is meant to surface.
 	var buf bytes.Buffer
-	d, ok := parseDirective("gomutants:disable BOGUS,ALSO_BOGUS", 5, "x.go", &buf)
-	if !ok {
-		t.Fatalf("expected directive to parse")
+	_, ok := parseDirective("gomutants:disable BOGUS,ALSO_BOGUS", 5, "x.go", &buf)
+	if ok {
+		t.Fatalf("expected all-unknown directive to be dropped")
 	}
-	if d.Mutators != nil {
-		t.Errorf("expected fallback to all-mutators (nil map), got %v", d.Mutators)
+	if !strings.Contains(buf.String(), "all named mutators unknown") {
+		t.Errorf("expected summary warning; got %q", buf.String())
+	}
+	// Per-name warnings still fire so the user can see which names were wrong.
+	if !strings.Contains(buf.String(), `unknown mutator "BOGUS"`) {
+		t.Errorf("expected per-name warning for BOGUS; got %q", buf.String())
 	}
 }
 
@@ -226,12 +232,14 @@ func F(a, b int) int { return a + b }
 }
 
 func TestParseDirectiveRegexpUnknownMutatorHintsWhitespace(t *testing.T) {
-	// `disable-regexp foo bar` — `bar` becomes the mutator name; the
-	// warning should hint that whitespace is unsupported in patterns.
+	// `disable-regexp foo bar` — `bar` becomes the mutator name and is
+	// unknown; under the all-unknown-drops-directive rule the directive
+	// is dropped, but the whitespace hint warning must still fire so the
+	// user understands *why* their pattern wasn't accepted.
 	var buf bytes.Buffer
 	_, ok := parseDirective("gomutants:disable-regexp foo bar", 5, "x.go", &buf)
-	if !ok {
-		t.Fatalf("expected directive to parse; warn=%q", buf.String())
+	if ok {
+		t.Fatalf("expected directive to be dropped (all named mutators unknown); warn=%q", buf.String())
 	}
 	if !strings.Contains(buf.String(), `unknown mutator "bar"`) {
 		t.Errorf("expected unknown-mutator warning; got %q", buf.String())
