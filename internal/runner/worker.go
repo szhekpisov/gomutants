@@ -8,10 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/szhekpisov/gomutants/internal/coverage"
@@ -26,53 +24,14 @@ import (
 //
 // var (not const) so tests can lower it to a tiny value and force the
 // monitor goroutine's kill path on a normal-sized test process.
+//
+// On Windows pgroupRSSBytes is a no-op (returns 0) so this cap never trips;
+// the per-mutant context timeout is the backstop there.
 var maxSubprocRSSBytes int64 = 2 * 1024 * 1024 * 1024 // 2 GiB
 
 // monitorPollInterval is the cadence at which the RSS monitor probes
 // `ps -g`. var so tests can shrink it to make the kill path fire quickly.
 var monitorPollInterval = 1 * time.Second
-
-// psOutputFunc returns ps's stdout for a given pgid. Swappable so tests
-// can drive pgroupRSSBytes without touching the real ps binary or the
-// host's process table.
-var psOutputFunc = func(pgid int) ([]byte, error) {
-	return exec.Command("ps", "-o", "rss=", "-g", strconv.Itoa(pgid)).Output()
-}
-
-// pgroupRSSBytes returns the summed RSS of all processes in the given PGID.
-// Uses `ps -g` (BSD/macOS flag) which is also supported on Linux GNU ps.
-//
-// The accumulator is structured as a single `if err == nil` add so the
-// continue-on-empty / continue-on-parse-error branches don't surface as
-// equivalent mutants (in both, n stays 0 and total += 0 is a no-op).
-func pgroupRSSBytes(pgid int) int64 {
-	out, err := psOutputFunc(pgid)
-	if err != nil {
-		return 0
-	}
-	var total int64
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		n, err := strconv.ParseInt(strings.TrimSpace(line), 10, 64)
-		if err == nil {
-			total += n * 1024 // ps rss is KB
-		}
-	}
-	return total
-}
-
-// syscallKillFunc is the indirection used by killPgroup; swappable so tests
-// can verify the negative-pgid sign flip without sending real signals.
-var syscallKillFunc = syscall.Kill
-
-// syscallGetpgidFunc is the indirection used by Worker.Test's pgid lookup.
-// Swappable so a test can simulate the macOS race window where Getpgid
-// transiently fails — exercising the cmd.Process.Pid fallback path.
-var syscallGetpgidFunc = syscall.Getpgid
-
-// killPgroup sends SIGKILL to the entire process group.
-func killPgroup(pgid int) {
-	_ = syscallKillFunc(-pgid, syscall.SIGKILL)
-}
 
 // nonZeroSince returns time.Since(start) but guarantees a strictly positive
 // result, so callers can use Duration==0 as a "never set" sentinel. Without
@@ -244,15 +203,14 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 		return m
 	}
 
-	// Resolve the actual pgid of the child. With Setpgid:true, Go invokes
-	// setpgid in the parent on Linux before returning from Start, but on
-	// macOS it happens in the child post-fork, so there's a brief window
-	// where cmd.Process.Pid and the group leader's pid may differ.
-	// Getpgid(pid) avoids both the race and any future scheduler changes.
-	pgid, err := syscallGetpgidFunc(cmd.Process.Pid)
-	if err != nil {
-		pgid = cmd.Process.Pid
-	}
+	// Resolve the process-group "handle" we'll later kill if RSS runs away.
+	// On Unix this is the child's pgid (with Setpgid:true the parent has
+	// already issued setpgid before Start returns on Linux; on macOS it
+	// happens in the child post-fork, leaving a brief window where Getpgid
+	// may transiently differ from the leader's pid — processGroup falls
+	// back to cmd.Process.Pid then). On Windows there is no pgid concept
+	// and processGroup returns pid unchanged.
+	pgid := processGroup(cmd.Process.Pid)
 
 	var memKilled atomic.Bool
 	monitorDone := make(chan struct{})
@@ -306,15 +264,17 @@ func (w *Worker) Test(ctx context.Context, m mutator.Mutant) mutator.Mutant {
 
 // makeTestCmd builds the *exec.Cmd that runs the mutated `go test` plus
 // its capped stdout/stderr buffers. Extracted from Worker.Test so each
-// piece of cmd configuration (Setpgid, GOMAXPROCS env, capped buffers)
-// can be asserted on directly. Without extraction the cmd is local to
-// Test and the SysProcAttr / Env mutations are invisible to tests.
+// piece of cmd configuration (process group, GOMAXPROCS env, capped
+// buffers) can be asserted on directly. Without extraction the cmd is
+// local to Test and the SysProcAttr / Env mutations are invisible to tests.
 func (w *Worker) makeTestCmd(ctx context.Context, args []string) (*exec.Cmd, *cappedBuffer, *cappedBuffer) {
 	cmd := execCommandContext(ctx, "go", args...)
 	cmd.Dir = w.projectDir
 	// Put go test + its compiler + test-binary descendants in their own
 	// process group so we can kill the whole tree if RSS runs away.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// applyProcessGroup is platform-specific (Setpgid on Unix,
+	// CREATE_NEW_PROCESS_GROUP on Windows).
+	applyProcessGroup(cmd)
 	if w.childGOMAXPROCS > 0 {
 		// exec auto-sets PWD=cmd.Dir only when cmd.Env is nil (see Go's
 		// exec.go ~L1220). When we set Env explicitly the child inherits the
