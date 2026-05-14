@@ -825,19 +825,23 @@ func F(a, b int) int {
 // directive kind (e.g., "disable") slip into parseDirective and silently
 // register a same-line directive that suppresses everything on its line.
 //
-// The fixture needs a real directive *somewhere* so the bytes.Contains
-// fast-path doesn't short-circuit before the prefix-check runs. The
-// non-directive comment sits on the same line as the mutated expression
-// so the fictitious directive's same-line scope would actually catch
-// the mutant — without that overlap there's nothing for the bug to
-// suppress.
+// The non-directive comment must parse to a *valid* directive once the
+// prefix check is gone, otherwise the bug is unobservable: `disable for
+// now` is rejected (unknown mutators), but `disable reason="..."` parses
+// to a same-line directive with empty Mutators ("all"). It sits on the
+// same line as the mutated expression so the fictitious directive's
+// same-line scope would actually catch the mutant.
+//
+// The fixture also needs a real directive *somewhere* so the
+// bytes.Contains fast-path doesn't short-circuit before the prefix-check
+// runs.
 func TestFilterNonDirectiveCommentNotMisinterpreted(t *testing.T) {
 	src := `package p
 
 // gomutants:disable-regexp __DOES_NOT_MATCH_ANY_LINE__
 
 func F(a, b int) int {
-	return a + b // disable for now
+	return a + b // disable reason="for now"
 }
 `
 	mutants, _ := writeFixture(t, src)
@@ -1309,5 +1313,71 @@ func TestFilterByDirectivesWithCacheNoPrefixFastPath(t *testing.T) {
 	}
 	if len(kept) != 1 {
 		t.Errorf("mutant should survive, got %d kept", len(kept))
+	}
+}
+
+// TestFilterByDirectivesIndexDedupedPerFile kills the BRANCH_IF on the
+// `if _, seen := indexes[m.File]; seen { continue }` dedup: dropping the
+// continue rebuilds the file index once per mutant instead of once per
+// file, so any per-file parse warning is re-emitted N times. The fixture
+// carries a malformed directive (one warning) plus several mutants in
+// the same file; the warning must appear exactly once.
+func TestFilterByDirectivesIndexDedupedPerFile(t *testing.T) {
+	src := `package p
+
+// gomutants:disable-regexp
+func F(a, b int) int {
+	x := a + b
+	return x * b
+}
+`
+	mutants, _ := writeFixture(t, src)
+	if len(mutants) < 2 {
+		t.Fatalf("fixture must yield >=2 mutants in one file to exercise the dedup, got %d", len(mutants))
+	}
+	fset := token.NewFileSet()
+	var warn bytes.Buffer
+	if _, _, err := filterByDirectives(fset, mutants, nil, &warn); err != nil {
+		t.Fatalf("filterByDirectives: %v", err)
+	}
+	if got := strings.Count(warn.String(), "disable-regexp missing pattern"); got != 1 {
+		t.Errorf("per-file warning must be emitted once, got %d:\n%s", got, warn.String())
+	}
+}
+
+// TestFilterByDirectivesMalformedGoFileSameLineDirective kills the
+// BRANCH_IF on the `if err != nil { return &fileIndex{}, nil }` parser-
+// error fallback in indexFor. parser.ParseFile returns a *partial* AST on
+// syntax error; without the early return, buildFileIndex scans that
+// partial AST and a directive that survived parsing would suppress a
+// mutant on its line. The fixture puts a valid same-line directive on
+// line 2 and the syntax error on line 3, so line 2's directive is
+// retained — it must NOT take effect, because the error path should
+// short-circuit to an empty index.
+func TestFilterByDirectivesMalformedGoFileSameLineDirective(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broken.go")
+	src := "package p\n" +
+		"func F(a, b int) int { return a + b } // gomutants:disable ARITHMETIC_BASE\n" +
+		"func G() { @ }\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := mutator.Mutant{
+		File:    path,
+		RelFile: "broken.go",
+		Line:    2,
+		Type:    mutator.ArithmeticBase,
+	}
+	fset := token.NewFileSet()
+	kept, suppressed, err := filterByDirectives(fset, []mutator.Mutant{m}, nil, io.Discard)
+	if err != nil {
+		t.Fatalf("filterByDirectives: %v", err)
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("malformed file must short-circuit to an empty index; got %d suppressions", len(suppressed))
+	}
+	if len(kept) != 1 {
+		t.Errorf("mutant should survive an empty index, got %d kept", len(kept))
 	}
 }
