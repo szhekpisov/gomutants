@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -206,7 +207,7 @@ func MeasureBaseline(ctx context.Context, projectDir string, packages []string) 
 
 // RunCoverage runs go test with coverage and returns the profile path.
 func RunCoverage(ctx context.Context, projectDir string, packages []string, coverPkg string, tmpDir string) (string, error) {
-	profilePath := tmpDir + "/coverage.out"
+	profilePath := filepath.Join(tmpDir, "coverage.out")
 
 	args := []string{"test", "-count=1", "-coverprofile=" + profilePath}
 	if coverPkg != "" {
