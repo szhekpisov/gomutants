@@ -84,7 +84,6 @@ func filterByDirectives(fset *token.FileSet, mutants []mutator.Mutant, files map
 
 	indexes := make(map[string]*fileIndex)
 	for _, m := range mutants {
-		// gomutants:disable-next-line BRANCH_IF reason="`seen` skip is an optimisation; rebuilding the index produces the same idx (same source, same directives) — warnings would re-emit, but no test asserts exact warning counts"
 		if _, seen := indexes[m.File]; seen {
 			continue
 		}
@@ -136,7 +135,6 @@ func indexFor(fset *token.FileSet, path, relPath string, files map[string]*Parse
 	// distinguish a comment that sits on a function declaration from one
 	// that floats free in the file.
 	file, err := parser.ParseFile(fset, path, src, parser.ParseComments)
-	// gomutants:disable-next-line BRANCH_IF reason="unreachable in normal flow: Discover already skips files where parser.ParseFile errors, so we never reach FilterByDirectives with such a file"
 	if err != nil {
 		return &fileIndex{}, nil
 	}
