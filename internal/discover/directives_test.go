@@ -825,19 +825,23 @@ func F(a, b int) int {
 // directive kind (e.g., "disable") slip into parseDirective and silently
 // register a same-line directive that suppresses everything on its line.
 //
-// The fixture needs a real directive *somewhere* so the bytes.Contains
-// fast-path doesn't short-circuit before the prefix-check runs. The
-// non-directive comment sits on the same line as the mutated expression
-// so the fictitious directive's same-line scope would actually catch
-// the mutant — without that overlap there's nothing for the bug to
-// suppress.
+// The non-directive comment must parse to a *valid* directive once the
+// prefix check is gone, otherwise the bug is unobservable: `disable for
+// now` is rejected (unknown mutators), but `disable reason="..."` parses
+// to a same-line directive with empty Mutators ("all"). It sits on the
+// same line as the mutated expression so the fictitious directive's
+// same-line scope would actually catch the mutant.
+//
+// The fixture also needs a real directive *somewhere* so the
+// bytes.Contains fast-path doesn't short-circuit before the prefix-check
+// runs.
 func TestFilterNonDirectiveCommentNotMisinterpreted(t *testing.T) {
 	src := `package p
 
 // gomutants:disable-regexp __DOES_NOT_MATCH_ANY_LINE__
 
 func F(a, b int) int {
-	return a + b // disable for now
+	return a + b // disable reason="for now"
 }
 `
 	mutants, _ := writeFixture(t, src)
