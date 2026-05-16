@@ -313,6 +313,17 @@ func TestDefaultTimeoutMinValue(t *testing.T) {
 	}
 }
 
+// TestDefaultCheckpointIntervalValue pins DefaultCheckpointInterval
+// against ARITHMETIC_BASE on its initializer. `10 * time.Second` mutated
+// to `10 / time.Second` collapses to 0 (integer division), which silently
+// disables periodic checkpointing without any other test noticing because
+// every other assertion compares against the const symbolically.
+func TestDefaultCheckpointIntervalValue(t *testing.T) {
+	if DefaultCheckpointInterval != 10*time.Second {
+		t.Errorf("DefaultCheckpointInterval = %v, want 10s — ARITHMETIC_BASE on `10 * time.Second` would change this", DefaultCheckpointInterval)
+	}
+}
+
 // TestLoadAppliesDefaultsForZeroAdaptiveFields kills BRANCH_IF and
 // CONDITIONALS_NEGATION on the two `if cfg.TimeoutMargin == 0` /
 // `cfg.TimeoutMin == 0` defaulting blocks in Load. We write a YAML
