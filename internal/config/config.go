@@ -167,54 +167,93 @@ type CheckpointIntervalFlag struct {
 	Value time.Duration
 }
 
-func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, timeoutMargin float64, timeoutMin time.Duration, adaptive AdaptiveTimeoutFlag, checkpointInterval CheckpointIntervalFlag, coverPkg, output, disable, only, changedSince, cache string, dryRun, verbose, quiet bool) {
-	if workers > 0 {
-		c.Workers = workers
+// Flags bundles the CLI flag values consumed by ApplyFlags. Bundling
+// them keeps the per-flag merge semantics ("non-zero / non-empty / Set=true
+// overrides YAML") at the call site explicit by named field, which a
+// positional signature can't sanely express past a handful of args.
+type Flags struct {
+	Workers            int
+	TestCPU            int
+	TimeoutCoefficient int
+	TimeoutMargin      float64
+	TimeoutMin         time.Duration
+	AdaptiveTimeout    AdaptiveTimeoutFlag
+	CheckpointInterval CheckpointIntervalFlag
+	CoverPkg           string
+	Output             string
+	Disable            string
+	Only               string
+	ChangedSince       string
+	Cache              string
+	DryRun             bool
+	Verbose            bool
+	Quiet              bool
+}
+
+// ApplyFlags merges CLI-provided flag values into c, with CLI winning
+// over the YAML-loaded defaults already present. Grouped into three
+// per-kind helpers so each method stays under the linter's cognitive
+// complexity threshold.
+func (c *Config) ApplyFlags(f Flags) {
+	c.applyNumericFlags(f)
+	c.applyStringFlags(f)
+	c.applyToggleFlags(f)
+}
+
+func (c *Config) applyNumericFlags(f Flags) {
+	if f.Workers > 0 {
+		c.Workers = f.Workers
 	}
-	if testCPU > 0 {
-		c.TestCPU = testCPU
+	if f.TestCPU > 0 {
+		c.TestCPU = f.TestCPU
 	}
-	if timeoutCoefficient > 0 {
-		c.TimeoutCoefficient = timeoutCoefficient
+	if f.TimeoutCoefficient > 0 {
+		c.TimeoutCoefficient = f.TimeoutCoefficient
 	}
-	if timeoutMargin > 0 {
-		c.TimeoutMargin = timeoutMargin
+	if f.TimeoutMargin > 0 {
+		c.TimeoutMargin = f.TimeoutMargin
 	}
-	if timeoutMin > 0 {
-		c.TimeoutMin = timeoutMin
+	if f.TimeoutMin > 0 {
+		c.TimeoutMin = f.TimeoutMin
 	}
-	if adaptive.Set {
-		v := adaptive.Value
+	if f.AdaptiveTimeout.Set {
+		v := f.AdaptiveTimeout.Value
 		c.AdaptiveTimeout = &v
 	}
-	if checkpointInterval.Set {
-		c.CheckpointInterval = checkpointInterval.Value
+	if f.CheckpointInterval.Set {
+		c.CheckpointInterval = f.CheckpointInterval.Value
 	}
-	if coverPkg != "" {
-		c.CoverPkg = coverPkg
+}
+
+func (c *Config) applyStringFlags(f Flags) {
+	if f.CoverPkg != "" {
+		c.CoverPkg = f.CoverPkg
 	}
-	if output != "" {
-		c.Output = output
+	if f.Output != "" {
+		c.Output = f.Output
 	}
-	if disable != "" {
-		c.Disable = splitAndTrim(disable)
+	if f.Disable != "" {
+		c.Disable = splitAndTrim(f.Disable)
 	}
-	if only != "" {
-		c.Only = splitAndTrim(only)
+	if f.Only != "" {
+		c.Only = splitAndTrim(f.Only)
 	}
-	if changedSince != "" {
-		c.ChangedSince = changedSince
+	if f.ChangedSince != "" {
+		c.ChangedSince = f.ChangedSince
 	}
-	if cache != "" {
-		c.Cache = cache
+	if f.Cache != "" {
+		c.Cache = f.Cache
 	}
-	if dryRun {
+}
+
+func (c *Config) applyToggleFlags(f Flags) {
+	if f.DryRun {
 		c.DryRun = true
 	}
-	if verbose {
+	if f.Verbose {
 		c.Verbose = true
 	}
-	if quiet {
+	if f.Quiet {
 		c.Quiet = true
 	}
 }

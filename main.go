@@ -322,7 +322,24 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, timeoutMargin, timeoutMin, adaptiveTimeout, checkpointInterval, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose, quiet)
+	cfg.ApplyFlags(config.Flags{
+		Workers:            workers,
+		TestCPU:            testCPU,
+		TimeoutCoefficient: timeoutCoefficient,
+		TimeoutMargin:      timeoutMargin,
+		TimeoutMin:         timeoutMin,
+		AdaptiveTimeout:    adaptiveTimeout,
+		CheckpointInterval: checkpointInterval,
+		CoverPkg:           coverPkg,
+		Output:             output,
+		Disable:            disable,
+		Only:               only,
+		ChangedSince:       changedSince,
+		Cache:              cachePath,
+		DryRun:             dryRun,
+		Verbose:            verbose,
+		Quiet:              quiet,
+	})
 	cfg.ResolveCache()
 
 	// Periodic checkpointing rides on the cache file; with --cache=off

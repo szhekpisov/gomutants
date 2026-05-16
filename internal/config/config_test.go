@@ -153,7 +153,7 @@ func TestApplyFlagsCheckpointIntervalZeroOverride(t *testing.T) {
 	cfg := Default()
 	cfg.CheckpointInterval = 30 * time.Second
 
-	cfg.ApplyFlags(0, 0, 0, 0, 0, AdaptiveTimeoutFlag{}, CheckpointIntervalFlag{Set: true, Value: 0}, "", "", "", "", "", "", false, false, false)
+	cfg.ApplyFlags(Flags{CheckpointInterval: CheckpointIntervalFlag{Set: true, Value: 0}})
 
 	if cfg.CheckpointInterval != 0 {
 		t.Errorf("CheckpointInterval=%v, want 0 (explicit --checkpoint-interval=0 must override YAML)", cfg.CheckpointInterval)
@@ -185,7 +185,24 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
-	cfg.ApplyFlags(8, 4, 15, 4.5, 5*time.Second, AdaptiveTimeoutFlag{Set: true, Value: false}, CheckpointIntervalFlag{Set: true, Value: 30 * time.Second}, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", "cache.json", true, true, true)
+	cfg.ApplyFlags(Flags{
+		Workers:            8,
+		TestCPU:            4,
+		TimeoutCoefficient: 15,
+		TimeoutMargin:      4.5,
+		TimeoutMin:         5 * time.Second,
+		AdaptiveTimeout:    AdaptiveTimeoutFlag{Set: true, Value: false},
+		CheckpointInterval: CheckpointIntervalFlag{Set: true, Value: 30 * time.Second},
+		CoverPkg:           "./pkg/...",
+		Output:             "out.json",
+		Disable:            "BRANCH_IF,BRANCH_ELSE",
+		Only:               "ARITHMETIC_BASE",
+		ChangedSince:       "main",
+		Cache:              "cache.json",
+		DryRun:             true,
+		Verbose:            true,
+		Quiet:              true,
+	})
 
 	if cfg.Workers != 8 {
 		t.Errorf("Workers=%d, want 8", cfg.Workers)
@@ -243,7 +260,7 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
-	cfg.ApplyFlags(0, 0, 0, 0, 0, AdaptiveTimeoutFlag{}, CheckpointIntervalFlag{}, "", "", "", "", "", "", false, false, false)
+	cfg.ApplyFlags(Flags{})
 
 	if cfg.Workers != orig.Workers {
 		t.Errorf("Workers changed from %d to %d", orig.Workers, cfg.Workers)
