@@ -230,6 +230,7 @@ gomutants --threshold-efficacy 80 ./...
 - **`--changed-since <ref>`** — scope mutation testing to lines changed vs a git ref. Fast enough to gate every PR.
 - **Per-test coverage routing** — each mutant runs only the tests whose coverage touches the mutated line, not the whole suite.
 - **Incremental cache** — content-addressed; warm reruns skip mutants whose source bytes and tests are byte-identical to the previous run (120–150× speedup on warm reruns).
+- **Resumable runs** — the cache is checkpointed mid-run, so a run killed by an OOM, a CI timeout, or a double Ctrl-C resumes from the last checkpoint instead of starting over.
 - **Adaptive per-mutant timeouts** — deadlines sized from recorded per-test durations × margin, so fast tests don't wait out a multi-minute global ceiling.
 - **Byte-level patching via `go test -overlay`** — generics and all Go syntax survive intact; source tree never modified.
 - **16 mutators including block-level** — `BRANCH_IF`, `BRANCH_ELSE`, `BRANCH_CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE` on top of 11 token-level operators.
@@ -391,6 +392,7 @@ coverpkg: "./pkg/mypackage/..."
 output: mutation-report.json
 changed-since: ""       # set to e.g. "main" to scope runs by default
 cache: ""               # path to incremental-analysis cache; "" = .gomutants-cache.json, "off" = disabled
+checkpoint-interval: 10s # how often to flush the cache mid-run; 0s disables (final flush still runs)
 disable: []
 only: []
 ```
@@ -455,6 +457,7 @@ Priority: built-in defaults < config file < CLI flags. See [`.gomutants.yml.exam
 | `--only` | | | Comma-separated mutator types to run (disables all others) |
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
 | `--cache` | | `.gomutants-cache.json` | Path to incremental-analysis cache file. Skips mutants whose source and tests are byte-identical to the cached run. Pass `--cache=off` to disable. |
+| `--checkpoint-interval` | | 10s | How often to flush completed mutant outcomes to the cache mid-run, so a hard kill (OOM, CI timeout, SIGKILL) loses at most this much progress and the next run resumes from the last checkpoint. `0` disables periodic checkpointing (the cache is then written only once, at the end). Ignored when `--cache=off`. |
 | `--annotations` | | | Emit annotations for LIVED mutants. Supported: `github` (workflow-command warnings on stdout). |
 | `--stryker-output` | | | Also write a [Stryker mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) report at this path (for the HTML viewer and Stryker Dashboard). |
 | `--html-output` | | | Also write a self-contained interactive HTML mutation report at this path (Stryker mutation-testing-elements viewer bundled inline; no network access required to open). |

@@ -15,9 +15,9 @@ type MutatorConfig struct {
 }
 
 type Config struct {
-	Workers            int                       `yaml:"workers"`
-	TestCPU            int                       `yaml:"test-cpu"`
-	TimeoutCoefficient int                       `yaml:"timeout-coefficient"`
+	Workers            int `yaml:"workers"`
+	TestCPU            int `yaml:"test-cpu"`
+	TimeoutCoefficient int `yaml:"timeout-coefficient"`
 	// TimeoutMargin scales per-mutant adaptive timeouts (sum of selected
 	// per-test durations × this). Default 3.0 — wide enough to absorb GC
 	// pauses, scheduler jitter, and mutated-code slowdowns without false
@@ -32,16 +32,22 @@ type Config struct {
 	// — without it, a YAML `adaptive-timeout: false` is indistinguishable
 	// from the zero value during ApplyFlags merging. Use
 	// AdaptiveTimeoutEnabled() in callers; that handles the default.
-	AdaptiveTimeout    *bool                     `yaml:"adaptive-timeout"`
-	CoverPkg           string                    `yaml:"coverpkg"`
-	Output             string                    `yaml:"output"`
-	DryRun             bool                      `yaml:"dry-run"`
-	Verbose            bool                      `yaml:"verbose"`
-	Quiet              bool                      `yaml:"quiet"`
-	Disable            []string                  `yaml:"disable"`
-	Only               []string                  `yaml:"only"`
-	ChangedSince       string                    `yaml:"changed-since"`
-	Cache              string                    `yaml:"cache"`
+	AdaptiveTimeout *bool    `yaml:"adaptive-timeout"`
+	CoverPkg        string   `yaml:"coverpkg"`
+	Output          string   `yaml:"output"`
+	DryRun          bool     `yaml:"dry-run"`
+	Verbose         bool     `yaml:"verbose"`
+	Quiet           bool     `yaml:"quiet"`
+	Disable         []string `yaml:"disable"`
+	Only            []string `yaml:"only"`
+	ChangedSince    string   `yaml:"changed-since"`
+	Cache           string   `yaml:"cache"`
+	// CheckpointInterval is how often completed mutant outcomes are
+	// flushed to the cache file mid-run, so a hard kill (OOM, CI timeout,
+	// SIGKILL) loses at most this much progress. 0 disables periodic
+	// checkpointing — the cache is then written only once, at the end of
+	// the run. Negative values are nonsensical and revert to the default.
+	CheckpointInterval time.Duration             `yaml:"checkpoint-interval"`
 	Mutants            map[string]*MutatorConfig `yaml:"mutants"`
 }
 
@@ -50,6 +56,10 @@ type Config struct {
 const (
 	DefaultTimeoutMargin = 3.0
 	DefaultTimeoutMin    = 2 * time.Second
+	// DefaultCheckpointInterval is the default cadence for mid-run cache
+	// checkpointing. Cheap relative to per-mutant `go test` cost, and
+	// bounds worst-case lost work on a hard kill to ~this duration.
+	DefaultCheckpointInterval = 10 * time.Second
 )
 
 // AdaptiveTimeoutEnabled returns whether per-mutant adaptive timeout
@@ -74,6 +84,7 @@ func Default() Config {
 		TimeoutCoefficient: 10,
 		TimeoutMargin:      DefaultTimeoutMargin,
 		TimeoutMin:         DefaultTimeoutMin,
+		CheckpointInterval: DefaultCheckpointInterval,
 		Output:             "mutation-report.json",
 	}
 }
@@ -112,6 +123,11 @@ func Load(path string) (Config, error) {
 	if cfg.TimeoutMin <= 0 {
 		cfg.TimeoutMin = DefaultTimeoutMin
 	}
+	// Only negative values revert to the default — 0 is a meaningful
+	// "disable periodic checkpointing" choice and must survive unmarshal.
+	if cfg.CheckpointInterval < 0 {
+		cfg.CheckpointInterval = DefaultCheckpointInterval
+	}
 	if cfg.Output == "" {
 		cfg.Output = "mutation-report.json"
 	}
@@ -142,7 +158,16 @@ type AdaptiveTimeoutFlag struct {
 	Value bool
 }
 
-func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, timeoutMargin float64, timeoutMin time.Duration, adaptive AdaptiveTimeoutFlag, coverPkg, output, disable, only, changedSince, cache string, dryRun, verbose, quiet bool) {
+// CheckpointIntervalFlag captures the `--checkpoint-interval` CLI flag
+// value. Like AdaptiveTimeoutFlag, it carries a Set bit so ApplyFlags can
+// tell "not provided" from an explicit `--checkpoint-interval=0`; a plain
+// duration can't, because 0 is both the zero value and a valid choice.
+type CheckpointIntervalFlag struct {
+	Set   bool
+	Value time.Duration
+}
+
+func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, timeoutMargin float64, timeoutMin time.Duration, adaptive AdaptiveTimeoutFlag, checkpointInterval CheckpointIntervalFlag, coverPkg, output, disable, only, changedSince, cache string, dryRun, verbose, quiet bool) {
 	if workers > 0 {
 		c.Workers = workers
 	}
@@ -161,6 +186,9 @@ func (c *Config) ApplyFlags(workers, testCPU, timeoutCoefficient int, timeoutMar
 	if adaptive.Set {
 		v := adaptive.Value
 		c.AdaptiveTimeout = &v
+	}
+	if checkpointInterval.Set {
+		c.CheckpointInterval = checkpointInterval.Value
 	}
 	if coverPkg != "" {
 		c.CoverPkg = coverPkg

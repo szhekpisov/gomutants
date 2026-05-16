@@ -156,6 +156,7 @@ func TestRunAllLongFlags(t *testing.T) {
 		"--output", outPath,
 		"--config", ".gomutants.yml",
 		"--disable", "BRANCH_IF",
+		"--checkpoint-interval", "5s",
 		"--dry-run",
 		"--verbose",
 		"testmod",
@@ -182,9 +183,9 @@ func TestRunAllLongFlags(t *testing.T) {
 	// phases). We check the full "Phase... PhaseDone" pair.
 	joined := []string{
 		"Resolving packages... done (1 packages)",
-		"Collecting coverage... done (",   // "done (Ns)" — duration varies
-		"Measuring baseline... done (",    // "done (Ns, timeout: Ns)"
-		"Discovering mutants... ",         // "N found (N not covered, N to test)"
+		"Collecting coverage... done (", // "done (Ns)" — duration varies
+		"Measuring baseline... done (",  // "done (Ns, timeout: Ns)"
+		"Discovering mutants... ",       // "N found (N not covered, N to test)"
 	}
 	for _, s := range joined {
 		if !strings.Contains(out, s) {
@@ -387,9 +388,9 @@ func TestRunResolvePackagesError(t *testing.T) {
 func TestRunCoverageError(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"go.mod":       "module testmod\n\ngo 1.26\n",
-		"add.go":       "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
-		"add_test.go":  "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) { t.Fatal(\"always fail\") }\n",
+		"go.mod":      "module testmod\n\ngo 1.26\n",
+		"add.go":      "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
+		"add_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) { t.Fatal(\"always fail\") }\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -758,9 +759,9 @@ func TestRunThresholdSkipsOnEmptyDiscovery(t *testing.T) {
 	}
 	dir := t.TempDir()
 	files := map[string]string{
-		"go.mod":         "module testmod\n\ngo 1.26\n",
-		"greet.go":       "package testmod\n\nfunc Greet() string {\n\treturn \"hello\"\n}\n",
-		"greet_test.go":  "package testmod\n\nimport \"testing\"\n\nfunc TestGreet(t *testing.T) {\n\tif Greet() != \"hello\" {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+		"go.mod":        "module testmod\n\ngo 1.26\n",
+		"greet.go":      "package testmod\n\nfunc Greet() string {\n\treturn \"hello\"\n}\n",
+		"greet_test.go": "package testmod\n\nimport \"testing\"\n\nfunc TestGreet(t *testing.T) {\n\tif Greet() != \"hello\" {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -1462,6 +1463,53 @@ func TestRun_CacheOff_NeverWritesCoverageFields(t *testing.T) {
 	}
 }
 
+// TestRunCheckpointInterval exercises mid-run cache checkpointing without
+// a real kill. cacheSaveFunc is the only caller-visible cache write, so
+// swapping it for a counter observes every checkpoint. With
+// --checkpoint-interval=1ns every onResult callback checkpoints (the
+// throttle window is always elapsed), so the cache is saved once per
+// tested mutant plus once more for the final forced flush. With
+// --checkpoint-interval=0 periodic checkpointing is off and only the
+// final flush writes the cache — exactly the pre-checkpointing behavior.
+func TestRunCheckpointInterval(t *testing.T) {
+	countSaves := func(t *testing.T, intervalArg string) int {
+		t.Helper()
+		dir := setupTinyProject(t)
+		t.Chdir(dir)
+
+		var saves int
+		origSave := cacheSaveFunc
+		defer func() { cacheSaveFunc = origSave }()
+		cacheSaveFunc = func(c *cache.Cache, path string) error {
+			saves++
+			return origSave(c, path)
+		}
+
+		args := []string{
+			"--only", "ARITHMETIC_BASE",
+			"-w", "1",
+			"-o", filepath.Join(dir, "r.json"),
+			"--cache", filepath.Join(dir, ".gomutants-cache.json"),
+			"--checkpoint-interval", intervalArg,
+			"testmod",
+		}
+		if _, err := captureOutput(t, func() error { return run(context.Background(), args) }); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return saves
+	}
+
+	// 1ns: every onResult checkpoints, plus one final forced flush.
+	if got := countSaves(t, "1ns"); got < 2 {
+		t.Errorf("--checkpoint-interval=1ns: %d cache saves, want >= 2 (periodic + final flush)", got)
+	}
+
+	// 0: periodic checkpointing disabled; only the final flush writes.
+	if got := countSaves(t, "0"); got != 1 {
+		t.Errorf("--checkpoint-interval=0: %d cache saves, want exactly 1 (final flush only)", got)
+	}
+}
+
 // setupTinyProject creates a minimal Go project with one TestAdd that
 // kills the ARITHMETIC_BASE mutation on `+`. Used by tests that want a
 // cheap full-pipeline run.
@@ -1480,4 +1528,3 @@ func setupTinyProject(t *testing.T) string {
 	}
 	return dir
 }
-
