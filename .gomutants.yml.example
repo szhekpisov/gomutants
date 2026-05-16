@@ -41,6 +41,14 @@ output: mutation-report.json
 # identical to the cached run are skipped.
 # cache: .gomutants-cache.json
 
+# How often to flush completed mutant outcomes to the cache file while a
+# run is still in progress (default: 10s). A run killed mid-way — OOM, CI
+# timeout, SIGKILL, double Ctrl-C — loses at most this much progress; the
+# next invocation resumes from the last checkpoint instead of starting
+# over. Set to 0s to disable periodic checkpointing (the cache is then
+# written only once, at the end of the run). Ignored when cache is "off".
+# checkpoint-interval: 10s
+
 # Mutator types to disable (run all except these).
 # disable:
 #   - BRANCH_IF

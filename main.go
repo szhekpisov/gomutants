@@ -224,6 +224,7 @@ func run(ctx context.Context, args []string) error {
 		timeoutMargin      float64
 		timeoutMin         time.Duration
 		adaptiveTimeout    config.AdaptiveTimeoutFlag
+		checkpointInterval config.CheckpointIntervalFlag
 		coverPkg           string
 		output             string
 		configPath         string
@@ -257,6 +258,21 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("--adaptive-timeout: %w", err)
 		}
 		adaptiveTimeout = config.AdaptiveTimeoutFlag{Set: true, Value: v}
+		return nil
+	})
+	// fs.Func (like the BoolFunc above) lets us distinguish "user set
+	// --checkpoint-interval" from "user did not pass the flag", which
+	// (*Config).ApplyFlags needs because 0 is a valid value (disable) and
+	// can't be told apart from the unset zero value otherwise.
+	fs.Func("checkpoint-interval", fmt.Sprintf("how often to flush completed mutant outcomes to the cache mid-run so a hard kill (OOM, CI timeout, SIGKILL) loses at most this much progress; 0 disables (default: %s)", config.DefaultCheckpointInterval), func(s string) error {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("--checkpoint-interval: %w", err)
+		}
+		if d < 0 {
+			return fmt.Errorf("--checkpoint-interval must be >= 0, got %s", d)
+		}
+		checkpointInterval = config.CheckpointIntervalFlag{Set: true, Value: d}
 		return nil
 	})
 	fs.StringVar(&coverPkg, "coverpkg", "", "coverage package pattern")
@@ -306,8 +322,32 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cfg.ApplyFlags(workers, testCPU, timeoutCoefficient, timeoutMargin, timeoutMin, adaptiveTimeout, coverPkg, output, disable, only, changedSince, cachePath, dryRun, verbose, quiet)
+	cfg.ApplyFlags(config.Flags{
+		Workers:            workers,
+		TestCPU:            testCPU,
+		TimeoutCoefficient: timeoutCoefficient,
+		TimeoutMargin:      timeoutMargin,
+		TimeoutMin:         timeoutMin,
+		AdaptiveTimeout:    adaptiveTimeout,
+		CheckpointInterval: checkpointInterval,
+		CoverPkg:           coverPkg,
+		Output:             output,
+		Disable:            disable,
+		Only:               only,
+		ChangedSince:       changedSince,
+		Cache:              cachePath,
+		DryRun:             dryRun,
+		Verbose:            verbose,
+		Quiet:              quiet,
+	})
 	cfg.ResolveCache()
+
+	// Periodic checkpointing rides on the cache file; with --cache=off
+	// there is nothing to flush. Warn rather than silently ignore so a
+	// user who set --checkpoint-interval isn't misled about durability.
+	if cfg.Cache == "" && checkpointInterval.Set {
+		fmt.Fprintln(stderr, "gomutants: --checkpoint-interval ignored: --cache is off")
+	}
 
 	packages := fs.Args()
 	if len(packages) == 0 {
@@ -386,9 +426,9 @@ func run(ctx context.Context, args []string) error {
 	coverStart := time.Now()
 
 	var (
-		profile      *coverage.Profile
-		profileBytes []byte
-		coverageKey  string
+		profile        *coverage.Profile
+		profileBytes   []byte
+		coverageKey    string
 		coverFromCache bool
 	)
 	if loadedCache != nil {
@@ -603,28 +643,55 @@ func run(ctx context.Context, args []string) error {
 	// the all-cached / zero-pending paths where OnResult never fires.
 	term2.StartHeartbeat()
 	defer term2.StopHeartbeat()
-	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, policy, tmpDir, srcCache, projectDir, testMap)
-	pool.Run(ctx, mutants, term2.OnResult)
 
-	// 8a. Persist updated cache (merging this run with prior entries
-	// whose source files still match). Write failures are non-fatal:
-	// a stale or missing cache only costs speed on the next run.
-	if loadedCache != nil {
-		loadedCache.Update(mutants, hasher, projectDir, testFilesFor)
-		// Stamp the coverage memo on every successful run where we
-		// computed a key — both the cache-hit branch (re-emitting the
-		// same bytes) and the fresh-run branch (storing newly captured
-		// bytes). An empty coverageKey means hashing failed earlier and
-		// we silently fell back to a fresh run; don't poison the cache
-		// with a missing key.
-		if coverageKey != "" && len(profileBytes) > 0 {
-			loadedCache.CoverageKey = coverageKey
-			loadedCache.CoverageProfile = string(profileBytes)
+	// Stamp the coverage memo once, before the run loop: the profile and
+	// its key are fixed for the whole run, so there's no reason to
+	// re-serialize the (potentially large) profile on every checkpoint.
+	// An empty coverageKey means hashing failed earlier and we silently
+	// fell back to a fresh run; don't poison the cache with a missing key.
+	if loadedCache != nil && coverageKey != "" && len(profileBytes) > 0 {
+		loadedCache.CoverageKey = coverageKey
+		loadedCache.CoverageProfile = string(profileBytes)
+	}
+
+	// 8a. checkpoint flushes completed mutant outcomes to the cache file,
+	// throttled to cfg.CheckpointInterval. cache.Update only emits
+	// terminal-status mutants, so flushing a partially-complete slice
+	// mid-run is safe — pending mutants are simply omitted. No locking
+	// needed: pool.Run invokes onResult from a single goroutine, so the
+	// mutants-slice reads here are serialized with the collector's writes.
+	// Write failures are non-fatal — a stale cache only costs speed.
+	var lastCheckpoint time.Time
+	checkpoint := func(force bool) {
+		if loadedCache == nil {
+			return
 		}
+		if !force && cfg.CheckpointInterval <= 0 {
+			return
+		}
+		if !force && time.Since(lastCheckpoint) < cfg.CheckpointInterval {
+			return
+		}
+		loadedCache.Update(mutants, hasher, projectDir, testFilesFor)
 		if err := cacheSaveFunc(loadedCache, cfg.Cache); err != nil {
 			fmt.Fprintf(stderr, "warning: writing cache to %s: %v\n", cfg.Cache, err)
+			return // leave lastCheckpoint stale so the next onResult retries
 		}
+		lastCheckpoint = time.Now()
 	}
+
+	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, policy, tmpDir, srcCache, projectDir, testMap)
+	// Seed lastCheckpoint so the first periodic checkpoint fires one full
+	// interval into the run, not on the very first mutant.
+	lastCheckpoint = time.Now()
+	pool.Run(ctx, mutants, func(m mutator.Mutant) {
+		term2.OnResult(m)
+		checkpoint(false)
+	})
+
+	// Final flush. force=true bypasses the throttle and the disable
+	// switch, so even --checkpoint-interval=0 still writes the cache once.
+	checkpoint(true)
 
 	// 9. Generate report.
 	totalElapsed := time.Since(coverStart)

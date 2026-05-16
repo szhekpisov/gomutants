@@ -20,6 +20,9 @@ func TestDefault(t *testing.T) {
 	if cfg.Output != "mutation-report.json" {
 		t.Errorf("Output=%q, want %q", cfg.Output, "mutation-report.json")
 	}
+	if cfg.CheckpointInterval != DefaultCheckpointInterval {
+		t.Errorf("CheckpointInterval=%v, want %v", cfg.CheckpointInterval, DefaultCheckpointInterval)
+	}
 }
 
 func TestLoadMissing(t *testing.T) {
@@ -114,6 +117,49 @@ func TestLoadZeroValuesGetDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadCheckpointInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want time.Duration
+	}{
+		{"absent keeps default", "workers: 4\n", DefaultCheckpointInterval},
+		{"explicit duration parses", "checkpoint-interval: 30s\n", 30 * time.Second},
+		{"zero survives as disable", "checkpoint-interval: 0s\n", 0},
+		{"negative reverts to default", "checkpoint-interval: -5s\n", DefaultCheckpointInterval},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, ".gomutants.yml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.CheckpointInterval != tt.want {
+				t.Errorf("CheckpointInterval=%v, want %v", cfg.CheckpointInterval, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplyFlagsCheckpointIntervalZeroOverride pins the three-state merge:
+// an explicit --checkpoint-interval=0 must override a non-zero YAML value
+// (a plain "non-zero means user-set" check would silently drop it).
+func TestApplyFlagsCheckpointIntervalZeroOverride(t *testing.T) {
+	cfg := Default()
+	cfg.CheckpointInterval = 30 * time.Second
+
+	cfg.ApplyFlags(Flags{CheckpointInterval: CheckpointIntervalFlag{Set: true, Value: 0}})
+
+	if cfg.CheckpointInterval != 0 {
+		t.Errorf("CheckpointInterval=%v, want 0 (explicit --checkpoint-interval=0 must override YAML)", cfg.CheckpointInterval)
+	}
+}
+
 func TestLoadReadError(t *testing.T) {
 	// Use a directory path as config file — will cause a read error (not IsNotExist).
 	dir := t.TempDir()
@@ -139,7 +185,24 @@ func TestLoadInvalidYAML(t *testing.T) {
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
-	cfg.ApplyFlags(8, 4, 15, 4.5, 5*time.Second, AdaptiveTimeoutFlag{Set: true, Value: false}, "./pkg/...", "out.json", "BRANCH_IF,BRANCH_ELSE", "ARITHMETIC_BASE", "main", "cache.json", true, true, true)
+	cfg.ApplyFlags(Flags{
+		Workers:            8,
+		TestCPU:            4,
+		TimeoutCoefficient: 15,
+		TimeoutMargin:      4.5,
+		TimeoutMin:         5 * time.Second,
+		AdaptiveTimeout:    AdaptiveTimeoutFlag{Set: true, Value: false},
+		CheckpointInterval: CheckpointIntervalFlag{Set: true, Value: 30 * time.Second},
+		CoverPkg:           "./pkg/...",
+		Output:             "out.json",
+		Disable:            "BRANCH_IF,BRANCH_ELSE",
+		Only:               "ARITHMETIC_BASE",
+		ChangedSince:       "main",
+		Cache:              "cache.json",
+		DryRun:             true,
+		Verbose:            true,
+		Quiet:              true,
+	})
 
 	if cfg.Workers != 8 {
 		t.Errorf("Workers=%d, want 8", cfg.Workers)
@@ -158,6 +221,9 @@ func TestApplyFlags(t *testing.T) {
 	}
 	if cfg.AdaptiveTimeoutEnabled() {
 		t.Errorf("AdaptiveTimeoutEnabled=true, want false (CLI override)")
+	}
+	if cfg.CheckpointInterval != 30*time.Second {
+		t.Errorf("CheckpointInterval=%v, want 30s", cfg.CheckpointInterval)
 	}
 	if cfg.CoverPkg != "./pkg/..." {
 		t.Errorf("CoverPkg=%q", cfg.CoverPkg)
@@ -194,7 +260,7 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
-	cfg.ApplyFlags(0, 0, 0, 0, 0, AdaptiveTimeoutFlag{}, "", "", "", "", "", "", false, false, false)
+	cfg.ApplyFlags(Flags{})
 
 	if cfg.Workers != orig.Workers {
 		t.Errorf("Workers changed from %d to %d", orig.Workers, cfg.Workers)
@@ -217,6 +283,9 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	}
 	if cfg.AdaptiveTimeout != orig.AdaptiveTimeout {
 		t.Errorf("AdaptiveTimeout pointer changed; AdaptiveTimeoutFlag{Set:false} must be a no-op")
+	}
+	if cfg.CheckpointInterval != orig.CheckpointInterval {
+		t.Errorf("CheckpointInterval changed from %v to %v; CheckpointIntervalFlag{Set:false} must be a no-op", orig.CheckpointInterval, cfg.CheckpointInterval)
 	}
 	if cfg.Output != orig.Output {
 		t.Errorf("Output changed")
@@ -258,6 +327,17 @@ func TestAdaptiveTimeoutEnabledExplicitFalse(t *testing.T) {
 func TestDefaultTimeoutMinValue(t *testing.T) {
 	if DefaultTimeoutMin != 2*time.Second {
 		t.Errorf("DefaultTimeoutMin = %v, want 2s — ARITHMETIC_BASE on `2 * time.Second` would change this", DefaultTimeoutMin)
+	}
+}
+
+// TestDefaultCheckpointIntervalValue pins DefaultCheckpointInterval
+// against ARITHMETIC_BASE on its initializer. `10 * time.Second` mutated
+// to `10 / time.Second` collapses to 0 (integer division), which silently
+// disables periodic checkpointing without any other test noticing because
+// every other assertion compares against the const symbolically.
+func TestDefaultCheckpointIntervalValue(t *testing.T) {
+	if DefaultCheckpointInterval != 10*time.Second {
+		t.Errorf("DefaultCheckpointInterval = %v, want 10s — ARITHMETIC_BASE on `10 * time.Second` would change this", DefaultCheckpointInterval)
 	}
 }
 

@@ -161,6 +161,78 @@ func TestIncrementalCacheInvalidatesPerturbedTestFile(t *testing.T) {
 	}
 }
 
+// TestIncrementalCacheResumesAfterMidRunKill simulates a hard kill during
+// a long run: a mid-run checkpoint persists the outcomes completed so
+// far, the process "dies" before the end-of-run final flush, and a fresh
+// invocation resumes by reusing exactly those checkpointed outcomes. This
+// is the durability guarantee periodic checkpointing exists to provide —
+// without it, an interrupted run that never reached the final save would
+// lose everything.
+func TestIncrementalCacheResumesAfterMidRunKill(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	dir := setupTestdataCopy(t, "testdata/simple")
+	cachePath := filepath.Join(dir, ".gomutants-cache.json")
+	reportPath := filepath.Join(dir, "report.json")
+	t.Chdir(dir)
+
+	// -w 1 so mutants complete one at a time and the kill lands on a
+	// small partial set; 1ns interval so every onResult checkpoints.
+	args := []string{
+		"-w", "1",
+		"-cache", cachePath,
+		"-o", reportPath,
+		"-checkpoint-interval", "1ns",
+		"./...",
+	}
+
+	// Interrupted run. cacheSaveFunc stands in for the kill switch: the
+	// first checkpoint that actually carries an entry is written to disk,
+	// then ctx is cancelled (the "kill"). Every later save — including the
+	// end-of-run final flush — is suppressed, so the on-disk cache
+	// reflects ONLY what the mid-run checkpoint persisted.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var killed bool
+	origSave := cacheSaveFunc
+	cacheSaveFunc = func(c *cachepkg.Cache, path string) error {
+		if killed {
+			return nil // post-kill saves never happen in a real hard kill
+		}
+		if len(c.Entries) == 0 {
+			return origSave(c, path) // nothing persisted yet; keep going
+		}
+		err := origSave(c, path)
+		killed = true
+		cancel()
+		return err
+	}
+	err := run(ctx, args)
+	cacheSaveFunc = origSave
+	if err != nil {
+		t.Fatalf("interrupted run: %v", err)
+	}
+
+	partial := loadCacheFile(t, cachePath)
+	if len(partial.Entries) == 0 {
+		t.Fatal("interrupted run left no cache entries — mid-run checkpoint did not persist")
+	}
+
+	// Resume: a fresh, uninterrupted invocation must reuse exactly the
+	// checkpointed outcomes — no more (the kill interrupted the run), no
+	// fewer (every checkpointed outcome is still valid).
+	warm := runInDir(t, dir, args)
+	if warm.MutantsCached != len(partial.Entries) {
+		t.Errorf("resumed run cached=%d, want %d (every checkpointed outcome)", warm.MutantsCached, len(partial.Entries))
+	}
+	cacheableTotal := warm.MutantsKilled + warm.MutantsLived + warm.MutantsNotViable + warm.MutantsTimedOut
+	if warm.MutantsCached >= cacheableTotal {
+		t.Errorf("resumed run cached=%d, want a strict subset of %d cacheable mutants — the kill should have interrupted before completion", warm.MutantsCached, cacheableTotal)
+	}
+}
+
 // runInDir invokes run() with args, chdir'd into dir for the duration
 // of the call. Returns the parsed JSON report.
 func runInDir(t *testing.T, dir string, args []string) *report.Report {

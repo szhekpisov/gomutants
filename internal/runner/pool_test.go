@@ -457,8 +457,8 @@ func TestPoolRunWithPending(t *testing.T) {
 			Status:      mutator.StatusPending,
 		},
 		{
-			ID:          3,
-			Status:      mutator.StatusNotCovered,
+			ID:     3,
+			Status: mutator.StatusNotCovered,
 		},
 	}
 
@@ -486,6 +486,62 @@ func TestPoolRunWithPending(t *testing.T) {
 	}
 	if callbackCount != 2 {
 		t.Errorf("callback called %d times, want 2", callbackCount)
+	}
+}
+
+// TestPoolRunOnResultSerial pins the contract that Run invokes onResult
+// from a single goroutine, serially. main.go's mid-run cache checkpointing
+// hooks into this callback and reads the shared mutants slice without a
+// lock — that's only sound if onResult never runs concurrently with
+// itself. Multiple workers + a re-entrancy guard (a plain bool, plus a
+// non-atomic counter) would trip under `-race` or fail outright if the
+// pool ever dispatched results concurrently.
+func TestPoolRunOnResultSerial(t *testing.T) {
+	dir := setupTestProject(t)
+	srcPath := filepath.Join(dir, "add.go")
+	src, _ := os.ReadFile(srcPath)
+	cache := map[string][]byte{srcPath: src}
+
+	plusIdx := 0
+	for i, c := range string(src) {
+		if c == '+' && i > 30 {
+			plusIdx = i
+			break
+		}
+	}
+
+	tmpDir := t.TempDir()
+	p := NewPool(4, 0, TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
+
+	replacements := []string{"-", "*", "/", "%"}
+	mutants := make([]mutator.Mutant, len(replacements))
+	for i, r := range replacements {
+		mutants[i] = mutator.Mutant{
+			ID:          i + 1,
+			File:        srcPath,
+			Pkg:         "testmod",
+			StartOffset: plusIdx,
+			EndOffset:   plusIdx + 1,
+			Replacement: r,
+			Status:      mutator.StatusPending,
+		}
+	}
+
+	var inCallback bool
+	var count int
+	runWithDeadline(t, 90*time.Second, func() {
+		p.Run(context.Background(), mutants, func(m mutator.Mutant) {
+			if inCallback {
+				t.Error("onResult invoked concurrently — checkpoint hook would need a lock")
+			}
+			inCallback = true
+			count++ // non-atomic on purpose: races here are the bug we're guarding against
+			inCallback = false
+		})
+	})
+
+	if count != len(replacements) {
+		t.Errorf("onResult called %d times, want %d", count, len(replacements))
 	}
 }
 
