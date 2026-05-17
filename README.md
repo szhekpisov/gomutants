@@ -47,7 +47,7 @@
 
 ## Why gomutants?
 
-* **Built for PR gates.** `--changed-since <ref>` scopes a run to mutants on lines added or modified since the given git ref — fast enough to gate every pull request without re-running the full mutation suite on untouched code. This repo's CI uses it to gate on "no LIVED mutant on changed lines."
+* **Built for PR gates.** `--changed-since <ref>` runs mutants on lines added or modified since the given git ref — fast enough to gate every pull request without re-running the full mutation suite on untouched code.
 
 * **Fastest at scale.** On full-module runs with many mutants, gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant than the nearest Go mutation tester — and warm reruns with the incremental cache enabled finish 120–150× faster than cold runs (e.g. a 46-minute `prometheus/tsdb` cold run becomes 19s warm). See [`docs/performance.md`](docs/performance.md) for methodology and external-target benchmarks.
 
@@ -55,7 +55,7 @@
 
 ## Where gomutants isn't the fit?
 
-One-off manual runs, thin test suites (<70% line coverage), Go < 1.26, or workflows without a CI gate — the one-time setup cost (coverage collection, baseline measurement, per-test coverage map build) only pays off when many mutants share it.
+One-off manual runs or thin test suites (<70% line coverage) — the one-time setup cost (coverage collection, baseline measurement, per-test coverage map build) only pays off when many mutants share it.
 
 ## How It Compares
 
@@ -80,7 +80,7 @@ One-off manual runs, thin test suites (<70% line coverage), Go < 1.26, or workfl
 
 ### Benchmark snapshot
 
-Four real-world Go projects on Apple M1 Pro 10-core, gomutants v0.2.2 vs gremlins v0.6.0, matched 5-operator set (gremlins' defaults), `workers=10`, `--cache=off`, `GOTOOLCHAIN=go1.25.7` (gremlins is broken on Go 1.26.x). Engine and gremlins rows are 3-run medians; cold-OOB rows on the larger targets are single-run (each takes 6+ min).
+Four real-world Go projects on Apple M1 Pro 10-core, gomutants v0.2.2 vs gremlins v0.6.0, matched 5-operator set (gremlins' defaults), `workers=10`, `--cache=off`, `GOTOOLCHAIN=go1.25.7` (gremlins is broken on Go 1.26.x). Engine and gremlins rows are 3-run medians; cold-OOB rows on the larger targets are single-run.
 
 **Engine wall-clock (cold cache, like-for-like operators):**
 
