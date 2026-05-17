@@ -38,8 +38,6 @@ type goListJSON struct {
 }
 
 // ResolvePackages runs `go list -json` to resolve package patterns.
-// tags is forwarded as `-tags=<value>` (empty string skips the flag) so
-// build-tagged GoFiles/TestGoFiles appear in the JSON listing.
 func ResolvePackages(ctx context.Context, dir string, patterns []string, tags string) ([]Package, error) {
 	args := []string{"list", "-json"}
 	if tags != "" {

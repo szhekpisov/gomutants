@@ -79,8 +79,7 @@ type compiledPkg struct {
 
 // BuildTestMap enumerates tests in the given packages, compiles each package's
 // test binary once, then runs each test function against the compiled binary
-// with coverage. Uses parallel workers. tags is forwarded as `-tags=<value>`
-// to every inner `go test` / `go list` invocation (empty string skips it).
+// with coverage. Uses parallel workers.
 func BuildTestMap(ctx context.Context, projectDir string, packages []string, coverPkg, tags string, tmpDir string, workers int) (*TestMap, error) {
 	// 1. Enumerate all test function names.
 	tests, err := listTestsFunc(ctx, projectDir, packages, tags)

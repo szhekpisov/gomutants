@@ -48,9 +48,7 @@ func childGOMAXPROCSFor(workers int) int {
 }
 
 // NewPool creates a worker pool. testCPU == 0 means "don't pass -cpu to the
-// inner go test" (let go test default to GOMAXPROCS). tags is the
-// comma-separated build-tag list forwarded as `-tags=<value>` to each
-// inner `go test` (empty string skips the flag).
+// inner go test" (let go test default to GOMAXPROCS).
 func NewPool(workers, testCPU int, policy TimeoutPolicy, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap, tags string) *Pool {
 	return &Pool{
 		workers:    workers,
@@ -198,7 +196,6 @@ func mutantLess(a, b mutator.Mutant) bool {
 }
 
 // MeasureBaseline runs the test suite once to determine baseline duration.
-// tags is forwarded as `-tags=<value>` (empty string skips the flag).
 func MeasureBaseline(ctx context.Context, projectDir string, packages []string, tags string) (time.Duration, error) {
 	args := []string{"test", "-count=1"}
 	if tags != "" {
@@ -220,7 +217,6 @@ func MeasureBaseline(ctx context.Context, projectDir string, packages []string, 
 }
 
 // RunCoverage runs go test with coverage and returns the profile path.
-// tags is forwarded as `-tags=<value>` (empty string skips the flag).
 func RunCoverage(ctx context.Context, projectDir string, packages []string, coverPkg, tags string, tmpDir string) (string, error) {
 	profilePath := filepath.Join(tmpDir, "coverage.out")
 
