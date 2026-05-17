@@ -114,7 +114,7 @@ See [`docs/performance.md`](docs/performance.md) for full per-target tables, NOT
 ### Go Install
 
 ```bash
-go install github.com/szhekpisov/gomutants@v0.2.2
+go install github.com/szhekpisov/gomutants@564651b902e1c9a9bf5da154126532e276e4cee5 # v0.2.3
 ```
 
 Make sure `$GOPATH/bin` is in your `PATH`:
@@ -130,10 +130,10 @@ The minimum supported version of Go for gomutants is **1.26**, both for building
 gomutants is published as a composite action:
 
 ```yaml
-- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
   with:
     fetch-depth: 0  # required so --changed-since can reach the base ref
-- uses: szhekpisov/gomutants@v0.2.2
+- uses: szhekpisov/gomutants@564651b902e1c9a9bf5da154126532e276e4cee5 # v0.2.3
   with:
     args: --changed-since origin/${{ github.base_ref }} ./...
 ```
