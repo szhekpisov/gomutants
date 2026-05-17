@@ -20,9 +20,9 @@ import (
 
 // Package holds resolved package info from go list.
 type Package struct {
-	Dir        string   // Absolute directory path.
-	ImportPath string   // e.g. "github.com/szhekpisov/gomutants/internal/discover"
-	GoFiles    []string // .go source files (base names).
+	Dir         string   // Absolute directory path.
+	ImportPath  string   // e.g. "github.com/szhekpisov/gomutants/internal/discover"
+	GoFiles     []string // .go source files (base names).
 	TestGoFiles []string // _test.go files (base names).
 }
 
@@ -38,8 +38,12 @@ type goListJSON struct {
 }
 
 // ResolvePackages runs `go list -json` to resolve package patterns.
-func ResolvePackages(ctx context.Context, dir string, patterns []string) ([]Package, error) {
-	args := append([]string{"list", "-json"}, patterns...)
+func ResolvePackages(ctx context.Context, dir string, patterns []string, tags string) ([]Package, error) {
+	args := []string{"list", "-json"}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
+	}
+	args = append(args, patterns...)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = dir
 

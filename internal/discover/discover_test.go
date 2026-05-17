@@ -252,8 +252,8 @@ func TestPreReadFilesMissing(t *testing.T) {
 func TestResolvePackagesIntegration(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"go.mod":   "module testmod\n\ngo 1.26\n",
-		"add.go":   "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
+		"go.mod": "module testmod\n\ngo 1.26\n",
+		"add.go": "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -261,7 +261,7 @@ func TestResolvePackagesIntegration(t *testing.T) {
 		}
 	}
 
-	pkgs, err := ResolvePackages(context.Background(), dir, []string{"testmod"})
+	pkgs, err := ResolvePackages(context.Background(), dir, []string{"testmod"}, "")
 	if err != nil {
 		t.Fatalf("ResolvePackages: %v", err)
 	}
@@ -273,6 +273,58 @@ func TestResolvePackagesIntegration(t *testing.T) {
 	}
 	if len(pkgs[0].GoFiles) == 0 {
 		t.Error("GoFiles should not be empty")
+	}
+}
+
+// TestResolvePackagesTags kills BRANCH_IF / STATEMENT_REMOVE on the
+// `if tags != "" { args = append(args, "-tags="+tags) }` block in
+// ResolvePackages: without it, build-tagged source files are never
+// listed by `go list -json`, and downstream discovery silently sees
+// no mutants for them.
+func TestResolvePackagesTags(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":         "module testmod\n\ngo 1.26\n",
+		"plain.go":       "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
+		"integration.go": "//go:build integration\n\npackage testmod\n\nfunc Mul(a, b int) int { return a * b }\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Without --tags, integration.go must be absent from GoFiles.
+	pkgsNoTag, err := ResolvePackages(context.Background(), dir, []string{"testmod"}, "")
+	if err != nil {
+		t.Fatalf("ResolvePackages(no tags): %v", err)
+	}
+	if len(pkgsNoTag) != 1 {
+		t.Fatalf("expected 1 package, got %d", len(pkgsNoTag))
+	}
+	for _, f := range pkgsNoTag[0].GoFiles {
+		if f == "integration.go" {
+			t.Errorf("integration.go must NOT appear in GoFiles without --tags; got: %v", pkgsNoTag[0].GoFiles)
+		}
+	}
+
+	// With --tags=integration, integration.go must appear in GoFiles.
+	pkgsWithTag, err := ResolvePackages(context.Background(), dir, []string{"testmod"}, "integration")
+	if err != nil {
+		t.Fatalf("ResolvePackages(tags=integration): %v", err)
+	}
+	if len(pkgsWithTag) != 1 {
+		t.Fatalf("expected 1 package, got %d", len(pkgsWithTag))
+	}
+	found := false
+	for _, f := range pkgsWithTag[0].GoFiles {
+		if f == "integration.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("integration.go must appear in GoFiles with --tags=integration; got: %v — STATEMENT_REMOVE on the `-tags=` append survived", pkgsWithTag[0].GoFiles)
 	}
 }
 
@@ -318,7 +370,7 @@ func TestDecodeGoListJSONPkgError(t *testing.T) {
 }
 
 func TestResolvePackagesError(t *testing.T) {
-	_, err := ResolvePackages(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"})
+	_, err := ResolvePackages(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"}, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -329,7 +381,6 @@ func TestResolvePackagesError(t *testing.T) {
 		t.Errorf("error should include stderr content, got: %q", msg)
 	}
 }
-
 
 func TestDiscoverMultiPackage(t *testing.T) {
 	dir := t.TempDir()

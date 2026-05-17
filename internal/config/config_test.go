@@ -47,6 +47,7 @@ output: report.json
 dry-run: true
 verbose: true
 quiet: true
+tags: integration,e2e
 disable:
   - BRANCH_IF
 only:
@@ -90,6 +91,9 @@ only:
 	}
 	if len(cfg.Only) != 1 || cfg.Only[0] != "ARITHMETIC_BASE" {
 		t.Errorf("Only=%v, want [ARITHMETIC_BASE]", cfg.Only)
+	}
+	if cfg.Tags != "integration,e2e" {
+		t.Errorf("Tags=%q, want %q", cfg.Tags, "integration,e2e")
 	}
 }
 
@@ -199,6 +203,7 @@ func TestApplyFlags(t *testing.T) {
 		Only:               "ARITHMETIC_BASE",
 		ChangedSince:       "main",
 		Cache:              "cache.json",
+		Tags:               "integration",
 		DryRun:             true,
 		Verbose:            true,
 		Quiet:              true,
@@ -242,6 +247,9 @@ func TestApplyFlags(t *testing.T) {
 	}
 	if cfg.Cache != "cache.json" {
 		t.Errorf("Cache=%q, want cache.json", cfg.Cache)
+	}
+	if cfg.Tags != "integration" {
+		t.Errorf("Tags=%q, want integration", cfg.Tags)
 	}
 	if !cfg.DryRun {
 		t.Error("DryRun should be true")
