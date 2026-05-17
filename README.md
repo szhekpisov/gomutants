@@ -1,3 +1,12 @@
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutants/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutants)
+[![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutants)](https://goreportcard.com/report/github.com/szhekpisov/gomutants)
+[![codecov](https://codecov.io/gh/szhekpisov/gomutant/graph/badge.svg?token=XNXMEJDGV2)](https://codecov.io/gh/szhekpisov/gomutant)
+[![Mutation testing badge](https://img.shields.io/endpoint?style=flat&url=https%3A%2F%2Fbadge-api.stryker-mutator.io%2Fgithub.com%2Fszhekpisov%2Fgomutants%2Fmain)](https://dashboard.stryker-mutator.io/reports/github.com/szhekpisov/gomutants/main)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=szhekpisov_gomutants&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=szhekpisov_gomutants)
+[![Security & Static Analysis](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/szhekpisov/gomutants.svg)](https://pkg.go.dev/github.com/szhekpisov/gomutants)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 # gomutants
 
   A fast mutation tester for Go for those who love flexibility and hate to wait.
@@ -6,14 +15,6 @@
   - Best for local testing — incremental cache that makes warm reruns ~120× faster.
   - Fully configurable — specify mutators, packages, and tests you want to run.
   - Built with performance in mind — adaptive timeouts, OOM safety net, and bounded per-worker concurrency that keeps parallel mutants from oversubscribing CPU.
-
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/szhekpisov/gomutants/badge)](https://scorecard.dev/viewer/?uri=github.com/szhekpisov/gomutants)
-[![Go Report Card](https://goreportcard.com/badge/github.com/szhekpisov/gomutants)](https://goreportcard.com/report/github.com/szhekpisov/gomutants)
-[![Go Reference](https://pkg.go.dev/badge/github.com/szhekpisov/gomutants.svg)](https://pkg.go.dev/github.com/szhekpisov/gomutants)
-[![codecov](https://codecov.io/gh/szhekpisov/gomutant/graph/badge.svg?token=XNXMEJDGV2)](https://codecov.io/gh/szhekpisov/gomutant)
-[![Mutation testing badge](https://img.shields.io/endpoint?style=flat&url=https%3A%2F%2Fbadge-api.stryker-mutator.io%2Fgithub.com%2Fszhekpisov%2Fgomutants%2Fmain)](https://dashboard.stryker-mutator.io/reports/github.com/szhekpisov/gomutants/main)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Security & Static Analysis](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/szhekpisov/gomutants/actions/workflows/security.yml)
 
 ## Table of Contents
 
@@ -46,7 +47,7 @@
 
 ## Why gomutants?
 
-* **Built for PR gates.** `--changed-since <ref>` scopes a run to mutants on lines added or modified since the given git ref — fast enough to gate every pull request without re-running the full mutation suite on untouched code. This repo's CI uses it to gate on "no LIVED mutant on changed lines."
+* **Built for PR gates.** `--changed-since <ref>` runs mutants on lines added or modified since the given git ref — fast enough to gate every pull request without re-running the full mutation suite on untouched code.
 
 * **Fastest at scale.** On full-module runs with many mutants, gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant than the nearest Go mutation tester — and warm reruns with the incremental cache enabled finish 120–150× faster than cold runs (e.g. a 46-minute `prometheus/tsdb` cold run becomes 19s warm). See [`docs/performance.md`](docs/performance.md) for methodology and external-target benchmarks.
 
@@ -54,7 +55,7 @@
 
 ## Where gomutants isn't the fit?
 
-One-off manual runs, thin test suites (<70% line coverage), Go < 1.26, or workflows without a CI gate — the one-time setup cost (coverage collection, baseline measurement, per-test coverage map build) only pays off when many mutants share it.
+One-off manual runs or thin test suites (<70% line coverage) — the one-time setup cost (coverage collection, baseline measurement, per-test coverage map build) only pays off when many mutants share it.
 
 ## How It Compares
 
@@ -79,7 +80,7 @@ One-off manual runs, thin test suites (<70% line coverage), Go < 1.26, or workfl
 
 ### Benchmark snapshot
 
-Four real-world Go projects on Apple M1 Pro 10-core, gomutants v0.2.2 vs gremlins v0.6.0, matched 5-operator set (gremlins' defaults), `workers=10`, `--cache=off`, `GOTOOLCHAIN=go1.25.7` (gremlins is broken on Go 1.26.x). Engine and gremlins rows are 3-run medians; cold-OOB rows on the larger targets are single-run (each takes 6+ min).
+Four real-world Go projects on Apple M1 Pro 10-core, gomutants v0.2.2 vs gremlins v0.6.0, matched 5-operator set (gremlins' defaults), `workers=10`, `--cache=off`, `GOTOOLCHAIN=go1.25.7` (gremlins is broken on Go 1.26.x). Engine and gremlins rows are 3-run medians; cold-OOB rows on the larger targets are single-run.
 
 **Engine wall-clock (cold cache, like-for-like operators):**
 
@@ -113,7 +114,7 @@ See [`docs/performance.md`](docs/performance.md) for full per-target tables, NOT
 ### Go Install
 
 ```bash
-go install github.com/szhekpisov/gomutants@v0.2.2
+go install github.com/szhekpisov/gomutants@564651b902e1c9a9bf5da154126532e276e4cee5 # v0.2.3
 ```
 
 Make sure `$GOPATH/bin` is in your `PATH`:
@@ -129,10 +130,10 @@ The minimum supported version of Go for gomutants is **1.26**, both for building
 gomutants is published as a composite action:
 
 ```yaml
-- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
   with:
     fetch-depth: 0  # required so --changed-since can reach the base ref
-- uses: szhekpisov/gomutants@v0.2.2
+- uses: szhekpisov/gomutants@564651b902e1c9a9bf5da154126532e276e4cee5 # v0.2.3
   with:
     args: --changed-since origin/${{ github.base_ref }} ./...
 ```
