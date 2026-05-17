@@ -232,6 +232,7 @@ func run(ctx context.Context, args []string) error {
 		only               string
 		changedSince       string
 		cachePath          string
+		tags               string
 		annotations        string
 		strykerOutput      string
 		htmlOutput         string
@@ -283,6 +284,8 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
 	fs.StringVar(&cachePath, "cache", "", "path to incremental-analysis cache file; skips mutants whose source and tests are byte-identical to the cached run. Default .gomutants-cache.json. Pass --cache=off to disable")
+	fs.StringVar(&tags, "tags", "", "comma-separated Go build tags forwarded as -tags=… to every inner go test / go list (e.g. integration,e2e)")
+	fs.StringVar(&tags, "t", "", "shorthand for --tags")
 	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
 	fs.StringVar(&strykerOutput, "stryker-output", "", "also write a Stryker mutation-testing-elements report at this path (HTML viewer / dashboard)")
 	fs.StringVar(&htmlOutput, "html-output", "", "also write a self-contained interactive HTML mutation report at this path (Stryker mutation-testing-elements viewer, no network deps)")
@@ -336,6 +339,7 @@ func run(ctx context.Context, args []string) error {
 		Only:               only,
 		ChangedSince:       changedSince,
 		Cache:              cachePath,
+		Tags:               tags,
 		DryRun:             dryRun,
 		Verbose:            verbose,
 		Quiet:              quiet,
@@ -404,7 +408,7 @@ func run(ctx context.Context, args []string) error {
 
 	// 1. Resolve packages.
 	term.Phase("Resolving packages...")
-	pkgs, err := discover.ResolvePackages(ctx, projectDir, packages)
+	pkgs, err := discover.ResolvePackages(ctx, projectDir, packages, cfg.Tags)
 	if err != nil {
 		return err
 	}
@@ -435,9 +439,9 @@ func run(ctx context.Context, args []string) error {
 		// Hash failures (unreadable file/dir) fall through to a fresh
 		// coverage run rather than aborting — same conservative policy
 		// as the per-mutant Lookup path.
-		if pkgDirs, derr := coveragePkgDirs(ctx, projectDir, pkgs, cfg.CoverPkg); derr == nil {
+		if pkgDirs, derr := coveragePkgDirs(ctx, projectDir, pkgs, cfg.CoverPkg, cfg.Tags); derr == nil {
 			toolchain := fmt.Sprintf("gomutants/%s|go/%s", runtime.Version(), goVersionFunc(ctx))
-			if k, herr := hasher.HashCoverageInputs(pkgDirs, projectDir, cfg.CoverPkg, toolchain, captureCoverageEnv()); herr == nil {
+			if k, herr := hasher.HashCoverageInputs(pkgDirs, projectDir, cfg.CoverPkg, toolchain, captureCoverageEnv(), cfg.Tags); herr == nil {
 				coverageKey = k
 			}
 		}
@@ -451,7 +455,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if profile == nil {
-		profilePath, rerr := runCoverageFunc(ctx, projectDir, packages, cfg.CoverPkg, tmpDir)
+		profilePath, rerr := runCoverageFunc(ctx, projectDir, packages, cfg.CoverPkg, cfg.Tags, tmpDir)
 		if rerr != nil {
 			return rerr
 		}
@@ -477,7 +481,7 @@ func run(ctx context.Context, args []string) error {
 
 	// 4. Measure baseline test duration.
 	term.Phase("Measuring baseline...")
-	baseline, err := measureBaselineFunc(ctx, projectDir, packages)
+	baseline, err := measureBaselineFunc(ctx, projectDir, packages, cfg.Tags)
 	if err != nil {
 		return err
 	}
@@ -562,7 +566,7 @@ func run(ctx context.Context, args []string) error {
 
 	// 7. Build per-test coverage map.
 	term.Phase("Building per-test coverage map...")
-	testMap, err := buildTestMapFunc(ctx, projectDir, packages, cfg.CoverPkg, tmpDir, cfg.Workers)
+	testMap, err := buildTestMapFunc(ctx, projectDir, packages, cfg.CoverPkg, cfg.Tags, tmpDir, cfg.Workers)
 	if err != nil {
 		// Non-fatal: fall back to running all tests per mutant.
 		fmt.Fprintf(stderr, "warning: per-test coverage map failed: %v\n", err)
@@ -680,7 +684,7 @@ func run(ctx context.Context, args []string) error {
 		lastCheckpoint = time.Now()
 	}
 
-	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, policy, tmpDir, srcCache, projectDir, testMap)
+	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, policy, tmpDir, srcCache, projectDir, testMap, cfg.Tags)
 	// Seed lastCheckpoint so the first periodic checkpoint fires one full
 	// interval into the run, not on the very first mutant.
 	lastCheckpoint = time.Now()
@@ -805,7 +809,7 @@ func captureCoverageEnv() string {
 // matching the target patterns), this is exactly `pkgs`. With a
 // broader -coverpkg pattern, we resolve it separately so the hash
 // covers every package that go test will instrument.
-func coveragePkgDirs(ctx context.Context, projectDir string, pkgs []discover.Package, coverPkg string) ([]string, error) {
+func coveragePkgDirs(ctx context.Context, projectDir string, pkgs []discover.Package, coverPkg, tags string) ([]string, error) {
 	dirs := make([]string, 0, len(pkgs))
 	seen := make(map[string]bool, len(pkgs))
 	for _, p := range pkgs {
@@ -817,7 +821,7 @@ func coveragePkgDirs(ctx context.Context, projectDir string, pkgs []discover.Pac
 	if coverPkg == "" {
 		return dirs, nil
 	}
-	expanded, err := resolveCoverPkgFunc(ctx, projectDir, []string{coverPkg})
+	expanded, err := resolveCoverPkgFunc(ctx, projectDir, []string{coverPkg}, tags)
 	if err != nil {
 		return nil, err
 	}

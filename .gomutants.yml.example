@@ -19,6 +19,11 @@ timeout-coefficient: 10
 # Useful when your tests are in a separate package from the code under test.
 # coverpkg: "./pkg/..."
 
+# Comma-separated Go build tags forwarded as `-tags=…` to every inner
+# go test / go list invocation. Required when your tests or source sit
+# behind `//go:build <tag>` constraints. Empty omits the flag.
+# tags: "integration,e2e"
+
 # JSON report output path (default: mutation-report.json).
 output: mutation-report.json
 

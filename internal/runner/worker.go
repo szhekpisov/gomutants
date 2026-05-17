@@ -82,8 +82,8 @@ var compileErrorRe = regexp.MustCompile(`\.go:\d+:\d+:`)
 // lets us hit the unhappy paths in NewWorker / Worker.Test (write failure,
 // fork/exec failure) without contriving filesystem or PATH state.
 var (
-	writeFileFunc       = os.WriteFile
-	execCommandContext  = exec.CommandContext
+	writeFileFunc      = os.WriteFile
+	execCommandContext = exec.CommandContext
 )
 
 // shortFlagFromEnv reports whether the inner `go test` should be invoked
@@ -106,7 +106,7 @@ type Worker struct {
 	policy      TimeoutPolicy
 	sourceCache map[string][]byte // Read-only, shared across workers.
 	projectDir  string            // Working directory for go test.
-	testMap     *coverage.TestMap  // Per-test coverage map (may be nil).
+	testMap     *coverage.TestMap // Per-test coverage map (may be nil).
 
 	// childGOMAXPROCS, if > 0, caps the GOMAXPROCS of each `go test` child.
 	// Limits compile + test runtime parallelism per child so N parallel workers
@@ -119,6 +119,11 @@ type Worker struct {
 	// the intended pairing is --workers=1 --test-cpu=N (or any combo
 	// where --test-cpu <= NumCPU/--workers).
 	testCPU int
+
+	// tags, if non-empty, is forwarded to the inner `go test` as
+	// `-tags=<value>` so build-tagged source/test files compile in. Set
+	// by Pool.createWorkers from Pool.tags, mirroring testCPU.
+	tags string
 }
 
 // NewWorker creates a worker with stable temp file paths.
@@ -312,6 +317,9 @@ func (w *Worker) buildTestArgs(m mutator.Mutant, short bool, timeout time.Durati
 	}
 	if w.testCPU > 0 {
 		args = append(args, fmt.Sprintf("-cpu=%d", w.testCPU))
+	}
+	if w.tags != "" {
+		args = append(args, "-tags="+w.tags)
 	}
 	// GOMUTANTS_TEST_SHORT=1 propagates -short to inner go test, letting the
 	// target suite skip heavy integration tests. Used for gomutants self-testing

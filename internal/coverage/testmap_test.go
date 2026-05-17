@@ -503,14 +503,14 @@ func TestProcessWorkSkipsEmptyBlocks(t *testing.T) {
 func TestBuildPkgBinsSkipsCompileFailure(t *testing.T) {
 	orig := compileTestBinaryFunc
 	defer func() { compileTestBinaryFunc = orig }()
-	compileTestBinaryFunc = func(_ context.Context, _, _, _ string, pkg resolvedPkg) (*compiledPkg, error) {
+	compileTestBinaryFunc = func(_ context.Context, _, _, _, _ string, pkg resolvedPkg) (*compiledPkg, error) {
 		if pkg.importPath == "fail" {
 			return nil, errors.New("compile failed")
 		}
 		return &compiledPkg{importPath: pkg.importPath, binPath: "x", dir: pkg.dir}, nil
 	}
 
-	bins := buildPkgBins(context.Background(), "", "", "", []resolvedPkg{
+	bins := buildPkgBins(context.Background(), "", "", "", "", []resolvedPkg{
 		{importPath: "fail"},
 		{importPath: "ok"},
 	})
@@ -537,7 +537,7 @@ func TestCompileTestBinaryReturnsErrOnRunFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cp, err := compileTestBinary(context.Background(), pkg.dir, tmpDir, "", pkg)
+	cp, err := compileTestBinary(context.Background(), pkg.dir, tmpDir, "", "", pkg)
 	if err == nil {
 		t.Errorf("expected error from cmd.Run failure, got nil with cp=%+v — BRANCH_IF on the run-error return lets a stale binary masquerade as success", cp)
 	}
@@ -561,7 +561,7 @@ func TestCompileTestBinaryReturnsErrOnMissingBinary(t *testing.T) {
 		return nil, errors.New("injected missing-binary")
 	}
 
-	cp, err := compileTestBinary(context.Background(), dir, tmpDir, "", resolvedPkg{importPath: "testmod", dir: dir})
+	cp, err := compileTestBinary(context.Background(), dir, tmpDir, "", "", resolvedPkg{importPath: "testmod", dir: dir})
 	if err == nil {
 		t.Errorf("expected error when statFileFunc fails, got nil with cp=%+v — BRANCH_IF on the missing-binary return elides the early exit", cp)
 	}
@@ -608,7 +608,7 @@ func TestNeedsCwd(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	pkg := resolvedPkg{importPath: "cwdmod", dir: dir}
-	cp, err := compileTestBinary(context.Background(), dir, tmpDir, "", pkg)
+	cp, err := compileTestBinary(context.Background(), dir, tmpDir, "", "", pkg)
 	if err != nil {
 		t.Fatalf("compileTestBinary: %v", err)
 	}
@@ -636,16 +636,16 @@ func TestBuildTestMapContinuesPastFailedCompile(t *testing.T) {
 		runCompiledTestFunc = origRun
 	}()
 
-	resolvePackagesFunc = func(_ context.Context, _ string, _ []string) ([]resolvedPkg, error) {
+	resolvePackagesFunc = func(_ context.Context, _ string, _ []string, _ string) ([]resolvedPkg, error) {
 		return []resolvedPkg{
 			{importPath: "pkg.fail", dir: t.TempDir()},
 			{importPath: "pkg.ok", dir: t.TempDir()},
 		}, nil
 	}
-	listTestsFunc = func(_ context.Context, _ string, _ []string) ([]testEntry, error) {
+	listTestsFunc = func(_ context.Context, _ string, _ []string, _ string) ([]testEntry, error) {
 		return []testEntry{{name: "TestA", pkg: "pkg.ok"}}, nil
 	}
-	compileTestBinaryFunc = func(_ context.Context, _, _, _ string, pkg resolvedPkg) (*compiledPkg, error) {
+	compileTestBinaryFunc = func(_ context.Context, _, _, _, _ string, pkg resolvedPkg) (*compiledPkg, error) {
 		if pkg.importPath == "pkg.fail" {
 			return nil, errors.New("compile failed")
 		}
@@ -660,7 +660,7 @@ func TestBuildTestMapContinuesPastFailedCompile(t *testing.T) {
 		return nil, 0
 	}
 
-	_, err := BuildTestMap(context.Background(), t.TempDir(), []string{"./..."}, "", t.TempDir(), 1)
+	_, err := BuildTestMap(context.Background(), t.TempDir(), []string{"./...."}, "", "", t.TempDir(), 1)
 	if err != nil {
 		t.Fatalf("BuildTestMap: %v", err)
 	}
@@ -715,4 +715,3 @@ func TestSanitize(t *testing.T) {
 		}
 	}
 }
-

@@ -79,21 +79,22 @@ type compiledPkg struct {
 
 // BuildTestMap enumerates tests in the given packages, compiles each package's
 // test binary once, then runs each test function against the compiled binary
-// with coverage. Uses parallel workers.
-func BuildTestMap(ctx context.Context, projectDir string, packages []string, coverPkg string, tmpDir string, workers int) (*TestMap, error) {
+// with coverage. Uses parallel workers. tags is forwarded as `-tags=<value>`
+// to every inner `go test` / `go list` invocation (empty string skips it).
+func BuildTestMap(ctx context.Context, projectDir string, packages []string, coverPkg, tags string, tmpDir string, workers int) (*TestMap, error) {
 	// 1. Enumerate all test function names.
-	tests, err := listTestsFunc(ctx, projectDir, packages)
+	tests, err := listTestsFunc(ctx, projectDir, packages, tags)
 	if err != nil {
 		return nil, fmt.Errorf("listing tests: %w", err)
 	}
 
 	// 2. Resolve package patterns to individual packages and compile test binaries.
-	resolvedPkgs, err := resolvePackagesFunc(ctx, projectDir, packages)
+	resolvedPkgs, err := resolvePackagesFunc(ctx, projectDir, packages, tags)
 	if err != nil {
 		return nil, fmt.Errorf("resolving packages: %w", err)
 	}
 
-	pkgBins := buildPkgBins(ctx, projectDir, tmpDir, coverPkg, resolvedPkgs)
+	pkgBins := buildPkgBins(ctx, projectDir, tmpDir, coverPkg, tags, resolvedPkgs)
 
 	// 3. Run tests in parallel using compiled binaries.
 	work := make(chan testEntry, len(tests))
@@ -223,10 +224,10 @@ func feedWork(ctx context.Context, tests []testEntry, work chan<- testEntry) {
 // by import path. Compile failures (no tests, syntax errors) are skipped
 // silently — extracted from BuildTestMap so the skip behavior can be
 // tested without driving the whole pipeline.
-func buildPkgBins(ctx context.Context, projectDir, tmpDir, coverPkg string, pkgs []resolvedPkg) map[string]*compiledPkg {
+func buildPkgBins(ctx context.Context, projectDir, tmpDir, coverPkg, tags string, pkgs []resolvedPkg) map[string]*compiledPkg {
 	pkgBins := make(map[string]*compiledPkg)
 	for _, pkg := range pkgs {
-		cp, err := compileTestBinaryFunc(ctx, projectDir, tmpDir, coverPkg, pkg)
+		cp, err := compileTestBinaryFunc(ctx, projectDir, tmpDir, coverPkg, tags, pkg)
 		if err != nil {
 			// Package may have no tests, fail to compile, or produce no
 			// binary; all are non-fatal — skip and keep going.
@@ -241,11 +242,14 @@ func buildPkgBins(ctx context.Context, projectDir, tmpDir, coverPkg string, pkgs
 // the compiledPkg metadata. Errors from `go test -c` and from a missing
 // output file (a package with no tests produces no binary) are folded
 // into the returned error so callers can `continue` on a single check.
-func compileTestBinary(ctx context.Context, projectDir, tmpDir, coverPkg string, pkg resolvedPkg) (*compiledPkg, error) {
+func compileTestBinary(ctx context.Context, projectDir, tmpDir, coverPkg, tags string, pkg resolvedPkg) (*compiledPkg, error) {
 	binPath := filepath.Join(tmpDir, "testbin-"+sanitize(pkg.importPath)+".test")
 	args := []string{"test", "-c", "-o", binPath, "-cover"}
 	if coverPkg != "" {
 		args = append(args, "-coverpkg="+coverPkg)
+	}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
 	}
 	args = append(args, pkg.importPath)
 
@@ -407,11 +411,15 @@ type testEntry struct {
 	pkg  string
 }
 
-func listTests(ctx context.Context, projectDir string, packages []string) ([]testEntry, error) {
+func listTests(ctx context.Context, projectDir string, packages []string, tags string) ([]testEntry, error) {
 	var allTests []testEntry
 
 	for _, pkg := range packages {
-		args := []string{"test", "-list", ".", pkg}
+		args := []string{"test", "-list", "."}
+		if tags != "" {
+			args = append(args, "-tags="+tags)
+		}
+		args = append(args, pkg)
 		cmd := exec.CommandContext(ctx, "go", args...)
 		cmd.Dir = projectDir
 
@@ -451,8 +459,12 @@ type resolvedPkg struct {
 	dir        string
 }
 
-func resolvePackages(ctx context.Context, projectDir string, patterns []string) ([]resolvedPkg, error) {
-	args := append([]string{"list", "-f", "{{.ImportPath}}\t{{.Dir}}"}, patterns...)
+func resolvePackages(ctx context.Context, projectDir string, patterns []string, tags string) ([]resolvedPkg, error) {
+	args := []string{"list", "-f", "{{.ImportPath}}\t{{.Dir}}"}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
+	}
+	args = append(args, patterns...)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = projectDir
 

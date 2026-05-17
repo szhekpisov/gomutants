@@ -42,6 +42,10 @@ type Config struct {
 	Only            []string `yaml:"only"`
 	ChangedSince    string   `yaml:"changed-since"`
 	Cache           string   `yaml:"cache"`
+	// Tags is the comma-separated build-tag list forwarded as `-tags=…`
+	// to every inner `go test` / `go list` invocation. Empty means no
+	// -tags flag is added.
+	Tags string `yaml:"tags"`
 	// CheckpointInterval is how often completed mutant outcomes are
 	// flushed to the cache file mid-run, so a hard kill (OOM, CI timeout,
 	// SIGKILL) loses at most this much progress. 0 disables periodic
@@ -185,6 +189,7 @@ type Flags struct {
 	Only               string
 	ChangedSince       string
 	Cache              string
+	Tags               string
 	DryRun             bool
 	Verbose            bool
 	Quiet              bool
@@ -243,6 +248,9 @@ func (c *Config) applyStringFlags(f Flags) {
 	}
 	if f.Cache != "" {
 		c.Cache = f.Cache
+	}
+	if f.Tags != "" {
+		c.Tags = f.Tags
 	}
 }
 
