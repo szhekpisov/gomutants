@@ -266,7 +266,7 @@ func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
 // This keeps the helper usable on modules with no recorded checksums
 // (single-module repos with no external deps) without an extra branch
 // at every call site.
-func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, toolchain, envSnapshot string) (string, error) {
+func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tags, toolchain, envSnapshot string) (string, error) {
 	// 1. Collect every .go file under pkgDirs. pkgDirs is deduped first
 	// so the per-file walk doesn't need a seen-map: within a single dir,
 	// ReadDir entries already have unique names, and across distinct
@@ -333,6 +333,7 @@ func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tool
 	// 3. Mix in the configuration / toolchain dimensions with the same
 	// length-prefixed framing so adjacent values can't alias.
 	fmt.Fprintf(hh, "coverpkg:%d:%s|", len(coverPkg), coverPkg)
+	fmt.Fprintf(hh, "tags:%d:%s|", len(tags), tags)
 	fmt.Fprintf(hh, "toolchain:%d:%s|", len(toolchain), toolchain)
 	fmt.Fprintf(hh, "env:%d:%s|", len(envSnapshot), envSnapshot)
 

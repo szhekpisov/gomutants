@@ -37,9 +37,15 @@ type goListJSON struct {
 	} `json:"Error"`
 }
 
-// ResolvePackages runs `go list -json` to resolve package patterns.
-func ResolvePackages(ctx context.Context, dir string, patterns []string) ([]Package, error) {
-	args := append([]string{"list", "-json"}, patterns...)
+// ResolvePackages runs `go list -json` to resolve package patterns. tags,
+// when non-empty, is forwarded as `-tags=<value>` so packages whose only
+// files are behind matching build constraints are still resolved.
+func ResolvePackages(ctx context.Context, dir string, patterns []string, tags string) ([]Package, error) {
+	args := []string{"list", "-json"}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
+	}
+	args = append(args, patterns...)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = dir
 

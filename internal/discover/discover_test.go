@@ -261,7 +261,7 @@ func TestResolvePackagesIntegration(t *testing.T) {
 		}
 	}
 
-	pkgs, err := ResolvePackages(context.Background(), dir, []string{"testmod"})
+	pkgs, err := ResolvePackages(context.Background(), dir, []string{"testmod"}, "")
 	if err != nil {
 		t.Fatalf("ResolvePackages: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestDecodeGoListJSONPkgError(t *testing.T) {
 }
 
 func TestResolvePackagesError(t *testing.T) {
-	_, err := ResolvePackages(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"})
+	_, err := ResolvePackages(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"}, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}

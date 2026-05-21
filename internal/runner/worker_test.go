@@ -785,6 +785,26 @@ func TestBuildTestArgsTestCPU(t *testing.T) {
 	}
 }
 
+// TestBuildTestArgsTags kills BRANCH_IF / CONDITIONALS_NEGATION on the
+// `if w.tags != ""` gate. With tags set the args must include the
+// `-tags=<value>` forwarded to the inner go test; with tags empty the
+// `-tags=` arg must be absent.
+func TestBuildTestArgsTags(t *testing.T) {
+	m := mutator.Mutant{Pkg: "mymod"}
+
+	wOn := &Worker{tags: "integration,debug", policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
+	argsOn := wOn.buildTestArgs(m, false, time.Second)
+	if !containsStr(argsOn, "-tags=integration,debug") {
+		t.Errorf("tags set: args %v missing -tags=integration,debug", argsOn)
+	}
+
+	wOff := &Worker{tags: "", policy: TimeoutPolicy{Global: time.Second}, overlayPath: "/tmp/o.json"}
+	argsOff := wOff.buildTestArgs(m, false, time.Second)
+	if anyHasPrefix(argsOff, "-tags=") {
+		t.Errorf("tags empty: args %v should not contain -tags=", argsOff)
+	}
+}
+
 // TestBuildTestArgsPackageArgLast kills STATEMENT_REMOVE on
 // `args = append(args, m.Pkg)`: removing that line leaves the command
 // without a package target. Asserting that the package shows up as the
@@ -829,7 +849,7 @@ func TestBuildTestArgsWithTestMap(t *testing.T) {
 	mustWrite("add.go", "package testmod\n\nfunc Add(a, b int) int { return a + b }\n")
 	mustWrite("add_test.go", "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) { if Add(1, 2) != 3 { t.Fatal(\"wrong\") } }\n")
 
-	tm, err := coverage.BuildTestMap(context.Background(), dir, []string{"testmod"}, "", t.TempDir(), 1)
+	tm, err := coverage.BuildTestMap(context.Background(), dir, []string{"testmod"}, "", "", t.TempDir(), 1)
 	if err != nil {
 		t.Fatalf("BuildTestMap: %v", err)
 	}

@@ -91,7 +91,7 @@ func TestChildGOMAXPROCSFor(t *testing.T) {
 }
 
 func TestPoolRunNoPending(t *testing.T) {
-	p := NewPool(2, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), nil, ".", nil)
+	p := NewPool(2, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, Status: mutator.StatusNotCovered},
 		{ID: 2, Status: mutator.StatusKilled},
@@ -117,7 +117,7 @@ func TestPoolRunNoPending(t *testing.T) {
 // untouched is the only observable handle we have on the early-return.
 func TestPoolRunNoPendingDoesNotCreateWorkers(t *testing.T) {
 	tmpDir := t.TempDir()
-	p := NewPool(2, 0, TimeoutPolicy{Global: time.Second}, tmpDir, nil, ".", nil)
+	p := NewPool(2, 0, "", TimeoutPolicy{Global: time.Second}, tmpDir, nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, Status: mutator.StatusKilled},
 	}
@@ -171,7 +171,7 @@ func TestMutantLessSortStability(t *testing.T) {
 // elided, every worker is created with childGOMAXPROCS=0 (the zero value),
 // so the GOMAXPROCS env override never gets propagated to inner go test.
 func TestPoolCreateWorkersAppliesGOMAXPROCS(t *testing.T) {
-	p := NewPool(4, 0, TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+	p := NewPool(4, 0, "", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
 	workers := p.createWorkers()
 	if len(workers) == 0 {
 		t.Fatal("expected workers; createWorkers returned none")
@@ -203,7 +203,7 @@ func TestPoolCreateWorkersContinuesPastFailure(t *testing.T) {
 		return &Worker{id: id, tmpSrcPath: filepath.Join(tmpDir, "src"), overlayPath: filepath.Join(tmpDir, "ovl"), policy: policy}, nil
 	}
 
-	p := NewPool(4, 0, TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+	p := NewPool(4, 0, "", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
 	var workers []*Worker
 	captured := captureStderr(t, func() {
 		workers = p.createWorkers()
@@ -227,7 +227,7 @@ func TestPoolNoWorkersLogsToStderr(t *testing.T) {
 		newWorkerFunc = func(int, string, TimeoutPolicy, map[string][]byte, string, *coverage.TestMap) (*Worker, error) {
 			return nil, errors.New("always fail")
 		}
-		p := NewPool(2, 0, TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+		p := NewPool(2, 0, "", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
 		mutants := []mutator.Mutant{
 			{ID: 1, File: "/abs/f.go", Pkg: "p", Status: mutator.StatusPending},
 		}
@@ -311,7 +311,7 @@ func TestPoolRunWorkerCtxErrCheckHitDeterministic(t *testing.T) {
 
 	// Single worker so the two mutants serialize through one goroutine —
 	// keeps the test's iteration-ordering guarantee tight.
-	p := NewPool(1, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 	mk := func(id int, repl string) mutator.Mutant {
 		return mutator.Mutant{
 			ID: id, File: srcPath, Pkg: "testmod",
@@ -352,7 +352,7 @@ func TestPoolRunCancelledNoCallback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	p := NewPool(1, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, File: srcPath, Pkg: "testmod", StartOffset: plusIdx, EndOffset: plusIdx + 1, Replacement: "-", Status: mutator.StatusPending},
 	}
@@ -387,7 +387,7 @@ func TestRunCoverageStdoutGoesToStderr(t *testing.T) {
 		// RunCoverage returns an error because the test fails; we don't
 		// care about the error itself, only the test output that should
 		// have been routed to os.Stderr.
-		_, _ = RunCoverage(context.Background(), dir, []string{"testmod"}, "", t.TempDir())
+		_, _ = RunCoverage(context.Background(), dir, []string{"testmod"}, "", "", t.TempDir())
 	})
 	if !strings.Contains(captured, marker) {
 		t.Errorf("marker %q not found in stderr capture; STATEMENT_REMOVE on `cmd.Stdout = os.Stderr` discards test output. Captured: %q", marker, captured)
@@ -399,7 +399,7 @@ func TestRunCoverageStdoutGoesToStderr(t *testing.T) {
 // statuses overwritten by the pending-mutant pipeline.
 func TestPoolRunEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
-	p := NewPool(2, 0, TimeoutPolicy{Global: 30 * time.Second}, tmpDir, nil, ".", nil)
+	p := NewPool(2, 0, "", TimeoutPolicy{Global: 30 * time.Second}, tmpDir, nil, ".", nil)
 
 	// nil input — Run must early-exit cleanly.
 	p.Run(context.Background(), nil, nil)
@@ -435,7 +435,7 @@ func TestPoolRunWithPending(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	p := NewPool(2, 0, TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
+	p := NewPool(2, 0, "", TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
 
 	mutants := []mutator.Mutant{
 		{
@@ -511,7 +511,7 @@ func TestPoolRunOnResultSerial(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	p := NewPool(4, 0, TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
+	p := NewPool(4, 0, "", TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
 
 	replacements := []string{"-", "*", "/", "%"}
 	mutants := make([]mutator.Mutant, len(replacements))
@@ -557,7 +557,7 @@ func TestPoolRunNoWorkersAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := NewPool(4, 0, TimeoutPolicy{Global: 30 * time.Second}, blocker, nil, ".", nil)
+	p := NewPool(4, 0, "", TimeoutPolicy{Global: 30 * time.Second}, blocker, nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, File: "/abs/f.go", Pkg: "p", Status: mutator.StatusPending},
 	}
@@ -592,7 +592,7 @@ func TestPoolRunNonDenseIDs(t *testing.T) {
 		}
 	}
 
-	p := NewPool(1, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 	mutants := []mutator.Mutant{
 		// Sparse IDs: 100 and 500. Not 1 and 2.
 		{ID: 100, File: srcPath, Pkg: "testmod",
@@ -630,7 +630,7 @@ func TestPoolRunCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	p := NewPool(1, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 
 	mutants := []mutator.Mutant{
 		{ID: 1, File: srcPath, Pkg: "testmod", StartOffset: plusIdx, EndOffset: plusIdx + 1, Replacement: "-", Status: mutator.StatusPending},
@@ -660,7 +660,7 @@ func TestPoolRunCancelledFeederExitsViaCtxDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	p := NewPool(1, 0, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 
 	const n = 64
 	mutants := make([]mutator.Mutant, n)
@@ -683,7 +683,7 @@ func TestPoolRunCancelledFeederExitsViaCtxDone(t *testing.T) {
 
 func TestMeasureBaseline(t *testing.T) {
 	dir := setupTestProject(t)
-	duration, err := MeasureBaseline(context.Background(), dir, []string{"testmod"})
+	duration, err := MeasureBaseline(context.Background(), dir, []string{"testmod"}, "")
 	if err != nil {
 		t.Fatalf("MeasureBaseline: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestMeasureBaseline(t *testing.T) {
 }
 
 func TestMeasureBaselineFailure(t *testing.T) {
-	_, err := MeasureBaseline(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"})
+	_, err := MeasureBaseline(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"}, "")
 	if err == nil {
 		t.Fatal("expected error for nonexistent package")
 	}
@@ -707,7 +707,7 @@ func TestMeasureBaselineFailure(t *testing.T) {
 func TestRunCoverage(t *testing.T) {
 	dir := setupTestProject(t)
 	tmpDir := t.TempDir()
-	profilePath, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "", tmpDir)
+	profilePath, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "", "", tmpDir)
 	if err != nil {
 		t.Fatalf("RunCoverage: %v", err)
 	}
@@ -725,14 +725,14 @@ func TestRunCoverage(t *testing.T) {
 func TestRunCoverageWithCoverpkg(t *testing.T) {
 	dir := setupTestProject(t)
 	tmpDir := t.TempDir()
-	_, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "testmod", tmpDir)
+	_, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "testmod", "", tmpDir)
 	if err != nil {
 		t.Fatalf("RunCoverage with coverpkg: %v", err)
 	}
 }
 
 func TestRunCoverageFailure(t *testing.T) {
-	_, err := RunCoverage(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"}, "", t.TempDir())
+	_, err := RunCoverage(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"}, "", "", t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for nonexistent package")
 	}
@@ -755,7 +755,7 @@ func TestRunCoverageFailure(t *testing.T) {
 func TestRunCoverageCoverPkgApplied(t *testing.T) {
 	dir := setupTestProject(t)
 	tmpDir := t.TempDir()
-	profilePath, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "completely/nonexistent/zzz", tmpDir)
+	profilePath, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "completely/nonexistent/zzz", "", tmpDir)
 	if err != nil {
 		t.Fatalf("RunCoverage: %v", err)
 	}
@@ -767,5 +767,54 @@ func TestRunCoverageCoverPkgApplied(t *testing.T) {
 	// Block lines (".go:") appearing means the flag was dropped by mutation.
 	if strings.Contains(string(data), ".go:") {
 		t.Errorf("coverpkg=nonexistent should produce empty coverage, but profile has block lines:\n%s", data)
+	}
+}
+
+// setupTaggedTestProject builds a project whose only failing test sits
+// behind `//go:build mytag`. The tagged test runs (and fails) only when
+// `-tags=mytag` reaches the inner `go test`, making tag forwarding
+// observable through pass/fail.
+func setupTaggedTestProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	taggedTest := "//go:build mytag\n\npackage testmod\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {\n\tt.Fatal(\"tagged test ran\")\n}\n"
+	for name, content := range map[string]string{
+		"go.mod":         "module testmod\n\ngo 1.26\n",
+		"add.go":         "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go":    "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+		"tagged_test.go": taggedTest,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// TestMeasureBaselineForwardsTags kills BRANCH_IF / CONDITIONALS_NEGATION /
+// STATEMENT_REMOVE on the `if tags != "" { args = append(args, "-tags="+...) }`
+// guard in MeasureBaseline: the tagged failing test compiles in only when
+// the tag is forwarded, flipping the result from pass to error.
+func TestMeasureBaselineForwardsTags(t *testing.T) {
+	dir := setupTaggedTestProject(t)
+
+	if _, err := MeasureBaseline(context.Background(), dir, []string{"testmod"}, ""); err != nil {
+		t.Fatalf("no tags: tagged test must be excluded, got error: %v", err)
+	}
+	if _, err := MeasureBaseline(context.Background(), dir, []string{"testmod"}, "mytag"); err == nil {
+		t.Fatal("tags=mytag: tagged failing test must run and fail, but baseline succeeded")
+	}
+}
+
+// TestRunCoverageForwardsTags is the RunCoverage analogue of
+// TestMeasureBaselineForwardsTags, pinning the same `-tags=` append guard.
+func TestRunCoverageForwardsTags(t *testing.T) {
+	dir := setupTaggedTestProject(t)
+
+	if _, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "", "", t.TempDir()); err != nil {
+		t.Fatalf("no tags: tagged test must be excluded, got error: %v", err)
+	}
+	if _, err := RunCoverage(context.Background(), dir, []string{"testmod"}, "", "mytag", t.TempDir()); err == nil {
+		t.Fatal("tags=mytag: tagged failing test must run and fail, but coverage run succeeded")
 	}
 }

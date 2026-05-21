@@ -119,6 +119,11 @@ type Worker struct {
 	// the intended pairing is --workers=1 --test-cpu=N (or any combo
 	// where --test-cpu <= NumCPU/--workers).
 	testCPU int
+
+	// tags, if non-empty, is forwarded to the inner `go test` as
+	// `-tags=<value>` so mutants in build-tag-gated files compile and run.
+	// Set by the pool after construction, mirroring testCPU.
+	tags string
 }
 
 // NewWorker creates a worker with stable temp file paths.
@@ -312,6 +317,9 @@ func (w *Worker) buildTestArgs(m mutator.Mutant, short bool, timeout time.Durati
 	}
 	if w.testCPU > 0 {
 		args = append(args, fmt.Sprintf("-cpu=%d", w.testCPU))
+	}
+	if w.tags != "" {
+		args = append(args, "-tags="+w.tags)
 	}
 	// GOMUTANTS_TEST_SHORT=1 propagates -short to inner go test, letting the
 	// target suite skip heavy integration tests. Used for gomutants self-testing
