@@ -277,7 +277,7 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	})
 	fs.StringVar(&coverPkg, "coverpkg", "", "coverage package pattern")
-	fs.StringVar(&tags, "tags", "", "comma-separated build tags forwarded as -tags to the inner go list/test/build (gremlins-compat)")
+	fs.StringVar(&tags, "tags", "", "comma-separated build tags forwarded as -tags to the inner go list/go test (gremlins-compat)")
 	fs.StringVar(&output, "output", "", "JSON report path")
 	fs.StringVar(&output, "o", "", "JSON report path (shorthand)")
 	fs.StringVar(&configPath, "config", ".gomutants.yml", "config file path")
@@ -381,7 +381,7 @@ func run(ctx context.Context, args []string) error {
 		testFilesFor cache.TestFilesForFn
 	)
 	if cfg.Cache != "" {
-		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion())
+		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion(), cfg.Tags)
 		// Hasher is created before discovery's PreReadFiles so the
 		// coverage-key calc can use it. SetSrcCache is called once
 		// the in-memory source map exists (after step 6), so

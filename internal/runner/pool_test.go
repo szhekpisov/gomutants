@@ -185,6 +185,23 @@ func TestPoolCreateWorkersAppliesGOMAXPROCS(t *testing.T) {
 	}
 }
 
+// TestPoolCreateWorkersPropagatesTags kills STATEMENT_REMOVE on
+// `w.tags = p.tags` in createWorkers. With the assignment elided every
+// worker keeps the zero-value "" tags, so --tags never reaches the
+// per-mutant `go test` even though the pool was given a value.
+func TestPoolCreateWorkersPropagatesTags(t *testing.T) {
+	p := NewPool(2, 0, "integration", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+	workers := p.createWorkers()
+	if len(workers) == 0 {
+		t.Fatal("expected workers; createWorkers returned none")
+	}
+	for i, w := range workers {
+		if w.tags != "integration" {
+			t.Errorf("worker[%d].tags = %q, want %q (STATEMENT_REMOVE drops `w.tags = p.tags`)", i, w.tags, "integration")
+		}
+	}
+}
+
 // TestPoolCreateWorkersContinuesPastFailure kills INVERT_LOOP_CTRL on
 // the `continue` after a NewWorker failure and STATEMENT_REMOVE on the
 // stderr log. With newWorkerFunc stubbed to fail on the first call and

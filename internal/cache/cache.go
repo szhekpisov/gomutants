@@ -87,9 +87,17 @@ type saveSink interface {
 // writing the coverage fields (e.g. when the user disables coverage
 // caching) won't pollute the JSON with empty strings.
 type Cache struct {
-	SchemaVersion   int     `json:"schema_version"`
-	GoModule        string  `json:"go_module"`
-	ToolVersion     string  `json:"tool_version"`
+	SchemaVersion int    `json:"schema_version"`
+	GoModule      string `json:"go_module"`
+	ToolVersion   string `json:"tool_version"`
+	// BuildTags is the `--tags` value the cache was built with. It joins
+	// the metadata-gate identity (alongside SchemaVersion/GoModule/
+	// ToolVersion): changing build tags can flip a mutant's outcome by
+	// pulling in different compiled-in code even when the mutated source
+	// and its test files are byte-identical, so a tag change must discard
+	// the whole cache. omitempty + the default "" keeps pre-existing
+	// (tag-less) caches reusable for tag-less runs.
+	BuildTags       string  `json:"build_tags,omitempty"`
 	CoverageKey     string  `json:"coverage_key,omitempty"`
 	CoverageProfile string  `json:"coverage_profile,omitempty"`
 	Entries         []Entry `json:"entries"`
@@ -352,17 +360,18 @@ func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tags
 // the *only* observable rejection path because the read- and
 // parse-failure branches both produce a zero-value Cache that fails
 // the gate identically (SchemaVersion=0 ≠ caller's SchemaVersion).
-func Load(path, goModule, toolVersion string) *Cache {
+func Load(path, goModule, toolVersion, buildTags string) *Cache {
 	empty := &Cache{
 		SchemaVersion: SchemaVersion,
 		GoModule:      goModule,
 		ToolVersion:   toolVersion,
+		BuildTags:     buildTags,
 	}
 	var c Cache
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &c) // c stays zero-value on parse error → fails metadata gate.
 	}
-	if c.SchemaVersion != SchemaVersion || c.GoModule != goModule || c.ToolVersion != toolVersion {
+	if c.SchemaVersion != SchemaVersion || c.GoModule != goModule || c.ToolVersion != toolVersion || c.BuildTags != buildTags {
 		return empty
 	}
 	return &c

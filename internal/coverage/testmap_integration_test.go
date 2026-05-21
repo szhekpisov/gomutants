@@ -332,6 +332,120 @@ func TestResolvePackagesFailure(t *testing.T) {
 	}
 }
 
+// setupTaggedProject builds a module whose root package has a normal
+// Add/TestAdd pair plus a `//go:build mytag`-gated Tagged()/TestTagged
+// pair, and a `testmod/only` subpackage whose single file is entirely
+// behind the same constraint. Nothing tag-gated is visible to the go tool
+// unless `-tags=mytag` is forwarded, which makes tag forwarding observable
+// from every go-invoking helper.
+func setupTaggedProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "only"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"go.mod":         "module testmod\n\ngo 1.26\n",
+		"add.go":         "package testmod\n\nfunc Add(a, b int) int {\n\treturn a + b\n}\n",
+		"add_test.go":    "package testmod\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+		"tagged.go":      "//go:build mytag\n\npackage testmod\n\nfunc Tagged() int {\n\treturn 7\n}\n",
+		"tagged_test.go": "//go:build mytag\n\npackage testmod\n\nimport \"testing\"\n\nfunc TestTagged(t *testing.T) {\n\tif Tagged() != 7 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n",
+		"only/only.go":   "//go:build mytag\n\npackage only\n\nfunc Only() int { return 1 }\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// TestListTestsForwardsTags kills BRANCH_IF / CONDITIONALS_NEGATION /
+// STATEMENT_REMOVE on the `if tags != "" { -tags= }` guard in listTests:
+// the tag-gated TestTagged is only enumerated when the tag reaches
+// `go test -list`.
+func TestListTestsForwardsTags(t *testing.T) {
+	dir := setupTaggedProject(t)
+
+	without, err := listTests(context.Background(), dir, []string{"testmod"}, "")
+	if err != nil {
+		t.Fatalf("listTests (no tags): %v", err)
+	}
+	if names := testNames(without); names["TestTagged"] {
+		t.Errorf("no tags: TestTagged must not be enumerated, got %v", names)
+	}
+
+	with, err := listTests(context.Background(), dir, []string{"testmod"}, "mytag")
+	if err != nil {
+		t.Fatalf("listTests (tags): %v", err)
+	}
+	if names := testNames(with); !names["TestTagged"] {
+		t.Errorf("tags=mytag: TestTagged must be enumerated, got %v", names)
+	}
+}
+
+func testNames(entries []testEntry) map[string]bool {
+	out := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		out[e.name] = true
+	}
+	return out
+}
+
+// TestResolvePackagesForwardsTags kills the same guard in resolvePackages:
+// the testmod/only package — whose only file is build-constrained — can be
+// resolved only when the tag reaches `go list`.
+func TestResolvePackagesForwardsTags(t *testing.T) {
+	dir := setupTaggedProject(t)
+
+	if _, err := resolvePackages(context.Background(), dir, []string{"testmod/only"}, ""); err == nil {
+		t.Error("no tags: testmod/only has no buildable files, resolvePackages should error")
+	}
+	pkgs, err := resolvePackages(context.Background(), dir, []string{"testmod/only"}, "mytag")
+	if err != nil {
+		t.Fatalf("tags=mytag: resolvePackages should succeed, got: %v", err)
+	}
+	if len(pkgs) != 1 || pkgs[0].importPath != "testmod/only" {
+		t.Errorf("tags=mytag: want [testmod/only], got %+v", pkgs)
+	}
+}
+
+// TestBuildTestMapForwardsTags is the end-to-end guard for the whole
+// tags-aware pipeline (listTests + resolvePackages + compileTestBinary):
+// coverage for the tag-gated Tagged() line is mapped only when the tag is
+// forwarded, so it kills the `-tags=` STATEMENT_REMOVE in compileTestBinary
+// too — without it the test binary excludes TestTagged and the line is
+// never covered.
+func TestBuildTestMapForwardsTags(t *testing.T) {
+	dir := setupTaggedProject(t)
+
+	var (
+		without, with *TestMap
+		err           error
+	)
+	runWithDeadline(t, 60*time.Second, func() {
+		without, err = BuildTestMap(context.Background(), dir, []string{"testmod"}, "", "", t.TempDir(), 2)
+	})
+	if err != nil {
+		t.Fatalf("BuildTestMap (no tags): %v", err)
+	}
+	// tagged.go isn't compiled in without the tag, so its return line maps
+	// to nothing.
+	if got := without.TestsFor("testmod/tagged.go", 6); len(got) != 0 {
+		t.Errorf("no tags: tagged.go:6 should have no covering tests, got %v", got)
+	}
+
+	runWithDeadline(t, 60*time.Second, func() {
+		with, err = BuildTestMap(context.Background(), dir, []string{"testmod"}, "", "mytag", t.TempDir(), 2)
+	})
+	if err != nil {
+		t.Fatalf("BuildTestMap (tags): %v", err)
+	}
+	if got := with.TestsFor("testmod/tagged.go", 6); len(got) == 0 {
+		t.Error("tags=mytag: TestTagged must cover tagged.go:6, got none — compileTestBinary dropped -tags=")
+	}
+}
+
 func TestBuildTestMapListTestsError(t *testing.T) {
 	// Package with syntax error — listTests fails.
 	dir := t.TempDir()
