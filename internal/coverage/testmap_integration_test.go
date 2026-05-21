@@ -594,6 +594,31 @@ func TestProcessWorkContextCancelledSkipsWork(t *testing.T) {
 	}
 }
 
+// compileTestmodBinary sets up the standard testmod project, resolves it,
+// and compiles its test binary, returning the context, the compiledPkg,
+// and the tmpDir. Shared by the runCompiledTest tests below, which
+// otherwise repeat this setup verbatim.
+func compileTestmodBinary(t *testing.T) (context.Context, *compiledPkg, string) {
+	t.Helper()
+	dir := setupTestProject(t)
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+
+	pkgs, err := resolvePackages(ctx, dir, []string{"testmod"}, "")
+	if err != nil {
+		t.Fatalf("resolvePackages: %v", err)
+	}
+
+	binPath := filepath.Join(tmpDir, "testbin.test")
+	cmd := exec.CommandContext(ctx, "go", "test", "-c", "-o", binPath, "-cover", "testmod")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("go test -c: %v", err)
+	}
+
+	return ctx, &compiledPkg{binPath: binPath, importPath: "testmod", dir: pkgs[0].dir}, tmpDir
+}
+
 func TestRunCompiledTestFailure(t *testing.T) {
 	dir := setupTestProject(t)
 	tmpDir := t.TempDir()
@@ -619,27 +644,7 @@ func TestRunCompiledTestFailure(t *testing.T) {
 }
 
 func TestRunCompiledTestParseError(t *testing.T) {
-	dir := setupTestProject(t)
-	tmpDir := t.TempDir()
-	ctx := context.Background()
-
-	pkgs, err := resolvePackages(ctx, dir, []string{"testmod"}, "")
-	if err != nil {
-		t.Fatalf("resolvePackages: %v", err)
-	}
-
-	binPath := filepath.Join(tmpDir, "testbin.test")
-	cmd := exec.CommandContext(ctx, "go", "test", "-c", "-o", binPath, "-cover", "testmod")
-	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("go test -c: %v", err)
-	}
-
-	cp := &compiledPkg{
-		binPath:    binPath,
-		importPath: "testmod",
-		dir:        pkgs[0].dir,
-	}
+	ctx, cp, tmpDir := compileTestmodBinary(t)
 
 	// Stub parseFileFunc to return an error.
 	origParse := parseFileFunc
@@ -656,28 +661,7 @@ func TestRunCompiledTestParseError(t *testing.T) {
 }
 
 func TestRunCompiledTestBadProfile(t *testing.T) {
-	dir := setupTestProject(t)
-	tmpDir := t.TempDir()
-	ctx := context.Background()
-
-	pkgs, err := resolvePackages(ctx, dir, []string{"testmod"}, "")
-	if err != nil {
-		t.Fatalf("resolvePackages: %v", err)
-	}
-
-	// Compile the test binary.
-	binPath := filepath.Join(tmpDir, "testbin.test")
-	cmd := exec.CommandContext(ctx, "go", "test", "-c", "-o", binPath, "-cover", "testmod")
-	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("go test -c: %v", err)
-	}
-
-	cp := &compiledPkg{
-		binPath:    binPath,
-		importPath: "testmod",
-		dir:        pkgs[0].dir,
-	}
+	ctx, cp, tmpDir := compileTestmodBinary(t)
 
 	// Use a directory as the profile path — go test will fail to write to it.
 	profileDir := filepath.Join(tmpDir, "profdir")
@@ -690,28 +674,7 @@ func TestRunCompiledTestBadProfile(t *testing.T) {
 }
 
 func TestRunCompiledTest(t *testing.T) {
-	dir := setupTestProject(t)
-	tmpDir := t.TempDir()
-	ctx := context.Background()
-
-	pkgs, err := resolvePackages(ctx, dir, []string{"testmod"}, "")
-	if err != nil {
-		t.Fatalf("resolvePackages: %v", err)
-	}
-
-	// Compile the test binary.
-	binPath := filepath.Join(tmpDir, "testbin.test")
-	cmd := exec.CommandContext(ctx, "go", "test", "-c", "-o", binPath, "-cover", "testmod")
-	cmd.Dir = dir
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("go test -c: %v", err)
-	}
-
-	cp := &compiledPkg{
-		binPath:    binPath,
-		importPath: "testmod",
-		dir:        pkgs[0].dir,
-	}
+	ctx, cp, tmpDir := compileTestmodBinary(t)
 
 	profilePath := filepath.Join(tmpDir, "test.cov")
 	blocks, dur := runCompiledTest(ctx, cp, "TestAdd", profilePath)
