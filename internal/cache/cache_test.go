@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -894,78 +895,55 @@ func TestHashCoverageInputs_DetectsEachInputChange(t *testing.T) {
 		}
 		return h
 	}
-	rehash := func(t *testing.T, dir, coverPkg, tags, toolchain, env string) string {
-		return hash(t, dir, dir, coverPkg, tags, toolchain, env)
-	}
 	baseline := func(t *testing.T) (string, string) {
 		dir, pkg := setupCoverageProject(t)
 		return dir, hash(t, pkg, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
 	}
 
+	// Each row changes exactly one HashCoverageInputs input relative to the
+	// baseline. write (optional) mutates the project on disk first; the
+	// remaining fields override the baseline's coverPkg/tags/toolchain/env.
+	// Empty string means "same as baseline" for that dimension. Data-driven
+	// (rather than per-row closures) so the rows don't repeat boilerplate.
+	const (
+		baseCoverPkg  = "./..."
+		baseToolchain = "go1.26"
+		baseEnv       = "GOEXPERIMENT=|"
+	)
 	tests := []struct {
-		name string
-		// mutate runs against a freshly-set-up project, then re-hashes and
-		// returns the new hash. The test asserts hashNew != baselineHash.
-		mutate func(t *testing.T, dir string) string
+		name                           string
+		write                          func(t *testing.T, dir string)
+		coverPkg, tags, toolchain, env string
 	}{
-		{
-			name: "prod file content",
-			mutate: func(t *testing.T, dir string) string {
-				mustWrite(t, filepath.Join(dir, "x.go"), "package testmod\nfunc Add(a, b int) int { return b + a }\n")
-				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-			},
-		},
-		{
-			name: "test file content",
-			mutate: func(t *testing.T, dir string) string {
-				mustWrite(t, filepath.Join(dir, "x_test.go"), "package testmod\nimport \"testing\"\nfunc TestAdd(t *testing.T) { _ = 1 }\n")
-				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-			},
-		},
-		{
-			name: "go.mod bytes",
-			mutate: func(t *testing.T, dir string) string {
-				mustWrite(t, filepath.Join(dir, "go.mod"), "module testmod\n\ngo 1.27\n")
-				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-			},
-		},
-		{
-			name: "go.sum bytes",
-			mutate: func(t *testing.T, dir string) string {
-				mustWrite(t, filepath.Join(dir, "go.sum"), "h1:fakefakefake=\n")
-				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-			},
-		},
-		{
-			name: "coverPkg",
-			mutate: func(t *testing.T, dir string) string {
-				return rehash(t, dir, "testmod/sub", "", "go1.26", "GOEXPERIMENT=|")
-			},
-		},
-		{
-			name: "tags",
-			mutate: func(t *testing.T, dir string) string {
-				return rehash(t, dir, "./...", "integration", "go1.26", "GOEXPERIMENT=|")
-			},
-		},
-		{
-			name: "toolchain",
-			mutate: func(t *testing.T, dir string) string {
-				return rehash(t, dir, "./...", "", "go1.27", "GOEXPERIMENT=|")
-			},
-		},
-		{
-			name: "env snapshot",
-			mutate: func(t *testing.T, dir string) string {
-				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=loopvar|")
-			},
-		},
+		{name: "prod file content", write: func(t *testing.T, dir string) {
+			mustWrite(t, filepath.Join(dir, "x.go"), "package testmod\nfunc Add(a, b int) int { return b + a }\n")
+		}},
+		{name: "test file content", write: func(t *testing.T, dir string) {
+			mustWrite(t, filepath.Join(dir, "x_test.go"), "package testmod\nimport \"testing\"\nfunc TestAdd(t *testing.T) { _ = 1 }\n")
+		}},
+		{name: "go.mod bytes", write: func(t *testing.T, dir string) {
+			mustWrite(t, filepath.Join(dir, "go.mod"), "module testmod\n\ngo 1.27\n")
+		}},
+		{name: "go.sum bytes", write: func(t *testing.T, dir string) {
+			mustWrite(t, filepath.Join(dir, "go.sum"), "h1:fakefakefake=\n")
+		}},
+		{name: "coverPkg", coverPkg: "testmod/sub"},
+		{name: "tags", tags: "integration"},
+		{name: "toolchain", toolchain: "go1.27"},
+		{name: "env snapshot", env: "GOEXPERIMENT=loopvar|"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, base := baseline(t)
-			got := tc.mutate(t, dir)
+			if tc.write != nil {
+				tc.write(t, dir)
+			}
+			got := hash(t, dir, dir,
+				cmp.Or(tc.coverPkg, baseCoverPkg),
+				tc.tags,
+				cmp.Or(tc.toolchain, baseToolchain),
+				cmp.Or(tc.env, baseEnv))
 			if got == base {
 				t.Errorf("hash unchanged after mutating %s — STATEMENT_REMOVE on the corresponding Fprintf collapses this dimension", tc.name)
 			}
