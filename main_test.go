@@ -864,7 +864,7 @@ func TestRunCoverageErrorMessage(t *testing.T) {
 
 	origCov := runCoverageFunc
 	defer func() { runCoverageFunc = origCov }()
-	runCoverageFunc = func(_ context.Context, _ string, _ []string, _, _ string) (string, error) {
+	runCoverageFunc = func(_ context.Context, _ string, _ []string, _, _, _ string) (string, error) {
 		return "", errors.New("inject coverage failure: marker_xyz")
 	}
 
@@ -887,7 +887,7 @@ func TestRunMeasureBaselineErrorMessage(t *testing.T) {
 
 	origM := measureBaselineFunc
 	defer func() { measureBaselineFunc = origM }()
-	measureBaselineFunc = func(_ context.Context, _ string, _ []string) (time.Duration, error) {
+	measureBaselineFunc = func(_ context.Context, _ string, _ []string, _ string) (time.Duration, error) {
 		return 0, errors.New("inject baseline failure: marker_pdq")
 	}
 
@@ -1146,7 +1146,7 @@ func TestRunBuildTestMapWarningOnError(t *testing.T) {
 
 	origBuild := buildTestMapFunc
 	defer func() { buildTestMapFunc = origBuild }()
-	buildTestMapFunc = func(_ context.Context, _ string, _ []string, _, _ string, _ int) (*coverage.TestMap, error) {
+	buildTestMapFunc = func(_ context.Context, _ string, _ []string, _, _, _ string, _ int) (*coverage.TestMap, error) {
 		return nil, errors.New("inject build-test-map failure")
 	}
 
@@ -1363,7 +1363,7 @@ func TestRun_CoverageCacheHit_SkipsRunCoverage(t *testing.T) {
 	// Second run: any call to runCoverageFunc would surface as an error.
 	origRC := runCoverageFunc
 	defer func() { runCoverageFunc = origRC }()
-	runCoverageFunc = func(context.Context, string, []string, string, string) (string, error) {
+	runCoverageFunc = func(context.Context, string, []string, string, string, string) (string, error) {
 		return "", errors.New("runCoverageFunc must NOT be called on a cache hit")
 	}
 
@@ -1406,9 +1406,9 @@ func TestRun_CoverageCacheMiss_RunsCoverage(t *testing.T) {
 	called := false
 	origRC := runCoverageFunc
 	defer func() { runCoverageFunc = origRC }()
-	runCoverageFunc = func(ctx context.Context, projectDir string, packages []string, coverPkg, tmpDir string) (string, error) {
+	runCoverageFunc = func(ctx context.Context, projectDir string, packages []string, coverPkg, tags, tmpDir string) (string, error) {
 		called = true
-		return origRC(ctx, projectDir, packages, coverPkg, tmpDir)
+		return origRC(ctx, projectDir, packages, coverPkg, tags, tmpDir)
 	}
 
 	staleCache := `{"schema_version":` + strconv.Itoa(cache.SchemaVersion) +

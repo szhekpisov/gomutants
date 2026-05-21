@@ -261,7 +261,7 @@ func TestResolvePackagesIntegration(t *testing.T) {
 		}
 	}
 
-	pkgs, err := ResolvePackages(context.Background(), dir, []string{"testmod"})
+	pkgs, err := ResolvePackages(context.Background(), dir, []string{"testmod"}, "")
 	if err != nil {
 		t.Fatalf("ResolvePackages: %v", err)
 	}
@@ -273,6 +273,35 @@ func TestResolvePackagesIntegration(t *testing.T) {
 	}
 	if len(pkgs[0].GoFiles) == 0 {
 		t.Error("GoFiles should not be empty")
+	}
+}
+
+// TestResolvePackagesForwardsTags kills BRANCH_IF / CONDITIONALS_NEGATION /
+// STATEMENT_REMOVE on the `if tags != "" { -tags= }` guard: the package's
+// only file is behind `//go:build mytag`, so `go list` resolves it only
+// when the tag is forwarded (otherwise it reports "build constraints
+// exclude all Go files", which decodeGoListJSON surfaces as an error).
+func TestResolvePackagesForwardsTags(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":    "module testmod\n\ngo 1.26\n",
+		"tagged.go": "//go:build mytag\n\npackage testmod\n\nfunc Tagged() int { return 7 }\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := ResolvePackages(context.Background(), dir, []string{"testmod"}, ""); err == nil {
+		t.Error("no tags: all files build-excluded, ResolvePackages should error")
+	}
+	pkgs, err := ResolvePackages(context.Background(), dir, []string{"testmod"}, "mytag")
+	if err != nil {
+		t.Fatalf("tags=mytag: ResolvePackages should succeed, got: %v", err)
+	}
+	if len(pkgs) != 1 || len(pkgs[0].GoFiles) == 0 {
+		t.Errorf("tags=mytag: want testmod with GoFiles, got %+v", pkgs)
 	}
 }
 
@@ -318,7 +347,7 @@ func TestDecodeGoListJSONPkgError(t *testing.T) {
 }
 
 func TestResolvePackagesError(t *testing.T) {
-	_, err := ResolvePackages(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"})
+	_, err := ResolvePackages(context.Background(), t.TempDir(), []string{"definitely/nonexistent/pkg/zzz"}, "")
 	if err == nil {
 		t.Fatal("expected error")
 	}

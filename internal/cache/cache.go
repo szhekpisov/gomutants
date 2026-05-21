@@ -87,9 +87,17 @@ type saveSink interface {
 // writing the coverage fields (e.g. when the user disables coverage
 // caching) won't pollute the JSON with empty strings.
 type Cache struct {
-	SchemaVersion   int     `json:"schema_version"`
-	GoModule        string  `json:"go_module"`
-	ToolVersion     string  `json:"tool_version"`
+	SchemaVersion int    `json:"schema_version"`
+	GoModule      string `json:"go_module"`
+	ToolVersion   string `json:"tool_version"`
+	// BuildTags is the `--tags` value the cache was built with. It joins
+	// the metadata-gate identity (alongside SchemaVersion/GoModule/
+	// ToolVersion): changing build tags can flip a mutant's outcome by
+	// pulling in different compiled-in code even when the mutated source
+	// and its test files are byte-identical, so a tag change must discard
+	// the whole cache. omitempty + the default "" keeps pre-existing
+	// (tag-less) caches reusable for tag-less runs.
+	BuildTags       string  `json:"build_tags,omitempty"`
 	CoverageKey     string  `json:"coverage_key,omitempty"`
 	CoverageProfile string  `json:"coverage_profile,omitempty"`
 	Entries         []Entry `json:"entries"`
@@ -246,6 +254,33 @@ func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
 	return hex.EncodeToString(hh.Sum(nil)), nil
 }
 
+// goFilesIn returns every .go file directly inside the given package dirs
+// (non-recursive), deduped and sorted so the result is independent of input
+// ordering or repeats. Extracted from HashCoverageInputs to keep that
+// method's cognitive complexity within the linter's threshold.
+func goFilesIn(pkgDirs []string) ([]string, error) {
+	seen := make(map[string]bool, len(pkgDirs))
+	var files []string
+	for _, dir := range pkgDirs {
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("listing %s: %w", dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+				continue
+			}
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	slices.Sort(files)
+	return files, nil
+}
+
 // HashCoverageInputs returns a stable fingerprint of every input that
 // could change the coverage profile produced by `go test -coverprofile`.
 // A mismatch on the next run invalidates the cached profile.
@@ -266,42 +301,15 @@ func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
 // This keeps the helper usable on modules with no recorded checksums
 // (single-module repos with no external deps) without an extra branch
 // at every call site.
-func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, toolchain, envSnapshot string) (string, error) {
-	// 1. Collect every .go file under pkgDirs. pkgDirs is deduped first
-	// so the per-file walk doesn't need a seen-map: within a single dir,
-	// ReadDir entries already have unique names, and across distinct
-	// dirs the abs paths can't collide. Sort at the end so different
-	// pkgDir orderings produce the same hash — Use h.File when hashing
-	// each file so the per-run sha256 memo is shared with HashTestFiles
-	// and Lookup's prodHash calls.
-	dirSet := make(map[string]bool, len(pkgDirs))
-	uniqDirs := make([]string, 0, len(pkgDirs))
-	for _, dir := range pkgDirs {
-		if dirSet[dir] {
-			continue
-		}
-		dirSet[dir] = true
-		uniqDirs = append(uniqDirs, dir)
+func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tags, toolchain, envSnapshot string) (string, error) {
+	// 1. Collect every .go file under pkgDirs (deduped + sorted) so the hash
+	// is independent of pkgDir ordering. Extracted into goFilesIn to keep
+	// this method's cognitive complexity in check. h.File is used below so
+	// the per-run sha256 memo is shared with HashTestFiles and Lookup.
+	files, err := goFilesIn(pkgDirs)
+	if err != nil {
+		return "", err
 	}
-
-	var files []string
-	for _, dir := range uniqDirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return "", fmt.Errorf("listing %s: %w", dir, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(name, ".go") {
-				continue
-			}
-			files = append(files, filepath.Join(dir, name))
-		}
-	}
-	slices.Sort(files)
 
 	hh := sha256.New()
 	for _, p := range files {
@@ -333,6 +341,7 @@ func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tool
 	// 3. Mix in the configuration / toolchain dimensions with the same
 	// length-prefixed framing so adjacent values can't alias.
 	fmt.Fprintf(hh, "coverpkg:%d:%s|", len(coverPkg), coverPkg)
+	fmt.Fprintf(hh, "tags:%d:%s|", len(tags), tags)
 	fmt.Fprintf(hh, "toolchain:%d:%s|", len(toolchain), toolchain)
 	fmt.Fprintf(hh, "env:%d:%s|", len(envSnapshot), envSnapshot)
 
@@ -351,17 +360,18 @@ func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tool
 // the *only* observable rejection path because the read- and
 // parse-failure branches both produce a zero-value Cache that fails
 // the gate identically (SchemaVersion=0 ≠ caller's SchemaVersion).
-func Load(path, goModule, toolVersion string) *Cache {
+func Load(path, goModule, toolVersion, buildTags string) *Cache {
 	empty := &Cache{
 		SchemaVersion: SchemaVersion,
 		GoModule:      goModule,
 		ToolVersion:   toolVersion,
+		BuildTags:     buildTags,
 	}
 	var c Cache
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &c) // c stays zero-value on parse error → fails metadata gate.
 	}
-	if c.SchemaVersion != SchemaVersion || c.GoModule != goModule || c.ToolVersion != toolVersion {
+	if c.SchemaVersion != SchemaVersion || c.GoModule != goModule || c.ToolVersion != toolVersion || c.BuildTags != buildTags {
 		return empty
 	}
 	return &c

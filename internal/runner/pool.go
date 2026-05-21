@@ -19,10 +19,19 @@ import (
 // ResultCallback is called for each completed mutant.
 type ResultCallback func(m mutator.Mutant)
 
+// ExecOpts bundles the inner `go test` knobs forwarded to each worker:
+// TestCPU (0 omits -cpu, letting go test default to GOMAXPROCS) and Tags
+// (empty omits -tags). Grouped into one struct so NewPool stays within a
+// sane parameter count.
+type ExecOpts struct {
+	TestCPU int
+	Tags    string
+}
+
 // Pool coordinates parallel mutation testing.
 type Pool struct {
 	workers    int
-	testCPU    int
+	exec       ExecOpts
 	policy     TimeoutPolicy
 	tmpDir     string
 	srcCache   map[string][]byte
@@ -42,12 +51,12 @@ func childGOMAXPROCSFor(workers int) int {
 	return max(1, runtime.NumCPU()/workers)
 }
 
-// NewPool creates a worker pool. testCPU == 0 means "don't pass -cpu to the
-// inner go test" (let go test default to GOMAXPROCS).
-func NewPool(workers, testCPU int, policy TimeoutPolicy, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
+// NewPool creates a worker pool. See ExecOpts for the inner `go test`
+// knobs (TestCPU, Tags).
+func NewPool(workers int, exec ExecOpts, policy TimeoutPolicy, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
 	return &Pool{
 		workers:    workers,
-		testCPU:    testCPU,
+		exec:       exec,
 		policy:     policy,
 		tmpDir:     tmpDir,
 		srcCache:   srcCache,
@@ -158,7 +167,8 @@ func (p *Pool) createWorkers() []*Worker {
 			continue
 		}
 		w.childGOMAXPROCS = cap
-		w.testCPU = p.testCPU
+		w.testCPU = p.exec.TestCPU
+		w.tags = p.exec.Tags
 		workers = append(workers, w)
 	}
 	return workers
@@ -189,8 +199,12 @@ func mutantLess(a, b mutator.Mutant) bool {
 }
 
 // MeasureBaseline runs the test suite once to determine baseline duration.
-func MeasureBaseline(ctx context.Context, projectDir string, packages []string) (time.Duration, error) {
-	args := append([]string{"test", "-count=1"}, packages...)
+func MeasureBaseline(ctx context.Context, projectDir string, packages []string, tags string) (time.Duration, error) {
+	args := []string{"test", "-count=1"}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
+	}
+	args = append(args, packages...)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = projectDir
 
@@ -206,12 +220,15 @@ func MeasureBaseline(ctx context.Context, projectDir string, packages []string) 
 }
 
 // RunCoverage runs go test with coverage and returns the profile path.
-func RunCoverage(ctx context.Context, projectDir string, packages []string, coverPkg string, tmpDir string) (string, error) {
+func RunCoverage(ctx context.Context, projectDir string, packages []string, coverPkg, tags string, tmpDir string) (string, error) {
 	profilePath := filepath.Join(tmpDir, "coverage.out")
 
 	args := []string{"test", "-count=1", "-coverprofile=" + profilePath}
 	if coverPkg != "" {
 		args = append(args, "-coverpkg="+coverPkg)
+	}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
 	}
 	args = append(args, packages...)
 

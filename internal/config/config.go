@@ -32,16 +32,21 @@ type Config struct {
 	// — without it, a YAML `adaptive-timeout: false` is indistinguishable
 	// from the zero value during ApplyFlags merging. Use
 	// AdaptiveTimeoutEnabled() in callers; that handles the default.
-	AdaptiveTimeout *bool    `yaml:"adaptive-timeout"`
-	CoverPkg        string   `yaml:"coverpkg"`
-	Output          string   `yaml:"output"`
-	DryRun          bool     `yaml:"dry-run"`
-	Verbose         bool     `yaml:"verbose"`
-	Quiet           bool     `yaml:"quiet"`
-	Disable         []string `yaml:"disable"`
-	Only            []string `yaml:"only"`
-	ChangedSince    string   `yaml:"changed-since"`
-	Cache           string   `yaml:"cache"`
+	AdaptiveTimeout *bool  `yaml:"adaptive-timeout"`
+	CoverPkg        string `yaml:"coverpkg"`
+	// Tags is forwarded verbatim as `-tags=<value>` to every inner `go`
+	// command (list, test, test -c) so mutation testing reaches code
+	// guarded by `//go:build` constraints. Go parses the comma-separated
+	// list itself, so we pass the raw string through unchanged.
+	Tags         string   `yaml:"tags"`
+	Output       string   `yaml:"output"`
+	DryRun       bool     `yaml:"dry-run"`
+	Verbose      bool     `yaml:"verbose"`
+	Quiet        bool     `yaml:"quiet"`
+	Disable      []string `yaml:"disable"`
+	Only         []string `yaml:"only"`
+	ChangedSince string   `yaml:"changed-since"`
+	Cache        string   `yaml:"cache"`
 	// CheckpointInterval is how often completed mutant outcomes are
 	// flushed to the cache file mid-run, so a hard kill (OOM, CI timeout,
 	// SIGKILL) loses at most this much progress. 0 disables periodic
@@ -180,6 +185,7 @@ type Flags struct {
 	AdaptiveTimeout    AdaptiveTimeoutFlag
 	CheckpointInterval CheckpointIntervalFlag
 	CoverPkg           string
+	Tags               string
 	Output             string
 	Disable            string
 	Only               string
@@ -228,6 +234,9 @@ func (c *Config) applyNumericFlags(f Flags) {
 func (c *Config) applyStringFlags(f Flags) {
 	if f.CoverPkg != "" {
 		c.CoverPkg = f.CoverPkg
+	}
+	if f.Tags != "" {
+		c.Tags = f.Tags
 	}
 	if f.Output != "" {
 		c.Output = f.Output

@@ -194,6 +194,7 @@ func TestApplyFlags(t *testing.T) {
 		AdaptiveTimeout:    AdaptiveTimeoutFlag{Set: true, Value: false},
 		CheckpointInterval: CheckpointIntervalFlag{Set: true, Value: 30 * time.Second},
 		CoverPkg:           "./pkg/...",
+		Tags:               "integration,debug",
 		Output:             "out.json",
 		Disable:            "BRANCH_IF,BRANCH_ELSE",
 		Only:               "ARITHMETIC_BASE",
@@ -228,6 +229,9 @@ func TestApplyFlags(t *testing.T) {
 	if cfg.CoverPkg != "./pkg/..." {
 		t.Errorf("CoverPkg=%q", cfg.CoverPkg)
 	}
+	if cfg.Tags != "integration,debug" {
+		t.Errorf("Tags=%q, want integration,debug", cfg.Tags)
+	}
 	if cfg.Output != "out.json" {
 		t.Errorf("Output=%q", cfg.Output)
 	}
@@ -257,6 +261,7 @@ func TestApplyFlags(t *testing.T) {
 func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	cfg := Default()
 	cfg.TestCPU = 7
+	cfg.Tags = "integration" // e.g. set via YAML
 	orig := cfg
 
 	// Zero/empty values should not override defaults.
@@ -289,6 +294,9 @@ func TestApplyFlagsZeroValuesNoOverride(t *testing.T) {
 	}
 	if cfg.Output != orig.Output {
 		t.Errorf("Output changed")
+	}
+	if cfg.Tags != orig.Tags {
+		t.Errorf("Tags changed from %q to %q; an empty --tags must not clobber a YAML value", orig.Tags, cfg.Tags)
 	}
 }
 

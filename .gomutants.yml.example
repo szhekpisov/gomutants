@@ -19,6 +19,10 @@ timeout-coefficient: 10
 # Useful when your tests are in a separate package from the code under test.
 # coverpkg: "./pkg/..."
 
+# Comma-separated build tags forwarded as -tags to every inner go list / go
+# test, so mutation testing reaches code behind //go:build constraints.
+# tags: "integration,debug"
+
 # JSON report output path (default: mutation-report.json).
 output: mutation-report.json
 

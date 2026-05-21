@@ -390,6 +390,7 @@ adaptive-timeout: true  # per-test adaptive sizing; set false for single global 
 timeout-margin: 3.0     # multiplier on per-test sums (only when adaptive)
 timeout-min: 2s         # floor on per-mutant adaptive timeout
 coverpkg: "./pkg/mypackage/..."
+tags: ""                # build tags forwarded to the inner go list/go test (e.g. "integration,debug")
 output: mutation-report.json
 changed-since: ""       # set to e.g. "main" to scope runs by default
 cache: ""               # path to incremental-analysis cache; "" = .gomutants-cache.json, "off" = disabled
@@ -452,6 +453,7 @@ Priority: built-in defaults < config file < CLI flags. See [`.gomutants.yml.exam
 | `--timeout-margin` | | 3.0 | When adaptive: `per-mutant timeout = sum(selected test durations) × this`, clamped to `[--timeout-min, --timeout-coefficient × baseline]` |
 | `--timeout-min` | | 2s | Floor for the per-mutant adaptive timeout. Absorbs cold-start, child fork, and GC pause overhead that doesn't scale with the underlying test work. |
 | `--coverpkg` | | | Coverage package pattern (forwarded to `go test -coverpkg`) |
+| `--tags` | | | Comma-separated build tags forwarded as `-tags` to every inner `go list` / `go test` (including `go test -c`/`-list`), so mutation testing reaches code behind `//go:build` constraints (gremlins-compat) |
 | `--output` | `-o` | `mutation-report.json` | JSON report path |
 | `--config` | | `.gomutants.yml` | Config file path |
 | `--disable` | | | Comma-separated mutator types to disable |
