@@ -231,6 +231,7 @@ func run(ctx context.Context, args []string) error {
 		configPath         string
 		disable            string
 		only               string
+		excludeFiles       string
 		changedSince       string
 		cachePath          string
 		annotations        string
@@ -283,6 +284,7 @@ func run(ctx context.Context, args []string) error {
 	fs.StringVar(&configPath, "config", ".gomutants.yml", "config file path")
 	fs.StringVar(&disable, "disable", "", "comma-separated mutator types to disable")
 	fs.StringVar(&only, "only", "", "comma-separated mutator types to run (disables all others)")
+	fs.StringVar(&excludeFiles, "exclude-files", "", "comma-separated regexps; skip mutating production files whose module-relative path matches any (e.g. \"vendor/,_gen\\\\.go$\")")
 	fs.StringVar(&changedSince, "changed-since", "", "only test mutants on lines changed vs git ref (e.g. main, HEAD~1)")
 	fs.StringVar(&cachePath, "cache", "", "path to incremental-analysis cache file; skips mutants whose source and tests are byte-identical to the cached run. Default .gomutants-cache.json. Pass --cache=off to disable")
 	fs.StringVar(&annotations, "annotations", "", "emit annotations for surviving mutants (values: github)")
@@ -337,6 +339,7 @@ func run(ctx context.Context, args []string) error {
 		Output:             output,
 		Disable:            disable,
 		Only:               only,
+		ExcludeFiles:       excludeFiles,
 		ChangedSince:       changedSince,
 		Cache:              cachePath,
 		DryRun:             dryRun,
@@ -411,7 +414,16 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	term.PhaseDone(fmt.Sprintf("done (%d packages)", len(pkgs)))
+	excluder, err := discover.NewExcluder(cfg.ExcludeFiles)
+	if err != nil {
+		return fmt.Errorf("--exclude-files: %w", err)
+	}
+	pkgs, excludedFiles := discover.ApplyExcludes(pkgs, excluder, projectDir)
+	resolveMsg := fmt.Sprintf("done (%d packages)", len(pkgs))
+	if excludedFiles > 0 {
+		resolveMsg = fmt.Sprintf("done (%d packages, %d files excluded)", len(pkgs), excludedFiles)
+	}
+	term.PhaseDone(resolveMsg)
 
 	// 2. Create temp directory.
 	tmpDir, err := mkdirTempFunc("", "gomutants-*")

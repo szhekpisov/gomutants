@@ -458,6 +458,7 @@ Priority: built-in defaults < config file < CLI flags. See [`.gomutants.yml.exam
 | `--config` | | `.gomutants.yml` | Config file path |
 | `--disable` | | | Comma-separated mutator types to disable |
 | `--only` | | | Comma-separated mutator types to run (disables all others) |
+| `--exclude-files` | | | Comma-separated regexps; skip mutating production files whose module-relative path matches any. Unanchored (e.g. `vendor/` hits anywhere). Excluded files produce no mutants and are never parsed. |
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
 | `--cache` | | `.gomutants-cache.json` | Path to incremental-analysis cache file. Skips mutants whose source and tests are byte-identical to the cached run. Pass `--cache=off` to disable. |
 | `--checkpoint-interval` | | 10s | How often to flush completed mutant outcomes to the cache mid-run, so a hard kill (OOM, CI timeout, SIGKILL) loses at most this much progress and the next run resumes from the last checkpoint. `0` disables periodic checkpointing (the cache is then written only once, at the end). Ignored when `--cache=off`. |
@@ -494,6 +495,9 @@ gomutants -q --threshold-efficacy 80 ./...
 # Limit to specific mutators (or exclude some).
 gomutants --only ARITHMETIC_BASE,CONDITIONALS_NEGATION ./...
 gomutants --disable BRANCH_IF,BRANCH_ELSE ./...
+
+# Skip generated code and vendored deps.
+gomutants --exclude-files 'vendor/,_gen\.go$' ./...
 
 # Tune for memory-tight runners.
 gomutants --workers=2 ./...

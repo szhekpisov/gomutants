@@ -63,6 +63,17 @@ output: mutation-report.json
 #   - ARITHMETIC_BASE
 #   - CONDITIONALS_NEGATION
 
+# Skip mutating production files whose module-relative path (slash-
+# separated, relative to the module root) matches any of these regexps.
+# The match is unanchored, so "vendor/" hits anywhere in the path.
+# Excluded files are dropped before discovery: they produce no mutants and
+# are never parsed. Test files are never mutated regardless. --exclude-files
+# on the CLI (comma-separated) overrides this list.
+# exclude-files:
+#   - vendor/
+#   - _gen\.go$
+#   - mocks/
+
 # Available mutator types (16 total):
 #   Token-level:
 #     ARITHMETIC_BASE             — swap +/-, */%, etc.
