@@ -881,13 +881,25 @@ func TestHashCoverageInputs_StableAcrossCalls(t *testing.T) {
 // collapse one of these dimensions; the table forces every Fprintf to be
 // observable.
 func TestHashCoverageInputs_DetectsEachInputChange(t *testing.T) {
+	// hash runs HashCoverageInputs and fails the test on error. Extracted so
+	// the baseline and each of the table cases below is a single call rather
+	// than repeating the hash-and-check boilerplate (which the duplication
+	// detector flags). Cases hash a single dir (pkgDir == projectDir); the
+	// baseline hashes the subpackage dir against the project root.
+	hash := func(t *testing.T, pkgDir, projectDir, coverPkg, tags, toolchain, env string) string {
+		t.Helper()
+		h, err := NewHasher(nil).HashCoverageInputs([]string{pkgDir}, projectDir, coverPkg, tags, toolchain, env)
+		if err != nil {
+			t.Fatalf("hash: %v", err)
+		}
+		return h
+	}
+	rehash := func(t *testing.T, dir, coverPkg, tags, toolchain, env string) string {
+		return hash(t, dir, dir, coverPkg, tags, toolchain, env)
+	}
 	baseline := func(t *testing.T) (string, string) {
 		dir, pkg := setupCoverageProject(t)
-		h, err := NewHasher(nil).HashCoverageInputs([]string{pkg}, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-		if err != nil {
-			t.Fatalf("baseline: %v", err)
-		}
-		return dir, h
+		return dir, hash(t, pkg, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
 	}
 
 	tests := []struct {
@@ -900,84 +912,52 @@ func TestHashCoverageInputs_DetectsEachInputChange(t *testing.T) {
 			name: "prod file content",
 			mutate: func(t *testing.T, dir string) string {
 				mustWrite(t, filepath.Join(dir, "x.go"), "package testmod\nfunc Add(a, b int) int { return b + a }\n")
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
 			},
 		},
 		{
 			name: "test file content",
 			mutate: func(t *testing.T, dir string) string {
 				mustWrite(t, filepath.Join(dir, "x_test.go"), "package testmod\nimport \"testing\"\nfunc TestAdd(t *testing.T) { _ = 1 }\n")
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
 			},
 		},
 		{
 			name: "go.mod bytes",
 			mutate: func(t *testing.T, dir string) string {
 				mustWrite(t, filepath.Join(dir, "go.mod"), "module testmod\n\ngo 1.27\n")
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
 			},
 		},
 		{
 			name: "go.sum bytes",
 			mutate: func(t *testing.T, dir string) string {
 				mustWrite(t, filepath.Join(dir, "go.sum"), "h1:fakefakefake=\n")
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=|")
 			},
 		},
 		{
 			name: "coverPkg",
 			mutate: func(t *testing.T, dir string) string {
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "testmod/sub", "", "go1.26", "GOEXPERIMENT=|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "testmod/sub", "", "go1.26", "GOEXPERIMENT=|")
 			},
 		},
 		{
 			name: "tags",
 			mutate: func(t *testing.T, dir string) string {
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "integration", "go1.26", "GOEXPERIMENT=|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "./...", "integration", "go1.26", "GOEXPERIMENT=|")
 			},
 		},
 		{
 			name: "toolchain",
 			mutate: func(t *testing.T, dir string) string {
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "", "go1.27", "GOEXPERIMENT=|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "./...", "", "go1.27", "GOEXPERIMENT=|")
 			},
 		},
 		{
 			name: "env snapshot",
 			mutate: func(t *testing.T, dir string) string {
-				h, err := NewHasher(nil).HashCoverageInputs([]string{dir}, dir, "./...", "", "go1.26", "GOEXPERIMENT=loopvar|")
-				if err != nil {
-					t.Fatalf("rehash: %v", err)
-				}
-				return h
+				return rehash(t, dir, "./...", "", "go1.26", "GOEXPERIMENT=loopvar|")
 			},
 		},
 	}
