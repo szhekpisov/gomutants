@@ -61,12 +61,15 @@ func (e *Excluder) Match(relPath string) bool {
 // every file is kept and the count is 0.
 //
 // Excluded files are removed before discovery so they are never parsed,
-// mutated, or pre-read; a package that loses all its GoFiles simply
-// contributes no mutants.
+// mutated, or pre-read. A package that exclusion empties of all its
+// production files is dropped from the result so it neither inflates the
+// reported package count nor wastes a downstream iteration; packages that
+// were already production-empty (test-only, asm-only) are preserved
+// unchanged.
 func ApplyExcludes(pkgs []Package, e *Excluder, moduleRoot string) ([]Package, int) {
 	excluded := 0
-	out := make([]Package, len(pkgs))
-	for i, p := range pkgs {
+	out := make([]Package, 0, len(pkgs))
+	for _, p := range pkgs {
 		kept := make([]string, 0, len(p.GoFiles))
 		for _, f := range p.GoFiles {
 			rel := excludeRelPath(moduleRoot, p.Dir, f)
@@ -76,8 +79,14 @@ func ApplyExcludes(pkgs []Package, e *Excluder, moduleRoot string) ([]Package, i
 			}
 			kept = append(kept, f)
 		}
+		// Drop only packages that exclusion emptied: they had production
+		// files and have none left, so they contribute no mutants. Leave
+		// already-empty packages as-is to preserve pre-exclude behavior.
+		if len(p.GoFiles) > 0 && len(kept) == 0 {
+			continue
+		}
 		p.GoFiles = kept
-		out[i] = p
+		out = append(out, p)
 	}
 	return out, excluded
 }

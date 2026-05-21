@@ -105,26 +105,39 @@ func TestApplyExcludes(t *testing.T) {
 	pkgs := []Package{
 		{
 			Dir:         "/m/pkg",
-			GoFiles:     []string{"a.go", "b.go"}, // b.go excluded
+			GoFiles:     []string{"a.go", "b.go"}, // b.go excluded, a.go kept
 			TestGoFiles: []string{"b_test.go"},    // never touched
 		},
 		{
 			Dir:     "/m/gen",
-			GoFiles: []string{"x.go", "y.go"}, // both under gen/, excluded
+			GoFiles: []string{"x.go", "y.go"}, // both under gen/: package emptied, dropped
+		},
+		{
+			Dir:         "/m/empty",
+			GoFiles:     nil, // already production-empty: preserved
+			TestGoFiles: []string{"z_test.go"},
 		},
 	}
 	got, n := ApplyExcludes(pkgs, e, "/m")
 	if n != 3 {
 		t.Errorf("want 3 excluded files, got %d", n)
 	}
-	if !reflect.DeepEqual(got[0].GoFiles, []string{"a.go"}) {
-		t.Errorf("pkg[0] GoFiles = %v, want [a.go]", got[0].GoFiles)
+	// The emptied /m/gen package is dropped; /m/pkg and /m/empty remain.
+	if len(got) != 2 {
+		t.Fatalf("want 2 packages after dropping the emptied one, got %d (%+v)", len(got), got)
+	}
+	if got[0].Dir != "/m/pkg" || !reflect.DeepEqual(got[0].GoFiles, []string{"a.go"}) {
+		t.Errorf("got[0] = %+v, want /m/pkg with GoFiles [a.go]", got[0])
 	}
 	if !reflect.DeepEqual(got[0].TestGoFiles, []string{"b_test.go"}) {
 		t.Errorf("test files must be untouched, got %v", got[0].TestGoFiles)
 	}
-	if len(got[1].GoFiles) != 0 {
-		t.Errorf("pkg[1] GoFiles = %v, want empty", got[1].GoFiles)
+	// An already-empty package is kept, not mistaken for an emptied one.
+	if got[1].Dir != "/m/empty" {
+		t.Errorf("got[1].Dir = %q, want /m/empty (already-empty package preserved)", got[1].Dir)
+	}
+	if !reflect.DeepEqual(got[1].TestGoFiles, []string{"z_test.go"}) {
+		t.Errorf("got[1] test files = %v, want [z_test.go]", got[1].TestGoFiles)
 	}
 	// Input must not be mutated in place.
 	if len(pkgs[1].GoFiles) != 2 {
