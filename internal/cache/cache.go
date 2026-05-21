@@ -254,6 +254,33 @@ func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
 	return hex.EncodeToString(hh.Sum(nil)), nil
 }
 
+// goFilesIn returns every .go file directly inside the given package dirs
+// (non-recursive), deduped and sorted so the result is independent of input
+// ordering or repeats. Extracted from HashCoverageInputs to keep that
+// method's cognitive complexity within the linter's threshold.
+func goFilesIn(pkgDirs []string) ([]string, error) {
+	seen := make(map[string]bool, len(pkgDirs))
+	var files []string
+	for _, dir := range pkgDirs {
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("listing %s: %w", dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+				continue
+			}
+			files = append(files, filepath.Join(dir, e.Name()))
+		}
+	}
+	slices.Sort(files)
+	return files, nil
+}
+
 // HashCoverageInputs returns a stable fingerprint of every input that
 // could change the coverage profile produced by `go test -coverprofile`.
 // A mismatch on the next run invalidates the cached profile.
@@ -275,41 +302,14 @@ func (h *Hasher) HashTestFiles(absPaths []string) (string, error) {
 // (single-module repos with no external deps) without an extra branch
 // at every call site.
 func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tags, toolchain, envSnapshot string) (string, error) {
-	// 1. Collect every .go file under pkgDirs. pkgDirs is deduped first
-	// so the per-file walk doesn't need a seen-map: within a single dir,
-	// ReadDir entries already have unique names, and across distinct
-	// dirs the abs paths can't collide. Sort at the end so different
-	// pkgDir orderings produce the same hash — Use h.File when hashing
-	// each file so the per-run sha256 memo is shared with HashTestFiles
-	// and Lookup's prodHash calls.
-	dirSet := make(map[string]bool, len(pkgDirs))
-	uniqDirs := make([]string, 0, len(pkgDirs))
-	for _, dir := range pkgDirs {
-		if dirSet[dir] {
-			continue
-		}
-		dirSet[dir] = true
-		uniqDirs = append(uniqDirs, dir)
+	// 1. Collect every .go file under pkgDirs (deduped + sorted) so the hash
+	// is independent of pkgDir ordering. Extracted into goFilesIn to keep
+	// this method's cognitive complexity in check. h.File is used below so
+	// the per-run sha256 memo is shared with HashTestFiles and Lookup.
+	files, err := goFilesIn(pkgDirs)
+	if err != nil {
+		return "", err
 	}
-
-	var files []string
-	for _, dir := range uniqDirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return "", fmt.Errorf("listing %s: %w", dir, err)
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(name, ".go") {
-				continue
-			}
-			files = append(files, filepath.Join(dir, name))
-		}
-	}
-	slices.Sort(files)
 
 	hh := sha256.New()
 	for _, p := range files {

@@ -19,11 +19,19 @@ import (
 // ResultCallback is called for each completed mutant.
 type ResultCallback func(m mutator.Mutant)
 
+// ExecOpts bundles the inner `go test` knobs forwarded to each worker:
+// TestCPU (0 omits -cpu, letting go test default to GOMAXPROCS) and Tags
+// (empty omits -tags). Grouped into one struct so NewPool stays within a
+// sane parameter count.
+type ExecOpts struct {
+	TestCPU int
+	Tags    string
+}
+
 // Pool coordinates parallel mutation testing.
 type Pool struct {
 	workers    int
-	testCPU    int
-	tags       string
+	exec       ExecOpts
 	policy     TimeoutPolicy
 	tmpDir     string
 	srcCache   map[string][]byte
@@ -43,13 +51,12 @@ func childGOMAXPROCSFor(workers int) int {
 	return max(1, runtime.NumCPU()/workers)
 }
 
-// NewPool creates a worker pool. testCPU == 0 means "don't pass -cpu to the
-// inner go test" (let go test default to GOMAXPROCS).
-func NewPool(workers, testCPU int, tags string, policy TimeoutPolicy, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
+// NewPool creates a worker pool. See ExecOpts for the inner `go test`
+// knobs (TestCPU, Tags).
+func NewPool(workers int, exec ExecOpts, policy TimeoutPolicy, tmpDir string, srcCache map[string][]byte, projectDir string, testMap *coverage.TestMap) *Pool {
 	return &Pool{
 		workers:    workers,
-		testCPU:    testCPU,
-		tags:       tags,
+		exec:       exec,
 		policy:     policy,
 		tmpDir:     tmpDir,
 		srcCache:   srcCache,
@@ -160,8 +167,8 @@ func (p *Pool) createWorkers() []*Worker {
 			continue
 		}
 		w.childGOMAXPROCS = cap
-		w.testCPU = p.testCPU
-		w.tags = p.tags
+		w.testCPU = p.exec.TestCPU
+		w.tags = p.exec.Tags
 		workers = append(workers, w)
 	}
 	return workers

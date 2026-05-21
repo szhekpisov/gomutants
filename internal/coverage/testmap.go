@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+// tagsBuildFlag is the `go` build-tags flag prefix; the configured tags
+// value is appended to it when non-empty.
+const tagsBuildFlag = "-tags="
+
 // Function variables for testing.
 var (
 	resolvePackagesFunc   = resolvePackages
@@ -248,7 +252,7 @@ func compileTestBinary(ctx context.Context, projectDir, tmpDir, coverPkg, tags s
 		args = append(args, "-coverpkg="+coverPkg)
 	}
 	if tags != "" {
-		args = append(args, "-tags="+tags)
+		args = append(args, tagsBuildFlag+tags)
 	}
 	args = append(args, pkg.importPath)
 
@@ -416,7 +420,7 @@ func listTests(ctx context.Context, projectDir string, packages []string, tags s
 	for _, pkg := range packages {
 		args := []string{"test", "-list", "."}
 		if tags != "" {
-			args = append(args, "-tags="+tags)
+			args = append(args, tagsBuildFlag+tags)
 		}
 		args = append(args, pkg)
 		cmd := exec.CommandContext(ctx, "go", args...)
@@ -461,7 +465,7 @@ type resolvedPkg struct {
 func resolvePackages(ctx context.Context, projectDir string, patterns []string, tags string) ([]resolvedPkg, error) {
 	args := []string{"list", "-f", "{{.ImportPath}}\t{{.Dir}}"}
 	if tags != "" {
-		args = append(args, "-tags="+tags)
+		args = append(args, tagsBuildFlag+tags)
 	}
 	args = append(args, patterns...)
 	cmd := exec.CommandContext(ctx, "go", args...)

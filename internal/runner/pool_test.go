@@ -91,7 +91,7 @@ func TestChildGOMAXPROCSFor(t *testing.T) {
 }
 
 func TestPoolRunNoPending(t *testing.T) {
-	p := NewPool(2, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), nil, ".", nil)
+	p := NewPool(2, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, Status: mutator.StatusNotCovered},
 		{ID: 2, Status: mutator.StatusKilled},
@@ -117,7 +117,7 @@ func TestPoolRunNoPending(t *testing.T) {
 // untouched is the only observable handle we have on the early-return.
 func TestPoolRunNoPendingDoesNotCreateWorkers(t *testing.T) {
 	tmpDir := t.TempDir()
-	p := NewPool(2, 0, "", TimeoutPolicy{Global: time.Second}, tmpDir, nil, ".", nil)
+	p := NewPool(2, ExecOpts{}, TimeoutPolicy{Global: time.Second}, tmpDir, nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, Status: mutator.StatusKilled},
 	}
@@ -171,7 +171,7 @@ func TestMutantLessSortStability(t *testing.T) {
 // elided, every worker is created with childGOMAXPROCS=0 (the zero value),
 // so the GOMAXPROCS env override never gets propagated to inner go test.
 func TestPoolCreateWorkersAppliesGOMAXPROCS(t *testing.T) {
-	p := NewPool(4, 0, "", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+	p := NewPool(4, ExecOpts{}, TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
 	workers := p.createWorkers()
 	if len(workers) == 0 {
 		t.Fatal("expected workers; createWorkers returned none")
@@ -185,19 +185,23 @@ func TestPoolCreateWorkersAppliesGOMAXPROCS(t *testing.T) {
 	}
 }
 
-// TestPoolCreateWorkersPropagatesTags kills STATEMENT_REMOVE on
-// `w.tags = p.tags` in createWorkers. With the assignment elided every
-// worker keeps the zero-value "" tags, so --tags never reaches the
-// per-mutant `go test` even though the pool was given a value.
-func TestPoolCreateWorkersPropagatesTags(t *testing.T) {
-	p := NewPool(2, 0, "integration", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+// TestPoolCreateWorkersPropagatesExecOpts kills STATEMENT_REMOVE on the
+// `w.testCPU = p.exec.TestCPU` and `w.tags = p.exec.Tags` assignments in
+// createWorkers. With either elided the worker keeps the zero value, so the
+// configured --test-cpu / --tags never reaches the per-mutant `go test`
+// even though the pool was given a value.
+func TestPoolCreateWorkersPropagatesExecOpts(t *testing.T) {
+	p := NewPool(2, ExecOpts{TestCPU: 3, Tags: "integration"}, TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
 	workers := p.createWorkers()
 	if len(workers) == 0 {
 		t.Fatal("expected workers; createWorkers returned none")
 	}
 	for i, w := range workers {
+		if w.testCPU != 3 {
+			t.Errorf("worker[%d].testCPU = %d, want 3 (STATEMENT_REMOVE drops `w.testCPU = p.exec.TestCPU`)", i, w.testCPU)
+		}
 		if w.tags != "integration" {
-			t.Errorf("worker[%d].tags = %q, want %q (STATEMENT_REMOVE drops `w.tags = p.tags`)", i, w.tags, "integration")
+			t.Errorf("worker[%d].tags = %q, want %q (STATEMENT_REMOVE drops `w.tags = p.exec.Tags`)", i, w.tags, "integration")
 		}
 	}
 }
@@ -220,7 +224,7 @@ func TestPoolCreateWorkersContinuesPastFailure(t *testing.T) {
 		return &Worker{id: id, tmpSrcPath: filepath.Join(tmpDir, "src"), overlayPath: filepath.Join(tmpDir, "ovl"), policy: policy}, nil
 	}
 
-	p := NewPool(4, 0, "", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+	p := NewPool(4, ExecOpts{}, TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
 	var workers []*Worker
 	captured := captureStderr(t, func() {
 		workers = p.createWorkers()
@@ -244,7 +248,7 @@ func TestPoolNoWorkersLogsToStderr(t *testing.T) {
 		newWorkerFunc = func(int, string, TimeoutPolicy, map[string][]byte, string, *coverage.TestMap) (*Worker, error) {
 			return nil, errors.New("always fail")
 		}
-		p := NewPool(2, 0, "", TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
+		p := NewPool(2, ExecOpts{}, TimeoutPolicy{Global: time.Second}, t.TempDir(), nil, ".", nil)
 		mutants := []mutator.Mutant{
 			{ID: 1, File: "/abs/f.go", Pkg: "p", Status: mutator.StatusPending},
 		}
@@ -328,7 +332,7 @@ func TestPoolRunWorkerCtxErrCheckHitDeterministic(t *testing.T) {
 
 	// Single worker so the two mutants serialize through one goroutine —
 	// keeps the test's iteration-ordering guarantee tight.
-	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 	mk := func(id int, repl string) mutator.Mutant {
 		return mutator.Mutant{
 			ID: id, File: srcPath, Pkg: "testmod",
@@ -369,7 +373,7 @@ func TestPoolRunCancelledNoCallback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, File: srcPath, Pkg: "testmod", StartOffset: plusIdx, EndOffset: plusIdx + 1, Replacement: "-", Status: mutator.StatusPending},
 	}
@@ -416,7 +420,7 @@ func TestRunCoverageStdoutGoesToStderr(t *testing.T) {
 // statuses overwritten by the pending-mutant pipeline.
 func TestPoolRunEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
-	p := NewPool(2, 0, "", TimeoutPolicy{Global: 30 * time.Second}, tmpDir, nil, ".", nil)
+	p := NewPool(2, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, tmpDir, nil, ".", nil)
 
 	// nil input — Run must early-exit cleanly.
 	p.Run(context.Background(), nil, nil)
@@ -452,7 +456,7 @@ func TestPoolRunWithPending(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	p := NewPool(2, 0, "", TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
+	p := NewPool(2, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
 
 	mutants := []mutator.Mutant{
 		{
@@ -528,7 +532,7 @@ func TestPoolRunOnResultSerial(t *testing.T) {
 	}
 
 	tmpDir := t.TempDir()
-	p := NewPool(4, 0, "", TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
+	p := NewPool(4, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, tmpDir, cache, dir, nil)
 
 	replacements := []string{"-", "*", "/", "%"}
 	mutants := make([]mutator.Mutant, len(replacements))
@@ -574,7 +578,7 @@ func TestPoolRunNoWorkersAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := NewPool(4, 0, "", TimeoutPolicy{Global: 30 * time.Second}, blocker, nil, ".", nil)
+	p := NewPool(4, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, blocker, nil, ".", nil)
 	mutants := []mutator.Mutant{
 		{ID: 1, File: "/abs/f.go", Pkg: "p", Status: mutator.StatusPending},
 	}
@@ -609,7 +613,7 @@ func TestPoolRunNonDenseIDs(t *testing.T) {
 		}
 	}
 
-	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 	mutants := []mutator.Mutant{
 		// Sparse IDs: 100 and 500. Not 1 and 2.
 		{ID: 100, File: srcPath, Pkg: "testmod",
@@ -647,7 +651,7 @@ func TestPoolRunCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
 
-	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 
 	mutants := []mutator.Mutant{
 		{ID: 1, File: srcPath, Pkg: "testmod", StartOffset: plusIdx, EndOffset: plusIdx + 1, Replacement: "-", Status: mutator.StatusPending},
@@ -677,7 +681,7 @@ func TestPoolRunCancelledFeederExitsViaCtxDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	p := NewPool(1, 0, "", TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
+	p := NewPool(1, ExecOpts{}, TimeoutPolicy{Global: 30 * time.Second}, t.TempDir(), cache, dir, nil)
 
 	const n = 64
 	mutants := make([]mutator.Mutant, n)

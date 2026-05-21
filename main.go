@@ -683,7 +683,7 @@ func run(ctx context.Context, args []string) error {
 		lastCheckpoint = time.Now()
 	}
 
-	pool := runner.NewPool(cfg.Workers, cfg.TestCPU, cfg.Tags, policy, tmpDir, srcCache, projectDir, testMap)
+	pool := runner.NewPool(cfg.Workers, runner.ExecOpts{TestCPU: cfg.TestCPU, Tags: cfg.Tags}, policy, tmpDir, srcCache, projectDir, testMap)
 	// Seed lastCheckpoint so the first periodic checkpoint fires one full
 	// interval into the run, not on the very first mutant.
 	lastCheckpoint = time.Now()
