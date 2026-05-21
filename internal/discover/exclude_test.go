@@ -20,6 +20,21 @@ func TestNewExcluderEmptyReturnsNil(t *testing.T) {
 	}
 }
 
+func TestNewExcluderSkipsBlanksKeepsLater(t *testing.T) {
+	// A blank entry must be skipped (continue), not stop the loop (break):
+	// the valid pattern after it has to survive.
+	e, err := NewExcluder([]string{"", "vendor/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e == nil || len(e.patterns) != 1 {
+		t.Fatalf("want 1 pattern after a leading blank, got %+v", e)
+	}
+	if !e.Match("x/vendor/y.go") {
+		t.Error("pattern after blank must still match")
+	}
+}
+
 func TestNewExcluderInvalidPattern(t *testing.T) {
 	e, err := NewExcluder([]string{"valid", "([unclosed"})
 	if err == nil {

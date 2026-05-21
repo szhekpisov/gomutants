@@ -57,15 +57,13 @@ func (e *Excluder) Match(relPath string) bool {
 // ApplyExcludes returns pkgs with every production file whose module-relative
 // path (slash-separated, relative to moduleRoot) matches the Excluder
 // dropped, along with the count of files removed. Test files are left
-// untouched — they are never mutated. A nil Excluder returns pkgs unchanged.
+// untouched — they are never mutated. A nil Excluder matches nothing, so
+// every file is kept and the count is 0.
 //
 // Excluded files are removed before discovery so they are never parsed,
 // mutated, or pre-read; a package that loses all its GoFiles simply
 // contributes no mutants.
 func ApplyExcludes(pkgs []Package, e *Excluder, moduleRoot string) ([]Package, int) {
-	if e == nil {
-		return pkgs, 0
-	}
 	excluded := 0
 	out := make([]Package, len(pkgs))
 	for i, p := range pkgs {
