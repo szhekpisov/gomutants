@@ -38,13 +38,18 @@ type Config struct {
 	// command (list, test, test -c) so mutation testing reaches code
 	// guarded by `//go:build` constraints. Go parses the comma-separated
 	// list itself, so we pass the raw string through unchanged.
-	Tags         string   `yaml:"tags"`
-	Output       string   `yaml:"output"`
-	DryRun       bool     `yaml:"dry-run"`
-	Verbose      bool     `yaml:"verbose"`
-	Quiet        bool     `yaml:"quiet"`
-	Disable      []string `yaml:"disable"`
-	Only         []string `yaml:"only"`
+	Tags    string   `yaml:"tags"`
+	Output  string   `yaml:"output"`
+	DryRun  bool     `yaml:"dry-run"`
+	Verbose bool     `yaml:"verbose"`
+	Quiet   bool     `yaml:"quiet"`
+	Disable []string `yaml:"disable"`
+	Only    []string `yaml:"only"`
+	// ExcludeFiles holds regexps matched (unanchored) against each
+	// production file's module-relative path; matching files are skipped
+	// entirely, producing no mutants. Test files are never mutated and so
+	// are unaffected.
+	ExcludeFiles []string `yaml:"exclude-files"`
 	ChangedSince string   `yaml:"changed-since"`
 	Cache        string   `yaml:"cache"`
 	// CheckpointInterval is how often completed mutant outcomes are
@@ -189,6 +194,7 @@ type Flags struct {
 	Output             string
 	Disable            string
 	Only               string
+	ExcludeFiles       string
 	ChangedSince       string
 	Cache              string
 	DryRun             bool
@@ -246,6 +252,9 @@ func (c *Config) applyStringFlags(f Flags) {
 	}
 	if f.Only != "" {
 		c.Only = splitAndTrim(f.Only)
+	}
+	if f.ExcludeFiles != "" {
+		c.ExcludeFiles = splitAndTrim(f.ExcludeFiles)
 	}
 	if f.ChangedSince != "" {
 		c.ChangedSince = f.ChangedSince

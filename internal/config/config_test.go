@@ -198,6 +198,7 @@ func TestApplyFlags(t *testing.T) {
 		Output:             "out.json",
 		Disable:            "BRANCH_IF,BRANCH_ELSE",
 		Only:               "ARITHMETIC_BASE",
+		ExcludeFiles:       "vendor/, _gen\\.go",
 		ChangedSince:       "main",
 		Cache:              "cache.json",
 		DryRun:             true,
@@ -240,6 +241,10 @@ func TestApplyFlags(t *testing.T) {
 	}
 	if len(cfg.Only) != 1 || cfg.Only[0] != "ARITHMETIC_BASE" {
 		t.Errorf("Only=%v", cfg.Only)
+	}
+	// Comma-split with surrounding whitespace trimmed, mirroring Disable/Only.
+	if len(cfg.ExcludeFiles) != 2 || cfg.ExcludeFiles[0] != "vendor/" || cfg.ExcludeFiles[1] != "_gen\\.go" {
+		t.Errorf("ExcludeFiles=%v, want [vendor/ _gen\\.go]", cfg.ExcludeFiles)
 	}
 	if cfg.ChangedSince != "main" {
 		t.Errorf("ChangedSince=%q, want main", cfg.ChangedSince)
