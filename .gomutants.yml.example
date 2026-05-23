@@ -91,11 +91,11 @@ output: mutation-report.json
 #     INTEGER_DECREMENT           — integer literal n → n-1
 #     FLOAT_INCREMENT             — float literal f → f+1.0
 #     FLOAT_DECREMENT             — float literal f → f-1.0
-#     LOOP_CONDITION              — replace `for ...; cond; ... {}` condition with `false`
 #   Block-level:
 #     BRANCH_IF                   — empty if/else-if body
 #     BRANCH_ELSE                 — empty else body
 #     BRANCH_CASE                 — empty case clause body
 #     EXPRESSION_REMOVE           — replace &&/|| operand with true/false
 #     STATEMENT_REMOVE            — remove assignment/expression/increment side-effects
+#     LOOP_CONDITION              — replace `for ...; cond; ... {}` condition with `false`
 #     RANGE_BREAK                 — insert `break` as the first statement of a `for…range` body

@@ -798,12 +798,28 @@ func TestIntegerIncrementLargeLiteral(t *testing.T) {
 		[]replacementCase{{"5000000000000000000", "5000000000000000001"}})
 }
 
-// TestIntegerIncrementSkipsUnparseable kills the mutation that empties
-// the `if err != nil { return "", false }` body: with the early-return
-// gone, v stays at 0 (strconv's contract) and the helper would emit a
-// bogus "1" candidate for an integer literal that overflows int64.
+// TestIntegerIncrementSkipsUnparseable asserts the contract that an
+// integer literal exceeding int64 range produces no candidate. The
+// BRANCH_IF mutation on the `if err != nil` body is *equivalent* for
+// IntegerIncrement (ParseInt returns MaxInt64 + ErrRange, +1 wraps to
+// MinInt64, sign-flip guard drops the candidate either way) — this
+// test alone does not kill it. TestIntegerDecrementSkipsUnparseable
+// below is what actually kills the BRANCH_IF.
 func TestIntegerIncrementSkipsUnparseable(t *testing.T) {
 	requireCandidates(t, mutator.IntegerIncrement,
+		"package p\nfunc f() { const x = 99999999999999999999; _ = x }\n", 0)
+}
+
+// TestIntegerDecrementSkipsUnparseable kills the BRANCH_IF on the
+// `if err != nil` body in mutateNumericLiteral. ParseInt returns
+// (MaxInt64, ErrRange) for out-of-range positive literals; with the
+// early-return mutated away, the decrement (delta=-1) does NOT trigger
+// the `delta > 0 && result < v` sign-flip guard, so a bogus
+// "9223372036854775806" candidate would be emitted for a literal that
+// should drop. The +1 direction has its own equivalent sign-flip path,
+// so only the decrement case exposes the mutation.
+func TestIntegerDecrementSkipsUnparseable(t *testing.T) {
+	requireCandidates(t, mutator.IntegerDecrement,
 		"package p\nfunc f() { const x = 99999999999999999999; _ = x }\n", 0)
 }
 

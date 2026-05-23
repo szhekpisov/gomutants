@@ -64,10 +64,16 @@ func mutateNumericLiteral(src string, kind token.Token, delta int) (string, bool
 	switch kind {
 	case token.INT:
 		v, err := strconv.ParseInt(raw, 0, 64)
-		// gomutants:disable-next-line BRANCH_IF reason="ErrRange from ParseInt returns MaxInt64 alongside the error (per strconv contract). Dropping this early-return still drops the candidate downstream because v=MaxInt64, v+1 wraps to MinInt64, and the sign-flip guard below catches it. ErrSyntax can't reach here either — Go's parser only emits well-formed INT BasicLits."
 		if err != nil {
 			// Untyped int constants in Go can exceed int64 (e.g. 1<<63);
-			// skip them rather than guess a representation.
+			// skip them rather than guess a representation. ParseInt
+			// returns (MaxInt64, ErrRange) for too-large positives — the
+			// IntegerIncrement path would then wrap to MinInt64 and be
+			// caught by the sign-flip guard below (equivalence), but the
+			// IntegerDecrement path would silently emit a bogus
+			// "MaxInt64-1" replacement without this early return. The
+			// BRANCH_IF mutant on this block is therefore killable, and
+			// is killed by TestIntegerDecrementSkipsUnparseable.
 			return "", false
 		}
 		result := v + int64(delta)

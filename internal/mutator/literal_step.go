@@ -16,8 +16,12 @@ import (
 // behaviour 1:1 with separate structs but removes the duplication
 // SonarCloud's new-code gate flagged.
 type literalStep struct {
-	typ   MutationType
-	kind  token.Token
+	typ  MutationType
+	kind token.Token
+	// delta is the signed step applied to the literal's parsed value. Must
+	// be non-zero: numericLiteralCandidates's no-phantom-collision argument
+	// relies on the canonical re-formatted result differing from the source
+	// span, which only holds when delta ≠ 0. All registry entries pass ±1.
 	delta int
 }
 
