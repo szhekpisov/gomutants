@@ -767,40 +767,48 @@ func TestChangedSinceCWDInvariant(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pkgs, err := ResolvePackages(ctx, tc.projectDir, tc.patterns, "")
-			if err != nil {
-				t.Fatalf("ResolvePackages: %v", err)
-			}
-			gitRoot, err := GitRoot(ctx, tc.projectDir)
-			if err != nil {
-				t.Fatalf("GitRoot: %v", err)
-			}
-			result := Discover(token.NewFileSet(), pkgs,
-				mutator.NewRegistry().Mutators(), gitRoot, "testmod")
-			if len(result.Mutants) == 0 {
-				t.Fatalf("Discover produced no mutants; expected at least ARITHMETIC_BASE on `3 + 4`")
-			}
-
-			ranges, err := RunGitDiff(ctx, tc.projectDir, "HEAD")
-			if err != nil {
-				t.Fatalf("RunGitDiff: %v", err)
-			}
-			// The diff key shape is the contract FilterByDiff relies on;
-			// pin it here so a change to ParseUnifiedDiff that subtly
-			// alters key form gets caught with a precise failure rather
-			// than as an opaque "0 mutants kept".
-			const wantKey = "internal/somepkg/f.go"
-			if _, ok := ranges[wantKey]; !ok {
-				t.Fatalf("diff map missing key %q; got keys %v", wantKey, diffKeys(ranges))
-			}
-
-			kept := FilterByDiff(result.Mutants, ranges, gitRoot)
-			if len(kept) == 0 {
-				t.Fatalf("FilterByDiff dropped every mutant — likely a CWD/path-shape mismatch.\n"+
-					"gitRoot: %s\nmutant.File sample: %s\ndiff keys: %v",
-					gitRoot, sampleMutantFiles(result.Mutants), diffKeys(ranges))
-			}
+			assertChangedSinceKeepsMutants(t, ctx, tc.projectDir, tc.patterns)
 		})
+	}
+}
+
+// assertChangedSinceKeepsMutants exercises the full --changed-since
+// pipeline from projectDir and fails the test if FilterByDiff drops every
+// discovered mutant. Extracted from TestChangedSinceCWDInvariant to keep
+// the subtest body shallow (SonarCloud's go:S3776 cognitive-complexity
+// gate fires hard on nested closures with multiple if-err branches).
+func assertChangedSinceKeepsMutants(t *testing.T, ctx context.Context, projectDir string, patterns []string) {
+	t.Helper()
+	pkgs, err := ResolvePackages(ctx, projectDir, patterns, "")
+	if err != nil {
+		t.Fatalf("ResolvePackages: %v", err)
+	}
+	gitRoot, err := GitRoot(ctx, projectDir)
+	if err != nil {
+		t.Fatalf("GitRoot: %v", err)
+	}
+	result := Discover(token.NewFileSet(), pkgs,
+		mutator.NewRegistry().Mutators(), gitRoot, "testmod")
+	if len(result.Mutants) == 0 {
+		t.Fatalf("Discover produced no mutants; expected at least ARITHMETIC_BASE on `3 + 4`")
+	}
+	ranges, err := RunGitDiff(ctx, projectDir, "HEAD")
+	if err != nil {
+		t.Fatalf("RunGitDiff: %v", err)
+	}
+	// The diff key shape is the contract FilterByDiff relies on; pin it
+	// here so a change to ParseUnifiedDiff that subtly alters key form
+	// gets caught with a precise failure rather than as an opaque
+	// "0 mutants kept".
+	const wantKey = "internal/somepkg/f.go"
+	if _, ok := ranges[wantKey]; !ok {
+		t.Fatalf("diff map missing key %q; got keys %v", wantKey, diffKeys(ranges))
+	}
+	kept := FilterByDiff(result.Mutants, ranges, gitRoot)
+	if len(kept) == 0 {
+		t.Fatalf("FilterByDiff dropped every mutant — likely a CWD/path-shape mismatch.\n"+
+			"gitRoot: %s\nmutant.File sample: %s\ndiff keys: %v",
+			gitRoot, sampleMutantFiles(result.Mutants), diffKeys(ranges))
 	}
 }
 
