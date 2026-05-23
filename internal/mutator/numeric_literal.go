@@ -13,13 +13,20 @@ import (
 // mutators so the parse/format/skip logic lives in one place.
 //
 // Behaviour notes that the wrappers rely on:
-//   - For token.INT, signed-overflow on either end is detected by sign-flip
-//     after wrap; such literals are skipped (no usable mutation).
+//   - For token.INT, signed-overflow on the increment side is detected by
+//     sign-flip after wrap; such literals are skipped (no usable mutation).
+//     The mirror case (decrementing past MinInt64) is unreachable because
+//     every BasicLit reaching here has v ≥ 0 — Go's parser models `-N` as
+//     unary minus around the positive literal `N`.
 //   - For token.FLOAT, the result is re-formatted in `'g'` form and ".0" is
 //     appended when the formatted string would otherwise parse as an int
 //     literal (e.g. `1.0+1.0 → 2 → 2.0`); this keeps the file parseable.
-//   - When the formatted replacement is byte-identical to the source value,
-//     the candidate is dropped to avoid phantom LIVED mutants.
+//   - No "skip when replacement == source" guard exists or is needed: with
+//     delta ≠ 0 and re-formatting that normalises representation (hex/oct/
+//     binary → decimal, underscores stripped, floats round-tripped through
+//     'g'), the canonical output can never collide byte-for-byte with the
+//     source span. An earlier defensive check was removed because it was
+//     dead in practice and a kept mutation could not be killed.
 func numericLiteralCandidates(
 	fset *token.FileSet, file *ast.File,
 	typ MutationType, kind token.Token, delta int,
