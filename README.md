@@ -51,7 +51,7 @@
 
 * **Fastest at scale.** On full-module runs with many mutants, gomutants is ~20% faster wall-clock and ~1.7× faster per tested mutant than the nearest Go mutation tester — and warm reruns with the incremental cache enabled finish 120–150× faster than cold runs (e.g. a 46-minute `prometheus/tsdb` cold run becomes 19s warm). See [`docs/performance.md`](docs/performance.md) for methodology and external-target benchmarks.
 
-* **Gets mutation testing right.** Per-test coverage routing runs each mutant only against the tests whose coverage touches the mutated line, not the whole suite. Adaptive per-mutant timeouts kill infinite-loop mutants in seconds, not minutes. Byte-level patches via `go test -overlay` preserve generics and never modify the source tree. 16 mutators including block-level operators (`BRANCH_IF`, `BRANCH_ELSE`, `BRANCH_CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE`) surface weak-assertion test gaps that token-level mutation misses.
+* **Gets mutation testing right.** Per-test coverage routing runs each mutant only against the tests whose coverage touches the mutated line, not the whole suite. Adaptive per-mutant timeouts kill infinite-loop mutants in seconds, not minutes. Byte-level patches via `go test -overlay` preserve generics and never modify the source tree. 22 mutators including block-level operators (`BRANCH_IF`, `BRANCH_ELSE`, `BRANCH_CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE`, `LOOP_CONDITION`, `RANGE_BREAK`) surface weak-assertion test gaps that token-level mutation misses.
 
 ## Where gomutants isn't the fit?
 
@@ -234,7 +234,7 @@ gomutants --threshold-efficacy 80 ./...
 - **Resumable runs** — the cache is checkpointed mid-run, so a run killed by an OOM, a CI timeout, or a double Ctrl-C resumes from the last checkpoint instead of starting over.
 - **Adaptive per-mutant timeouts** — deadlines sized from recorded per-test durations × margin, so fast tests don't wait out a multi-minute global ceiling.
 - **Byte-level patching via `go test -overlay`** — generics and all Go syntax survive intact; source tree never modified.
-- **16 mutators including block-level** — `BRANCH_IF`, `BRANCH_ELSE`, `BRANCH_CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE` on top of 11 token-level operators.
+- **22 mutators including block-level** — `BRANCH_IF`, `BRANCH_ELSE`, `BRANCH_CASE`, `EXPRESSION_REMOVE`, `STATEMENT_REMOVE`, `LOOP_CONDITION`, `RANGE_BREAK` on top of 15 token-level operators (arithmetic, bitwise, comparison, logical, loop control, literal increment/decrement).
 - **OOM-safe** — each `go test` child runs in its own process group with a 2 GiB RSS cap; output capped at 1 MiB per stream.
 - **Multiple report formats** — gremlins-compatible JSON (default), [Stryker `mutation-testing-elements` v2](https://github.com/stryker-mutator/mutation-testing-elements) JSON, and a self-contained interactive HTML report.
 - **Conservative discovery** — compile-failing mutants surface as `NOT_VIABLE` and don't inflate efficacy.
@@ -418,6 +418,10 @@ Priority: built-in defaults < config file < CLI flags. See [`.gomutants.yml.exam
 | `INVERT_LOGICAL` | Swap logical operators | `&&` <-> `\|\|` |
 | `INVERT_LOOP_CTRL` | Swap loop control | `break` <-> `continue` |
 | `REMOVE_SELF_ASSIGNMENTS` | Drop op from compound assignment | `x += y` -> `x = y` |
+| `INTEGER_INCREMENT` | Increment integer literal | `42` -> `43`, `0xFF` -> `256` |
+| `INTEGER_DECREMENT` | Decrement integer literal | `42` -> `41`, `0` -> `-1` |
+| `FLOAT_INCREMENT` | Increment float literal | `1.5` -> `2.5`, `0.0` -> `1.0` |
+| `FLOAT_DECREMENT` | Decrement float literal | `1.5` -> `0.5`, `1e2` -> `99.0` |
 
 **Block-level:**
 
@@ -428,6 +432,8 @@ Priority: built-in defaults < config file < CLI flags. See [`.gomutants.yml.exam
 | `BRANCH_CASE` | Empty case body | `case 1: doStuff()` -> `case 1: _ = 0` |
 | `EXPRESSION_REMOVE` | Remove boolean operand | `a && b` -> `true && b` / `a && true` |
 | `STATEMENT_REMOVE` | Remove statement effect | `x = expr` -> `_ = expr`, `f()` -> `_ = 0` |
+| `LOOP_CONDITION` | Force for-loop condition to false | `for i := 0; i < n; i++ {}` -> `for i := 0; false; i++ {}` |
+| `RANGE_BREAK` | Insert early break in for…range body | `for _, v := range xs { f(v) }` -> `for _, v := range xs { break; f(v) }` |
 
 **Mutant statuses:**
 

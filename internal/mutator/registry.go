@@ -39,6 +39,12 @@ func NewRegistry() *Registry {
 		&branchCase{},
 		&expressionRemove{},
 		&statementRemove{},
+		&literalStep{typ: IntegerIncrement, kind: token.INT, delta: 1},
+		&literalStep{typ: IntegerDecrement, kind: token.INT, delta: -1},
+		&literalStep{typ: FloatIncrement, kind: token.FLOAT, delta: 1},
+		&literalStep{typ: FloatDecrement, kind: token.FLOAT, delta: -1},
+		&loopCondition{},
+		&rangeBreak{},
 	}
 	typeSet := make(map[string]struct{}, len(mutators))
 	for _, m := range mutators {
