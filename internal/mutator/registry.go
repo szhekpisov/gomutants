@@ -39,6 +39,12 @@ func NewRegistry() *Registry {
 		&branchCase{},
 		&expressionRemove{},
 		&statementRemove{},
+		&integerIncrement{},
+		&integerDecrement{},
+		&floatIncrement{},
+		&floatDecrement{},
+		&loopCondition{},
+		&rangeBreak{},
 	}
 	typeSet := make(map[string]struct{}, len(mutators))
 	for _, m := range mutators {

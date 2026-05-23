@@ -51,6 +51,12 @@ const (
 	BranchCase               MutationType = "BRANCH_CASE"
 	ExpressionRemove         MutationType = "EXPRESSION_REMOVE"
 	StatementRemove          MutationType = "STATEMENT_REMOVE"
+	IntegerIncrement         MutationType = "INTEGER_INCREMENT"
+	IntegerDecrement         MutationType = "INTEGER_DECREMENT"
+	FloatIncrement           MutationType = "FLOAT_INCREMENT"
+	FloatDecrement           MutationType = "FLOAT_DECREMENT"
+	LoopCondition            MutationType = "LOOP_CONDITION"
+	RangeBreak               MutationType = "RANGE_BREAK"
 )
 
 type MutantCandidate struct {
@@ -71,16 +77,16 @@ type Position struct {
 }
 
 type Mutant struct {
-	ID          int
-	Type        MutationType
-	File        string // Absolute path.
-	RelFile     string // Relative to module root (for report).
-	Line        int
-	Col         int
-	Original    string
-	Replacement string
-	StartOffset  int // Byte offset in source file.
-	EndOffset    int // Byte offset end (exclusive).
+	ID           int
+	Type         MutationType
+	File         string // Absolute path.
+	RelFile      string // Relative to module root (for report).
+	Line         int
+	Col          int
+	Original     string
+	Replacement  string
+	StartOffset  int    // Byte offset in source file.
+	EndOffset    int    // Byte offset end (exclusive).
 	CoverageFile string // Coverage profile path (e.g. "module/pkg/file.go").
 	Status       MutantStatus
 	Duration     time.Duration

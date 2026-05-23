@@ -29,11 +29,11 @@ func TestIntegrationSimple(t *testing.T) {
 
 	r := loadReport(t, outPath)
 
-	// Expected: 36 total, 0 not covered (all positions in tested
+	// Expected: 51 total, 0 not covered (all positions in tested
 	// files are testable thanks to the FilterByCoverage relaxation
-	// that runs uninstrumented positions in tested files), 36 tested.
-	if r.MutantsTotal != 36 {
-		t.Errorf("total=%d, want 36", r.MutantsTotal)
+	// that runs uninstrumented positions in tested files), 51 tested.
+	if r.MutantsTotal != 51 {
+		t.Errorf("total=%d, want 51", r.MutantsTotal)
 	}
 	if r.MutantsNotCovered != 0 {
 		t.Errorf("not_covered=%d, want 0", r.MutantsNotCovered)
@@ -41,8 +41,8 @@ func TestIntegrationSimple(t *testing.T) {
 
 	// All mutants should be either killed, lived, or not viable.
 	tested := r.MutantsKilled + r.MutantsLived + r.MutantsNotViable
-	if tested != 36 {
-		t.Errorf("tested=%d (killed=%d lived=%d not_viable=%d), want 36 total",
+	if tested != 51 {
+		t.Errorf("tested=%d (killed=%d lived=%d not_viable=%d), want 51 total",
 			tested, r.MutantsKilled, r.MutantsLived, r.MutantsNotViable)
 	}
 
@@ -72,12 +72,14 @@ func TestIntegrationUntested(t *testing.T) {
 
 	r := loadReport(t, outPath)
 
-	// Expected: 6 total, 2 not covered (IsEven has no test).
-	if r.MutantsTotal != 6 {
-		t.Errorf("total=%d, want 6", r.MutantsTotal)
+	// Expected: 12 total, 6 not covered (IsEven has no test;
+	// its two literals each emit IntegerIncrement+IntegerDecrement
+	// alongside the original ARITHMETIC_BASE / CONDITIONALS_NEGATION).
+	if r.MutantsTotal != 12 {
+		t.Errorf("total=%d, want 12", r.MutantsTotal)
 	}
-	if r.MutantsNotCovered != 2 {
-		t.Errorf("not_covered=%d, want 2", r.MutantsNotCovered)
+	if r.MutantsNotCovered != 6 {
+		t.Errorf("not_covered=%d, want 6", r.MutantsNotCovered)
 	}
 
 	// Weak tests — some mutants should survive.

@@ -74,7 +74,7 @@ output: mutation-report.json
 #   - _gen\.go$
 #   - mocks/
 
-# Available mutator types (16 total):
+# Available mutator types (22 total):
 #   Token-level:
 #     ARITHMETIC_BASE             — swap +/-, */%, etc.
 #     CONDITIONALS_BOUNDARY       — swap </<=, >/>=
@@ -87,9 +87,15 @@ output: mutation-report.json
 #     INVERT_LOGICAL              — swap &&/||
 #     INVERT_LOOP_CTRL            — swap break/continue
 #     REMOVE_SELF_ASSIGNMENTS     — drop op from compound assignment (`x += y` → `x = y`)
+#     INTEGER_INCREMENT           — integer literal n → n+1
+#     INTEGER_DECREMENT           — integer literal n → n-1
+#     FLOAT_INCREMENT             — float literal f → f+1.0
+#     FLOAT_DECREMENT             — float literal f → f-1.0
+#     LOOP_CONDITION              — replace `for ...; cond; ... {}` condition with `false`
 #   Block-level:
 #     BRANCH_IF                   — empty if/else-if body
 #     BRANCH_ELSE                 — empty else body
 #     BRANCH_CASE                 — empty case clause body
 #     EXPRESSION_REMOVE           — replace &&/|| operand with true/false
 #     STATEMENT_REMOVE            — remove assignment/expression/increment side-effects
+#     RANGE_BREAK                 — insert `break` as the first statement of a `for…range` body

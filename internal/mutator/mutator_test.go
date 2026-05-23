@@ -759,6 +759,459 @@ func f() {
 	}
 }
 
+// --- Numeric-literal increment / decrement ---
+
+func TestIntegerIncrement(t *testing.T) {
+	src := `package p
+func f() int { return 1 + 7 + 0xFF }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.IntegerIncrement)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(candidates))
+	}
+	want := []struct {
+		original    string
+		replacement string
+	}{
+		{"1", "2"},
+		{"7", "8"},
+		// 0xFF is reformatted as decimal — keeps the replacement unambiguous.
+		{"0xFF", "256"},
+	}
+	for i, c := range candidates {
+		if c.Original != want[i].original || c.Replacement != want[i].replacement {
+			t.Errorf("candidate %d: got %q→%q, want %q→%q",
+				i, c.Original, c.Replacement, want[i].original, want[i].replacement)
+		}
+	}
+}
+
+func TestIntegerIncrementSkipsFloatsAndImaginaries(t *testing.T) {
+	src := `package p
+func f() complex128 { _ = 3.14; return 1i }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.IntegerIncrement)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates on float/imaginary literals, got %d (%+v)", len(got), got)
+	}
+}
+
+func TestIntegerIncrementHandlesUnderscores(t *testing.T) {
+	src := `package p
+func f() int { return 1_000 }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.IntegerIncrement)
+	candidates := m.Discover(fset, file, srcBytes)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Original != "1_000" || candidates[0].Replacement != "1001" {
+		t.Errorf("got %q→%q, want \"1_000\"→\"1001\"", candidates[0].Original, candidates[0].Replacement)
+	}
+}
+
+// TestIntegerIncrementSkipsMaxInt64 kills the mutation that widens the
+// signed-overflow guard `delta > 0` to a tautology (e.g. `delta > -1`): with
+// the guard disabled the helper would silently return a wrapped MinInt64
+// instead of dropping the candidate.
+func TestIntegerIncrementSkipsMaxInt64(t *testing.T) {
+	src := `package p
+func f() int64 { return 9223372036854775807 }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.IntegerIncrement)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for MaxInt64 (signed-overflow guard); got %d (%+v)", len(got), got)
+	}
+}
+
+// TestIntegerIncrementLargeLiteral kills the mutation that narrows
+// strconv.ParseInt's bitSize from 64 to 63: a literal between 2^62 and
+// 2^63-1 fits an int64 but not a signed 63-bit value, so bitSize=63 would
+// reject it and drop the candidate.
+func TestIntegerIncrementLargeLiteral(t *testing.T) {
+	src := `package p
+func f() int64 { return 5000000000000000000 }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.IntegerIncrement)
+	candidates := m.Discover(fset, file, srcBytes)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate for 5e18 (fits in int64, not int63); got %d", len(candidates))
+	}
+	if candidates[0].Replacement != "5000000000000000001" {
+		t.Errorf("replacement=%q, want %q", candidates[0].Replacement, "5000000000000000001")
+	}
+}
+
+// TestIntegerIncrementSkipsUnparseable kills the mutation that empties
+// the `if err != nil { return "", false }` body: with the early-return
+// gone, v stays at 0 (strconv's contract) and the helper would emit a
+// bogus "1" candidate for an integer literal that overflows int64.
+func TestIntegerIncrementSkipsUnparseable(t *testing.T) {
+	src := `package p
+func f() {
+	const x = 99999999999999999999
+	_ = x
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.IntegerIncrement)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for an int literal that overflows int64, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestFloatIncrementSkipsUnparseable kills the BRANCH_IF on the float
+// err-return: a literal that exceeds float64 range must drop the
+// candidate, not emit "+Inf+1" garbage.
+func TestFloatIncrementSkipsUnparseable(t *testing.T) {
+	src := `package p
+func f() float64 {
+	const x = 1e10000
+	return x
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.FloatIncrement)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for an out-of-range float literal, got %d (%+v)", len(got), got)
+	}
+}
+
+func TestIntegerDecrement(t *testing.T) {
+	src := `package p
+func f() int { return 1 + 7 + 0 }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.IntegerDecrement)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(candidates))
+	}
+	want := []struct {
+		original    string
+		replacement string
+	}{
+		{"1", "0"},
+		{"7", "6"},
+		{"0", "-1"},
+	}
+	for i, c := range candidates {
+		if c.Original != want[i].original || c.Replacement != want[i].replacement {
+			t.Errorf("candidate %d: got %q→%q, want %q→%q",
+				i, c.Original, c.Replacement, want[i].original, want[i].replacement)
+		}
+	}
+}
+
+func TestFloatIncrement(t *testing.T) {
+	src := `package p
+func f() float64 { return 1.5 + 0.0 }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.FloatIncrement)
+	candidates := m.Discover(fset, file, srcBytes)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+	// 0.0 → 1.0 must stay a float literal, not collapse to "1".
+	want := []struct {
+		original    string
+		replacement string
+	}{
+		{"1.5", "2.5"},
+		{"0.0", "1.0"},
+	}
+	for i, c := range candidates {
+		if c.Original != want[i].original || c.Replacement != want[i].replacement {
+			t.Errorf("candidate %d: got %q→%q, want %q→%q",
+				i, c.Original, c.Replacement, want[i].original, want[i].replacement)
+		}
+	}
+}
+
+func TestFloatIncrementSkipsIntsAndImaginaries(t *testing.T) {
+	src := `package p
+func f() complex128 { _ = 42; return 1i }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.FloatIncrement)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates on int/imaginary literals, got %d (%+v)", len(got), got)
+	}
+}
+
+func TestFloatDecrement(t *testing.T) {
+	src := `package p
+func f() float64 { return 1.5 + 0.0 + 1e2 }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.FloatDecrement)
+	candidates := m.Discover(fset, file, srcBytes)
+	if len(candidates) != 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(candidates))
+	}
+	// 1e2 (=100.0) decrements to 99 — the formatter would emit "99" which
+	// is an int literal in Go, so the helper must append ".0" to keep it a
+	// float. The exact replacements are asserted to kill mutations on the
+	// delta arg in float_decrement.go (e.g. `-1 → -2` would yield `-0.5`,
+	// `-1.0`, `98.0`).
+	want := []struct {
+		original    string
+		replacement string
+	}{
+		{"1.5", "0.5"},
+		{"0.0", "-1.0"},
+		{"1e2", "99.0"},
+	}
+	for i, c := range candidates {
+		if c.Original != want[i].original || c.Replacement != want[i].replacement {
+			t.Errorf("candidate %d: got %q→%q, want %q→%q",
+				i, c.Original, c.Replacement, want[i].original, want[i].replacement)
+		}
+		// `99.0` contains `.`; if the helper ever dropped its append-".0"
+		// guard, `99` would slip through and break the surrounding code.
+		if !strings.ContainsAny(c.Replacement, ".eEpP") {
+			t.Errorf("candidate %d replacement=%q is not a float literal", i, c.Replacement)
+		}
+	}
+}
+
+// --- Loop condition ---
+
+func TestLoopCondition(t *testing.T) {
+	src := `package p
+func f() {
+	for i := 0; i < 10; i++ {
+		_ = i
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.LoopCondition)
+	candidates := m.Discover(fset, file, srcBytes)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].Original != "i < 10" || candidates[0].Replacement != "false" {
+		t.Errorf("got %q→%q, want \"i < 10\"→\"false\"", candidates[0].Original, candidates[0].Replacement)
+	}
+}
+
+func TestLoopConditionSkipsInfiniteAndRange(t *testing.T) {
+	src := `package p
+func f() {
+	for {
+		break
+	}
+	for _, v := range []int{1, 2} {
+		_ = v
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.LoopCondition)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for infinite/range loops, got %d (%+v)", len(got), got)
+	}
+}
+
+func TestLoopConditionSkipsAlreadyFalse(t *testing.T) {
+	src := `package p
+func f() {
+	for false {
+		_ = 1
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.LoopCondition)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for `for false`, got %d (%+v)", len(got), got)
+	}
+}
+
+// --- Range break ---
+
+func TestRangeBreak(t *testing.T) {
+	src := `package p
+func f() {
+	for _, v := range []int{1, 2, 3} {
+		_ = v
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	candidates := m.Discover(fset, file, srcBytes)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	c := candidates[0]
+	if c.Original != "" {
+		t.Errorf("Original=%q, want empty", c.Original)
+	}
+	if c.StartOffset != c.EndOffset {
+		t.Errorf("StartOffset=%d EndOffset=%d, want equal (zero-width insertion)", c.StartOffset, c.EndOffset)
+	}
+	// Anchor StartOffset exactly one byte past the body's `{`. Anything else
+	// either overwrites the brace (lose the `{`) or lands inside the body
+	// (corrupts the first statement). Both produce NotViable mutants — bad
+	// signal — so this assertion kills off-by-one mutations on insertOffset.
+	wantOffset := strings.Index(src, "{\n\t\t_ = v") + 1
+	if c.StartOffset != wantOffset {
+		t.Errorf("StartOffset=%d, want %d (one byte past the body Lbrace)", c.StartOffset, wantOffset)
+	}
+	if c.Replacement != " break;" {
+		t.Errorf("Replacement=%q, want %q", c.Replacement, " break;")
+	}
+}
+
+// TestRangeBreakPatchProducesParseableSource sanity-checks that applying the
+// inserted `break` yields a file the Go parser still accepts. This kills any
+// mutation that strips the leading space or trailing `;` from the inserted
+// text, which would fuse the new token onto an adjacent identifier.
+func TestRangeBreakPatchProducesParseableSource(t *testing.T) {
+	src := `package p
+func f() { for _, v := range []int{1, 2, 3} { _ = v } }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	candidates := m.Discover(fset, file, srcBytes)
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	c := candidates[0]
+	out := append([]byte(nil), srcBytes[:c.StartOffset]...)
+	out = append(out, c.Replacement...)
+	out = append(out, srcBytes[c.EndOffset:]...)
+	if _, err := parser.ParseFile(token.NewFileSet(), "patched.go", string(out), 0); err != nil {
+		t.Errorf("patched source failed to parse: %v\n%s", err, out)
+	}
+}
+
+// TestRangeBreakHandlesEmptyBody kills the `len > 0` → `len > -1` mutation:
+// the mutated guard would always enter the inner branch and panic on
+// `rng.Body.List[0]` for an empty body. The test asserts a candidate is
+// emitted and no panic occurs.
+func TestRangeBreakHandlesEmptyBody(t *testing.T) {
+	src := `package p
+func f(ch chan int) {
+	for range ch {
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 1 {
+		t.Errorf("expected 1 candidate for empty-body range; got %d (%+v)", len(got), got)
+	}
+}
+
+func TestRangeBreakSkipsExistingBreak(t *testing.T) {
+	src := `package p
+func f() {
+	for _, v := range []int{1, 2, 3} {
+		break
+		_ = v
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates when body already starts with break, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestRangeBreakSkipsSingleBreakBody kills the `len > 0` → `len > 1`
+// mutation: with a one-statement body of just `break`, the original guard
+// (`> 0`) enters the branch and skips the candidate; the mutated guard
+// (`> 1`) skips the branch and emits a phantom-identical insertion.
+func TestRangeBreakSkipsSingleBreakBody(t *testing.T) {
+	src := `package p
+func f(ch chan int) {
+	for range ch {
+		break
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for body-of-only-break, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestRangeBreakEmitsForLeadingContinue kills the mutation that drops the
+// `b.Tok == token.BREAK` check (collapsing it to `true`): with the check
+// gone, any BranchStmt at the body's head — including `continue` — would
+// be treated as an existing break and the candidate skipped.
+func TestRangeBreakEmitsForLeadingContinue(t *testing.T) {
+	src := `package p
+func f(ch chan int) {
+	for range ch {
+		continue
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 1 {
+		t.Errorf("expected 1 candidate for body starting with `continue`, got %d (%+v)", len(got), got)
+	}
+}
+
+// TestRangeBreakEmitsForLeadingLabelledBreak kills the mutation that drops
+// the `b.Label == nil` check: an unconditional `break Outer` exits the
+// outer loop, leaving the inner range to still iterate, so the candidate
+// must still be emitted. Collapsing the label check to `true` would treat
+// the labelled break as the inner-loop short-circuit and skip the mutant.
+func TestRangeBreakEmitsForLeadingLabelledBreak(t *testing.T) {
+	src := `package p
+func f(rows [][]int) {
+Outer:
+	for _, row := range rows {
+		for _, v := range row {
+			break Outer
+			_ = v
+		}
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	// Two RangeStmts: the outer (`for _, row := range rows`) and the inner
+	// (`for _, v := range row`). The inner body starts with a *labelled*
+	// break, so it must still emit a candidate; the outer body starts with
+	// the inner ForStmt (not a BranchStmt) and also emits.
+	if got := m.Discover(fset, file, srcBytes); len(got) != 2 {
+		t.Errorf("expected 2 candidates (outer + inner range), got %d (%+v)", len(got), got)
+	}
+}
+
+func TestRangeBreakDoesNotTouchForStmt(t *testing.T) {
+	src := `package p
+func f() {
+	for i := 0; i < 3; i++ {
+		_ = i
+	}
+}
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.RangeBreak)
+	if got := m.Discover(fset, file, srcBytes); len(got) != 0 {
+		t.Errorf("expected 0 candidates for non-range ForStmt, got %d (%+v)", len(got), got)
+	}
+}
+
 // --- Registry ---
 
 func TestRegistryIsKnown(t *testing.T) {
@@ -804,8 +1257,8 @@ func TestRegistryEnabledMutators(t *testing.T) {
 	reg := mutator.NewRegistry()
 
 	all := reg.Mutators()
-	if len(all) != 16 {
-		t.Fatalf("expected 16 mutators, got %d", len(all))
+	if len(all) != 22 {
+		t.Fatalf("expected 22 mutators, got %d", len(all))
 	}
 
 	only := reg.EnabledMutators([]string{"ARITHMETIC_BASE"}, nil)
@@ -814,8 +1267,8 @@ func TestRegistryEnabledMutators(t *testing.T) {
 	}
 
 	disabled := reg.EnabledMutators(nil, []string{"ARITHMETIC_BASE", "BRANCH_IF"})
-	if len(disabled) != 14 {
-		t.Fatalf("expected 14 after disabling 2, got %d", len(disabled))
+	if len(disabled) != 20 {
+		t.Fatalf("expected 20 after disabling 2, got %d", len(disabled))
 	}
 }
 
@@ -868,7 +1321,7 @@ func f(a, b int) int {
 	_ = a &^ b
 	_ = a << 1
 	_ = a >> 1
-	// Loop control — InvertLoopCtrl.
+	// Loop control — InvertLoopCtrl. The non-nil condition also exercises LoopCondition.
 	for i := 0; i < 10; i++ {
 		if i == 5 {
 			break
@@ -877,6 +1330,12 @@ func f(a, b int) int {
 			continue
 		}
 	}
+	// Range — RangeBreak.
+	for _, v := range []int{1, 2, 3} {
+		_ = v
+	}
+	// Float literal — Float{Increment,Decrement}.
+	_ = 3.14
 	return 0
 }
 `
@@ -1195,8 +1654,8 @@ func f(x int) {
 func TestRegistryEnabledMutatorsNoFilter(t *testing.T) {
 	reg := mutator.NewRegistry()
 	all := reg.EnabledMutators(nil, nil)
-	if len(all) != 16 {
-		t.Errorf("expected 16, got %d", len(all))
+	if len(all) != 22 {
+		t.Errorf("expected 22, got %d", len(all))
 	}
 }
 
