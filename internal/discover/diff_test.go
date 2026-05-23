@@ -3,6 +3,7 @@ package discover
 import (
 	"context"
 	"fmt"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -679,6 +680,160 @@ func TestFilterByDiffContinuesAfterEmptyRel(t *testing.T) {
 	if len(got) != 1 || got[0].ID != 2 {
 		t.Errorf("loop must continue past Rel failure; got %+v", got)
 	}
+}
+
+// TestChangedSinceCWDInvariant pins the cross-CWD invariant of the
+// --changed-since pipeline: regardless of which directory gomutants is
+// invoked from (module root vs a nested subpackage), the absolute
+// mutant.File paths produced by Discover must align with the
+// repo-root-relative keys in the diff map after FilterByDiff's
+// filepath.Rel(gitRoot, m.File) normalisation, so the same set of
+// mutants survives the filter.
+//
+// The invariant holds because both inputs to that Rel are absolute:
+// mutant.File via filepath.Join(pkg.Dir, …) where pkg.Dir comes from
+// `go list -json` (always absolute), and gitRoot via `git rev-parse
+// --show-toplevel` (always absolute). If anyone refactors Discover to
+// stash a CWD-relative path on mutant.File — or computes gitRoot
+// differently — this test fails for both subcases at once.
+func TestChangedSinceCWDInvariant(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not available")
+	}
+
+	// Canonicalise the temp dir up front: on macOS t.TempDir() returns a
+	// /var/... path while `git rev-parse --show-toplevel` and `go list`
+	// resolve through the /private symlink. Without this, gitRoot and
+	// mutant.File would sit on different canonical roots and Rel would
+	// produce "../..." nonsense — failing the test for the wrong reason.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No GIT_CEILING_DIRECTORIES: the in-tree `.git` created below stops
+	// the upward search before it can reach any enclosing dev repo.
+	ctx := context.Background()
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Module with a nested subpackage so we can vary the invocation cwd
+	// between the module root and the subpackage itself.
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module testmod\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	subDir := filepath.Join(dir, "internal", "somepkg")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(subDir, "f.go")
+	if err := os.WriteFile(srcPath,
+		[]byte("package somepkg\n\nfunc F() int { return 1 + 2 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("add", ".")
+	runGit("commit", "-q", "-m", "init")
+
+	// Working-tree edit on line 3 — ARITHMETIC_BASE produces a mutant
+	// at the `+`, which must survive FilterByDiff against `HEAD`.
+	if err := os.WriteFile(srcPath,
+		[]byte("package somepkg\n\nfunc F() int { return 3 + 4 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name       string
+		projectDir string
+		patterns   []string
+	}{
+		{"from module root", dir, []string{"./internal/somepkg/..."}},
+		{"from subpackage cwd", subDir, []string{"./..."}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertChangedSinceKeepsMutants(t, ctx, tc.projectDir, tc.patterns)
+		})
+	}
+}
+
+// assertChangedSinceKeepsMutants exercises the full --changed-since
+// pipeline from projectDir and fails the test if FilterByDiff drops every
+// discovered mutant. Extracted from TestChangedSinceCWDInvariant to keep
+// the subtest body shallow (SonarCloud's go:S3776 cognitive-complexity
+// gate fires hard on nested closures with multiple if-err branches).
+func assertChangedSinceKeepsMutants(t *testing.T, ctx context.Context, projectDir string, patterns []string) {
+	t.Helper()
+	pkgs, err := ResolvePackages(ctx, projectDir, patterns, "")
+	if err != nil {
+		t.Fatalf("ResolvePackages: %v", err)
+	}
+	gitRoot, err := GitRoot(ctx, projectDir)
+	if err != nil {
+		t.Fatalf("GitRoot: %v", err)
+	}
+	result := Discover(token.NewFileSet(), pkgs,
+		mutator.NewRegistry().Mutators(), gitRoot, "testmod")
+	if len(result.Mutants) == 0 {
+		t.Fatalf("Discover produced no mutants; expected at least ARITHMETIC_BASE on `3 + 4`")
+	}
+	ranges, err := RunGitDiff(ctx, projectDir, "HEAD")
+	if err != nil {
+		t.Fatalf("RunGitDiff: %v", err)
+	}
+	// The diff key shape is the contract FilterByDiff relies on; pin it
+	// here so a change to ParseUnifiedDiff that subtly alters key form
+	// gets caught with a precise failure rather than as an opaque
+	// "0 mutants kept".
+	const wantKey = "internal/somepkg/f.go"
+	if _, ok := ranges[wantKey]; !ok {
+		t.Fatalf("diff map missing key %q; got keys %v", wantKey, diffKeys(ranges))
+	}
+	kept := FilterByDiff(result.Mutants, ranges, gitRoot)
+	if len(kept) == 0 {
+		t.Fatalf("FilterByDiff dropped every mutant — likely a CWD/path-shape mismatch.\n"+
+			"gitRoot: %s\nmutant.File sample: %s\ndiff keys: %v",
+			gitRoot, sampleMutantFiles(result.Mutants), diffKeys(ranges))
+	}
+}
+
+func diffKeys(m map[string][]LineRange) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func sampleMutantFiles(mutants []mutator.Mutant) string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, m := range mutants {
+		if _, ok := seen[m.File]; ok {
+			continue
+		}
+		seen[m.File] = struct{}{}
+		out = append(out, m.File)
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 // TestFilterByDiffBreaksAfterFirstHunkMatch pins down the inner-loop
