@@ -11,7 +11,10 @@ A report's conclusion is one of:
 
 - **Strict superset.** gomutants generates every mutant the other tool does,
   plus additional mutants from documented scope differences.
-- **Equivalent.** Identical mutant sets on the shared mutator families.
+- **Equivalent.** Identical mutant sets on the shared mutator families,
+  modulo documented mutator-family reclassifications (e.g. one tool
+  scans tokens, the other scans the AST) and NOT-VIABLE candidates
+  one side filters and the other surfaces.
 - **Gap.** A mutant the other tool generates is genuinely missing from
   gomutants. (No report has reached this conclusion to date.)
 
@@ -20,6 +23,7 @@ A report's conclusion is one of:
 | external tool | target | result | report |
 |---|---|---|---|
 | ooze v0.2.0 | google/uuid v1.6.0 | strict superset | [ooze/uuid.md](ooze/uuid.md) |
+| gremlins v0.6.0 | google/uuid v1.6.0 | equivalent on viable mutants | [gremlins/uuid.md](gremlins/uuid.md) |
 
 ## Report structure
 
