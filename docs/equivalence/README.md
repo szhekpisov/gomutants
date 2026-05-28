@@ -24,6 +24,7 @@ A report's conclusion is one of:
 |---|---|---|---|
 | ooze v0.2.0 | google/uuid v1.6.0 | strict superset | [ooze/uuid.md](ooze/uuid.md) |
 | gremlins v0.6.0 | google/uuid v1.6.0 | equivalent on viable mutants | [gremlins/uuid.md](gremlins/uuid.md) |
+| gremlins v0.6.0 | spf13/cobra v1.10.2 | equivalent on viable mutants | [gremlins/cobra.md](gremlins/cobra.md) |
 
 ## Report structure
 
