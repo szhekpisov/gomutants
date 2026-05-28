@@ -78,6 +78,10 @@ One-off manual runs or thin test suites (<70% line coverage) — the one-time se
 [^1]: gremlins uses AST rewriting; some generic constructs round-trip incorrectly.
 [^2]: Compile-failing mutants are silently dropped, so they don't appear in the report at all — they neither contribute to the kill count nor surface as a separate category.
 
+### Mutator-set equivalence
+
+gomutants is a strict superset of [ooze](https://github.com/gtramontina/ooze) v0.2.0 and [gremlins](https://github.com/go-gremlins/gremlins) v0.6.0: more mutators overall, and on the mutators they share it generates the same positions (or more, for ooze). Position-level reports on `google/uuid v1.6.0`: [ooze](docs/equivalence/ooze/uuid.md), [gremlins](docs/equivalence/gremlins/uuid.md).
+
 ### Benchmark snapshot
 
 Four real-world Go projects on Apple M1 Pro 10-core, gomutants v0.2.2 vs gremlins v0.6.0, matched 5-operator set (gremlins' defaults), `workers=10`, `--cache=off`, `GOTOOLCHAIN=go1.25.7` (gremlins is broken on Go 1.26.x). Engine and gremlins rows are 3-run medians; cold-OOB rows on the larger targets are single-run.
