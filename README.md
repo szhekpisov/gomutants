@@ -80,7 +80,7 @@ One-off manual runs or thin test suites (<70% line coverage) — the one-time se
 
 ### Mutator-set equivalence
 
-gomutants is a strict superset of [ooze](https://github.com/gtramontina/ooze) v0.2.0 and [gremlins](https://github.com/go-gremlins/gremlins) v0.6.0: more mutators overall, and on the mutators they share it generates the same positions (or more, for ooze). Position-level reports on `google/uuid v1.6.0`: [ooze](docs/equivalence/ooze/uuid.md), [gremlins](docs/equivalence/gremlins/uuid.md).
+gomutants is a strict superset of [ooze](https://github.com/gtramontina/ooze) v0.2.0 and [gremlins](https://github.com/go-gremlins/gremlins) v0.6.0: more mutators overall, and on the mutators they share it generates the same positions (or more, for ooze). Position-level reports: ooze on [uuid](docs/equivalence/ooze/uuid.md); gremlins on [uuid](docs/equivalence/gremlins/uuid.md) and [cobra](docs/equivalence/gremlins/cobra.md).
 
 ### Benchmark snapshot
 
