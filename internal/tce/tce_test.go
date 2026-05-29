@@ -158,3 +158,171 @@ func TestDetector_Run_FlipsOnlyEquivalentSurvivors(t *testing.T) {
 		t.Errorf("non-LIVED mutant must be untouched: got %s", mutants[2].Status)
 	}
 }
+
+// --- error paths (no real compile needed; the cheap prep runs first) ---
+
+func TestCheck_SourceNotCached(t *testing.T) {
+	d := NewDetector(t.TempDir(), "", map[string][]byte{}) // empty cache
+	m := mutator.Mutant{File: "/nope.go", Pkg: "x", StartOffset: 0, EndOffset: 1, Replacement: "-"}
+	if _, err := d.Check(context.Background(), m, "", ""); err == nil {
+		t.Error("expected error when source is not cached")
+	}
+}
+
+func TestCheck_PatchOutOfRange(t *testing.T) {
+	src := []byte("package p\n")
+	d := NewDetector(t.TempDir(), "", map[string][]byte{"/p.go": src})
+	m := mutator.Mutant{File: "/p.go", Pkg: "x", StartOffset: 0, EndOffset: 9999, Replacement: "-"}
+	if _, err := d.Check(context.Background(), m, filepath.Join(t.TempDir(), "w.go"), ""); err == nil {
+		t.Error("expected error for out-of-range patch offsets")
+	}
+}
+
+func TestCheck_WriteAndMarshalFailures(t *testing.T) {
+	src := []byte("package p\n\nvar X = 1\n")
+	d := NewDetector(t.TempDir(), "", map[string][]byte{"/p.go": src})
+	m := mutator.Mutant{File: "/p.go", Pkg: "x", StartOffset: 18, EndOffset: 19, Replacement: "2"}
+	tmp := filepath.Join(t.TempDir(), "w.go")
+	ov := filepath.Join(t.TempDir(), "ov.json")
+
+	t.Run("tmp source write fails", func(t *testing.T) {
+		defer swapWriteFile(failingWrite)()
+		if _, err := d.Check(context.Background(), m, tmp, ov); err == nil {
+			t.Error("expected error from tmp-source write failure")
+		}
+	})
+	t.Run("overlay marshal fails", func(t *testing.T) {
+		defer swapMarshal(func(any) ([]byte, error) { return nil, errInjected })()
+		if _, err := d.Check(context.Background(), m, tmp, ov); err == nil {
+			t.Error("expected error from overlay marshal failure")
+		}
+	})
+}
+
+func TestCheck_ReferenceCompileError(t *testing.T) {
+	src := []byte("package p\n\nvar X = 1\n")
+	d := NewDetector(t.TempDir(), "", map[string][]byte{"/p.go": src})
+	m := mutator.Mutant{File: "/p.go", Pkg: "x", StartOffset: 18, EndOffset: 19, Replacement: "2", Status: mutator.StatusLived}
+	defer swapExec(failingExec)()
+
+	// Check surfaces the compile error (covers referenceHash + compileHash
+	// error branches), and Run leaves such a survivor LIVED.
+	if _, err := d.Check(context.Background(), m, filepath.Join(t.TempDir(), "w.go"), filepath.Join(t.TempDir(), "ov.json")); err == nil {
+		t.Error("expected compile error to propagate")
+	}
+	d2 := NewDetector(t.TempDir(), "", map[string][]byte{"/p.go": src})
+	ms := []mutator.Mutant{m}
+	d2.Run(context.Background(), ms, 1, t.TempDir(), nil)
+	if ms[0].Status != mutator.StatusLived {
+		t.Errorf("survivor must stay LIVED when the TCE compile errors, got %s", ms[0].Status)
+	}
+}
+
+// TestCheck_MutantCompileError covers the compileHash error branch:
+// the reference is pre-seeded so referenceHash succeeds, then the mutant
+// compile (stubbed) fails.
+func TestCheck_MutantCompileError(t *testing.T) {
+	src := []byte("package p\n\nvar X = 1\n")
+	d := NewDetector(t.TempDir(), "", map[string][]byte{"/p.go": src})
+	seedRef(d, "x", "deadbeef")
+	defer swapExec(failingExec)()
+	m := mutator.Mutant{File: "/p.go", Pkg: "x", StartOffset: 18, EndOffset: 19, Replacement: "2"}
+	if _, err := d.Check(context.Background(), m, filepath.Join(t.TempDir(), "w.go"), filepath.Join(t.TempDir(), "ov.json")); err == nil {
+		t.Error("expected mutant compile error to propagate")
+	}
+}
+
+func TestRun_NoSurvivors(t *testing.T) {
+	d := NewDetector(t.TempDir(), "", map[string][]byte{})
+	// No LIVED mutants → early return, no compile, no panic.
+	d.Run(context.Background(), []mutator.Mutant{{Status: mutator.StatusKilled}}, 0, t.TempDir(), nil)
+}
+
+func TestRun_CancelledContext(t *testing.T) {
+	src := []byte("package p\n\nvar X = 1\n")
+	d := NewDetector(t.TempDir(), "", map[string][]byte{"/p.go": src})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled → goroutine hits the ctx.Err() guard and returns
+	ms := []mutator.Mutant{{File: "/p.go", Pkg: "x", StartOffset: 18, EndOffset: 19, Replacement: "2", Status: mutator.StatusLived}}
+	d.Run(ctx, ms, 1, t.TempDir(), nil)
+	if ms[0].Status != mutator.StatusLived {
+		t.Errorf("cancelled run must leave status LIVED, got %s", ms[0].Status)
+	}
+}
+
+func TestRun_CallbackAndDefaultWorkers(t *testing.T) {
+	requireGo(t)
+	dir, srcAbs, src := writeTempModule(t)
+	dg := NewDetector(dir, "", map[string][]byte{srcAbs: src})
+	ms := []mutator.Mutant{plusMutant(t, srcAbs, src, "x + 0")}
+	var got int
+	// workers=0 exercises the `workers < 1 → 1` guard.
+	dg.Run(context.Background(), ms, 0, t.TempDir(), func(mutator.Mutant) { got++ })
+	if got != 1 {
+		t.Errorf("onResult called %d times, want 1", got)
+	}
+	if ms[0].Status != mutator.StatusEquivalent {
+		t.Errorf("equivalent survivor not flipped under default workers: got %s", ms[0].Status)
+	}
+}
+
+func TestMutantLess_AllDimensions(t *testing.T) {
+	mk := func(pkg, file string, off int) mutator.Mutant {
+		return mutator.Mutant{Pkg: pkg, File: file, StartOffset: off}
+	}
+	cases := []struct {
+		name string
+		a, b mutator.Mutant
+		want bool
+	}{
+		{"pkg<", mk("a", "f", 0), mk("b", "f", 0), true},
+		{"pkg>", mk("b", "f", 0), mk("a", "f", 0), false},
+		{"file<", mk("a", "f1", 0), mk("a", "f2", 0), true},
+		{"file>", mk("a", "f2", 0), mk("a", "f1", 0), false},
+		{"offset<", mk("a", "f", 1), mk("a", "f", 2), true},
+		{"offset>=", mk("a", "f", 2), mk("a", "f", 2), false},
+	}
+	for _, tc := range cases {
+		if got := mutantLess(tc.a, tc.b); got != tc.want {
+			t.Errorf("%s: mutantLess = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+var errInjected = errorString("injected")
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }
+
+func failingWrite(string, []byte, os.FileMode) error { return errInjected }
+
+func failingExec(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "false") // exits non-zero → cmd.Run errors
+}
+
+func swapWriteFile(f func(string, []byte, os.FileMode) error) func() {
+	orig := writeFileFunc
+	writeFileFunc = f
+	return func() { writeFileFunc = orig }
+}
+
+func swapMarshal(f func(any) ([]byte, error)) func() {
+	orig := marshalFunc
+	marshalFunc = f
+	return func() { marshalFunc = orig }
+}
+
+func swapExec(f func(context.Context, string, ...string) *exec.Cmd) func() {
+	orig := execCommandContext
+	execCommandContext = f
+	return func() { execCommandContext = orig }
+}
+
+// seedRef marks a package's reference hash as already computed, so
+// referenceHash returns it without compiling.
+func seedRef(d *Detector, pkg, hash string) {
+	r := &refResult{}
+	r.once.Do(func() { r.hash = hash })
+	d.refs[pkg] = r
+}

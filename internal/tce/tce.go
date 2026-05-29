@@ -40,9 +40,15 @@ import (
 	"github.com/szhekpisov/gomutants/internal/patch"
 )
 
-// execCommandContext is a package-level indirection to exec.CommandContext
-// so tests can stub the `go build` subprocess.
-var execCommandContext = exec.CommandContext
+// execCommandContext, writeFileFunc, and marshalFunc are package-level
+// indirections to exec.CommandContext, os.WriteFile, and json.Marshal so
+// tests can drive the subprocess and I/O failure paths without contriving
+// filesystem or PATH state. Mirrors the runner/cache packages.
+var (
+	execCommandContext = exec.CommandContext
+	writeFileFunc      = os.WriteFile
+	marshalFunc        = json.Marshal
+)
 
 // Detector memoizes per-package reference assembly hashes and checks
 // mutants for compiler equivalence. Safe for concurrent use: the
@@ -105,10 +111,8 @@ func (d *Detector) referenceHash(ctx context.Context, importPath string) (string
 // reference. tmpSrcPath and overlayPath are the caller's stable temp files
 // (one set per worker goroutine) so concurrent Checks don't collide.
 func (d *Detector) Check(ctx context.Context, m mutator.Mutant, tmpSrcPath, overlayPath string) (bool, error) {
-	ref, err := d.referenceHash(ctx, m.Pkg)
-	if err != nil {
-		return false, err
-	}
+	// Cheap local prep first, so a malformed mutant never pays for the
+	// (memoized) reference compile.
 	original, ok := d.srcCache[m.File]
 	if !ok {
 		return false, fmt.Errorf("tce: source not cached: %s", m.File)
@@ -117,10 +121,14 @@ func (d *Detector) Check(ctx context.Context, m mutator.Mutant, tmpSrcPath, over
 	if err != nil {
 		return false, err
 	}
-	if err := os.WriteFile(tmpSrcPath, patched, 0o644); err != nil {
+	if err := writeFileFunc(tmpSrcPath, patched, 0o644); err != nil {
 		return false, err
 	}
 	if err := writeOverlay(overlayPath, m.File, tmpSrcPath); err != nil {
+		return false, err
+	}
+	ref, err := d.referenceHash(ctx, m.Pkg)
+	if err != nil {
 		return false, err
 	}
 	h, err := d.compileHash(ctx, m.Pkg, overlayPath)
@@ -184,11 +192,11 @@ type overlay struct {
 }
 
 func writeOverlay(path, srcAbs, tmpSrc string) error {
-	b, err := json.Marshal(overlay{Replace: map[string]string{srcAbs: tmpSrc}})
+	b, err := marshalFunc(overlay{Replace: map[string]string{srcAbs: tmpSrc}})
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	return writeFileFunc(path, b, 0o644)
 }
 
 // Run checks every StatusLived mutant for compiler equivalence in
