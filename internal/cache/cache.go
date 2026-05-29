@@ -41,7 +41,10 @@ import (
 //	v3: top-level CoverageKey/CoverageProfile so warm no-op runs can skip
 //	    `go test -coverprofile`. HashCoverageInputs framing is part of the
 //	    invariant — any algorithm change there demands another bump.
-const SchemaVersion = 3
+//	v4: GoToolchain joins the metadata gate, and EQUIVALENT is a reusable
+//	    status. Equivalence verdicts depend on the compiler, so a toolchain
+//	    change must discard the cache.
+const SchemaVersion = 4
 
 // I/O syscalls used by Save are exposed as package-level function
 // variables so tests can inject failures into each error path
@@ -97,7 +100,15 @@ type Cache struct {
 	// and its test files are byte-identical, so a tag change must discard
 	// the whole cache. omitempty + the default "" keeps pre-existing
 	// (tag-less) caches reusable for tag-less runs.
-	BuildTags       string  `json:"build_tags,omitempty"`
+	BuildTags string `json:"build_tags,omitempty"`
+	// GoToolchain is the project's `go version` string the cache was built
+	// with. It joins the metadata-gate identity because the EQUIVALENT
+	// classification is decided by the compiler's generated code, which can
+	// change between toolchains; a toolchain change must therefore discard
+	// the cache rather than reuse stale equivalence (or any other) verdicts.
+	// omitempty + the default "" keeps pre-v4 caches inert (they fail the
+	// gate on the SchemaVersion bump anyway).
+	GoToolchain     string  `json:"go_toolchain,omitempty"`
 	CoverageKey     string  `json:"coverage_key,omitempty"`
 	CoverageProfile string  `json:"coverage_profile,omitempty"`
 	Entries         []Entry `json:"entries"`
@@ -360,18 +371,19 @@ func (h *Hasher) HashCoverageInputs(pkgDirs []string, projectDir, coverPkg, tags
 // the *only* observable rejection path because the read- and
 // parse-failure branches both produce a zero-value Cache that fails
 // the gate identically (SchemaVersion=0 ≠ caller's SchemaVersion).
-func Load(path, goModule, toolVersion, buildTags string) *Cache {
+func Load(path, goModule, toolVersion, buildTags, goToolchain string) *Cache {
 	empty := &Cache{
 		SchemaVersion: SchemaVersion,
 		GoModule:      goModule,
 		ToolVersion:   toolVersion,
 		BuildTags:     buildTags,
+		GoToolchain:   goToolchain,
 	}
 	var c Cache
 	if data, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(data, &c) // c stays zero-value on parse error → fails metadata gate.
 	}
-	if c.SchemaVersion != SchemaVersion || c.GoModule != goModule || c.ToolVersion != toolVersion || c.BuildTags != buildTags {
+	if c.SchemaVersion != SchemaVersion || c.GoModule != goModule || c.ToolVersion != toolVersion || c.BuildTags != buildTags || c.GoToolchain != goToolchain {
 		return empty
 	}
 	return &c
@@ -515,7 +527,8 @@ func canReuse(s mutator.MutantStatus) bool {
 	case mutator.StatusKilled,
 		mutator.StatusLived,
 		mutator.StatusTimedOut,
-		mutator.StatusNotViable:
+		mutator.StatusNotViable,
+		mutator.StatusEquivalent:
 		return true
 	}
 	return false
@@ -525,9 +538,15 @@ func canReuse(s mutator.MutantStatus) bool {
 // the test files matching, in addition to the production file. Only
 // NOT_VIABLE is purely a function of the mutated source (compile
 // failure), so its reuse is safe on prod_hash alone.
+//
+// EQUIVALENT is compiler-proven from the source alone, but we still stamp
+// and gate its tests_hash: an equivalent mutant is also a LIVED one, and
+// when equivalence detection is off this run the caller downgrades a
+// cached EQUIVALENT back to LIVED — a reuse that must observe the same
+// tests-changed invalidation as any LIVED outcome.
 func needsTestsHash(s mutator.MutantStatus) bool {
 	switch s {
-	case mutator.StatusKilled, mutator.StatusLived, mutator.StatusTimedOut:
+	case mutator.StatusKilled, mutator.StatusLived, mutator.StatusTimedOut, mutator.StatusEquivalent:
 		return true
 	}
 	return false
@@ -546,6 +565,8 @@ func parseStatus(s string) mutator.MutantStatus {
 		return mutator.StatusTimedOut
 	case mutator.StatusNotViable.String():
 		return mutator.StatusNotViable
+	case mutator.StatusEquivalent.String():
+		return mutator.StatusEquivalent
 	}
 	return mutator.StatusPending
 }

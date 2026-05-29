@@ -19,6 +19,11 @@ import (
 // directives — these don't appear in Files[].Mutations and are excluded
 // from MutantsTotal and from the TestEfficacy and MutationsCoverage
 // denominators.
+// MutantsEquivalent counts surviving mutants proven equivalent to the
+// original by Trivial Compiler Equivalence (--detect-equivalent). They
+// stay in MutantsTotal but count as neither KILLED nor LIVED, so they
+// drop out of the TestEfficacy denominator — an equivalent mutant is not
+// a test gap.
 type Report struct {
 	GoModule          string         `json:"go_module"`
 	Files             []FileReport   `json:"files"`
@@ -32,6 +37,7 @@ type Report struct {
 	MutantsTimedOut   int            `json:"mutants_timed_out,omitempty"`
 	MutantsCached     int            `json:"mutants_cached,omitempty"`
 	MutantsSuppressed int            `json:"mutants_suppressed,omitempty"`
+	MutantsEquivalent int            `json:"mutants_equivalent,omitempty"`
 	ElapsedTime       float64        `json:"elapsed_time"`
 	MutatorStatistics map[string]int `json:"mutator_statistics"`
 }
@@ -84,6 +90,8 @@ func Generate(mutants []mutator.Mutant, goModule string, elapsed time.Duration, 
 			r.MutantsNotCovered++
 		case mutator.StatusTimedOut:
 			r.MutantsTimedOut++
+		case mutator.StatusEquivalent:
+			r.MutantsEquivalent++
 		}
 
 		// Mutator statistics use lower_snake_case keys.

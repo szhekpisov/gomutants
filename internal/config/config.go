@@ -57,8 +57,14 @@ type Config struct {
 	// SIGKILL) loses at most this much progress. 0 disables periodic
 	// checkpointing — the cache is then written only once, at the end of
 	// the run. Negative values are nonsensical and revert to the default.
-	CheckpointInterval time.Duration             `yaml:"checkpoint-interval"`
-	Mutants            map[string]*MutatorConfig `yaml:"mutants"`
+	CheckpointInterval time.Duration `yaml:"checkpoint-interval"`
+	// DetectEquivalent enables the post-test Trivial Compiler Equivalence
+	// pass that reclassifies provably-equivalent survivors as EQUIVALENT.
+	// Pointer for the same three-state reason as AdaptiveTimeout; default
+	// is OFF (see DetectEquivalentEnabled), because it adds a package
+	// compile per survivor.
+	DetectEquivalent *bool                     `yaml:"detect-equivalent"`
+	Mutants          map[string]*MutatorConfig `yaml:"mutants"`
 }
 
 // Default values for adaptive-timeout knobs. Exposed as package-level
@@ -80,6 +86,16 @@ func (c *Config) AdaptiveTimeoutEnabled() bool {
 		return true
 	}
 	return *c.AdaptiveTimeout
+}
+
+// DetectEquivalentEnabled reports whether the Trivial Compiler Equivalence
+// pass should run. The pointer field allows three states; when unset the
+// default is false (opt-in — the opposite of AdaptiveTimeout).
+func (c *Config) DetectEquivalentEnabled() bool {
+	if c.DetectEquivalent == nil {
+		return false
+	}
+	return *c.DetectEquivalent
 }
 
 // DefaultWorkers returns the default worker count: NumCPU. Floored at 1.
@@ -168,6 +184,14 @@ type AdaptiveTimeoutFlag struct {
 	Value bool
 }
 
+// DetectEquivalentFlag captures the `--detect-equivalent` CLI flag value.
+// Like AdaptiveTimeoutFlag, the Set bit lets ApplyFlags distinguish "not
+// provided" from an explicit `--detect-equivalent=false`.
+type DetectEquivalentFlag struct {
+	Set   bool
+	Value bool
+}
+
 // CheckpointIntervalFlag captures the `--checkpoint-interval` CLI flag
 // value. Like AdaptiveTimeoutFlag, it carries a Set bit so ApplyFlags can
 // tell "not provided" from an explicit `--checkpoint-interval=0`; a plain
@@ -188,6 +212,7 @@ type Flags struct {
 	TimeoutMargin      float64
 	TimeoutMin         time.Duration
 	AdaptiveTimeout    AdaptiveTimeoutFlag
+	DetectEquivalent   DetectEquivalentFlag
 	CheckpointInterval CheckpointIntervalFlag
 	CoverPkg           string
 	Tags               string
@@ -273,6 +298,10 @@ func (c *Config) applyToggleFlags(f Flags) {
 	}
 	if f.Quiet {
 		c.Quiet = true
+	}
+	if f.DetectEquivalent.Set {
+		v := f.DetectEquivalent.Value
+		c.DetectEquivalent = &v
 	}
 }
 

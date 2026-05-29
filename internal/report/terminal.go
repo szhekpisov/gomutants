@@ -241,6 +241,9 @@ func (t *Terminal) Summary(r *Report) {
 	if r.MutantsSuppressed > 0 {
 		fmt.Fprintf(t.w, "  Suppressed:   %d  (directives)\n", r.MutantsSuppressed)
 	}
+	if r.MutantsEquivalent > 0 {
+		fmt.Fprintf(t.w, "  Equivalent:   %d  (compiler-proven)\n", r.MutantsEquivalent)
+	}
 	fmt.Fprintf(t.w, "  Efficacy:     %.2f%%\n", r.TestEfficacy)
 	fmt.Fprintln(t.w)
 }
