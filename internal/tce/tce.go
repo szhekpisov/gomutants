@@ -145,6 +145,7 @@ func (d *Detector) compileHash(ctx context.Context, importPath, overlayPath stri
 	cmd.Dir = d.projectDir
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	// gomutants:disable-next-line STATEMENT_REMOVE reason="a nil cmd.Stdout is already connected to the null device by os/exec, and `go build -S` emits assembly to stderr (stdout stays empty), so dropping this discard is observably identical"
 	cmd.Stdout = io.Discard
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("tce: go build -S %s: %w\n%s", importPath, err, stderr.String())
@@ -211,6 +212,7 @@ func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers in
 			lived = append(lived, i)
 		}
 	}
+	// gomutants:disable-next-line BRANCH_IF reason="fast-path optimisation; with no survivors the loop below feeds an empty work channel, so spawning workers and returning is observably identical to returning early"
 	if len(lived) == 0 {
 		return
 	}
@@ -220,13 +222,14 @@ func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers in
 		return mutantLess(mutants[lived[a]], mutants[lived[b]])
 	})
 
+	// gomutants:disable-next-line CONDITIONALS_BOUNDARY reason="`< → <=` is provably equivalent: at workers==1 the body sets workers=1 (a no-op), and for every other value the predicate is unchanged, so all inputs yield the same worker count"
 	if workers < 1 {
 		workers = 1
 	}
 	work := make(chan int, len(lived))
 	var wg sync.WaitGroup
 	var outMu sync.Mutex // serializes onResult (and its mutant read)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		tmpSrc := filepath.Join(tmpDir, fmt.Sprintf("tce-%d.go", w))
 		overlayPath := filepath.Join(tmpDir, fmt.Sprintf("tce-overlay-%d.json", w))
 		wg.Add(1)
