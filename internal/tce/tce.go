@@ -202,18 +202,22 @@ func writeOverlay(path, srcAbs, tmpSrc string) error {
 	return writeFileFunc(path, b, 0o644)
 }
 
+// runShared bundles the per-run state every worker goroutine reads, so the
+// worker helpers stay below a sane parameter count.
+type runShared struct {
+	mutants  []mutator.Mutant
+	work     <-chan int
+	onResult func(mutator.Mutant)
+	outMu    *sync.Mutex // serializes onResult (and its mutant read)
+}
+
 // Run checks every StatusLived mutant for compiler equivalence in
 // parallel, flipping matches to StatusEquivalent in place. Mutants that
 // error or aren't equivalent stay LIVED. onResult (may be nil) is invoked
 // once per checked mutant, serialized so a non-concurrent terminal sink is
 // safe. Honors ctx cancellation.
 func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers int, tmpDir string, onResult func(mutator.Mutant)) {
-	var lived []int
-	for i := range mutants {
-		if mutants[i].Status == mutator.StatusLived {
-			lived = append(lived, i)
-		}
-	}
+	lived := collectLived(mutants)
 	// No early return for an empty `lived`: the loop below feeds an empty
 	// work channel, so the workers spawn and exit immediately — keeping a
 	// guard here only adds a mutation-equivalent fast path.
@@ -227,34 +231,57 @@ func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers in
 	// gomutants:disable-next-line INTEGER_INCREMENT reason="raising the floor from 1 to 2 still clamps to a worker count >=1 that processes the same survivors, so it's observably equivalent; the killable decrement (floor 0 → no workers) is pinned by the workers=0 test"
 	workers = max(1, workers)
 	work := make(chan int, len(lived))
+	rs := &runShared{mutants: mutants, work: work, onResult: onResult, outMu: &sync.Mutex{}}
+
 	var wg sync.WaitGroup
-	var outMu sync.Mutex // serializes onResult (and its mutant read)
 	for w := range workers {
 		tmpSrc := filepath.Join(tmpDir, fmt.Sprintf("tce-%d.go", w))
 		overlayPath := filepath.Join(tmpDir, fmt.Sprintf("tce-overlay-%d.json", w))
-		wg.Add(1)
-		go func(tmpSrc, overlayPath string) {
-			defer wg.Done()
-			for idx := range work {
-				if ctx.Err() != nil {
-					return
-				}
-				if eq, err := d.Check(ctx, mutants[idx], tmpSrc, overlayPath); err == nil && eq {
-					mutants[idx].Status = mutator.StatusEquivalent
-				}
-				if onResult != nil {
-					outMu.Lock()
-					onResult(mutants[idx])
-					outMu.Unlock()
-				}
-			}
-		}(tmpSrc, overlayPath)
+		wg.Go(func() {
+			d.worker(ctx, rs, tmpSrc, overlayPath)
+		})
 	}
 	for _, idx := range lived {
 		work <- idx // buffered to len(lived); never blocks
 	}
 	close(work)
 	wg.Wait()
+}
+
+// collectLived returns the indices of the StatusLived mutants.
+func collectLived(mutants []mutator.Mutant) []int {
+	var lived []int
+	for i := range mutants {
+		if mutants[i].Status == mutator.StatusLived {
+			lived = append(lived, i)
+		}
+	}
+	return lived
+}
+
+// worker drains the work channel, checking each survivor for equivalence
+// until the channel closes or ctx is cancelled.
+func (d *Detector) worker(ctx context.Context, rs *runShared, tmpSrc, overlayPath string) {
+	for idx := range rs.work {
+		if ctx.Err() != nil {
+			return
+		}
+		d.checkAndReport(ctx, rs, idx, tmpSrc, overlayPath)
+	}
+}
+
+// checkAndReport flips an equivalent survivor to StatusEquivalent and then
+// reports it via onResult under the shared mutex.
+func (d *Detector) checkAndReport(ctx context.Context, rs *runShared, idx int, tmpSrc, overlayPath string) {
+	if eq, err := d.Check(ctx, rs.mutants[idx], tmpSrc, overlayPath); err == nil && eq {
+		rs.mutants[idx].Status = mutator.StatusEquivalent
+	}
+	if rs.onResult == nil {
+		return
+	}
+	rs.outMu.Lock()
+	rs.onResult(rs.mutants[idx])
+	rs.outMu.Unlock()
 }
 
 // mutantLess orders mutants by (Pkg, File, StartOffset). Paired `<`/`>`
