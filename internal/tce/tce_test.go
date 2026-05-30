@@ -149,7 +149,9 @@ func TestDetector_Run_FlipsOnlyEquivalentSurvivors(t *testing.T) {
 	killed.Status = mutator.StatusKilled
 	mutants = append(mutants, killed)
 
-	d.Run(context.Background(), mutants, 2, t.TempDir(), nil)
+	if n := d.Run(context.Background(), mutants, 2, t.TempDir(), nil); n != 1 {
+		t.Errorf("Run returned %d, want 1 equivalent flip", n)
+	}
 
 	if mutants[0].Status != mutator.StatusEquivalent {
 		t.Errorf("equivalent survivor not flipped: got %s", mutants[0].Status)
@@ -257,8 +259,10 @@ func TestCheck_MutantCompileError(t *testing.T) {
 
 func TestRun_NoSurvivors(t *testing.T) {
 	d := NewDetector(t.TempDir(), "", map[string][]byte{})
-	// No LIVED mutants → early return, no compile, no panic.
-	d.Run(context.Background(), []mutator.Mutant{{Status: mutator.StatusKilled}}, 0, t.TempDir(), nil)
+	// No LIVED mutants → nothing checked, no compile, no panic, zero flips.
+	if n := d.Run(context.Background(), []mutator.Mutant{{Status: mutator.StatusKilled}}, 0, t.TempDir(), nil); n != 0 {
+		t.Errorf("Run returned %d with no survivors, want 0", n)
+	}
 }
 
 // TestRun_CancelledContext: with a pre-cancelled context the worker hits
@@ -286,8 +290,10 @@ func TestRun_CallbackAndDefaultWorkers(t *testing.T) {
 	dg := NewDetector(dir, "", map[string][]byte{srcAbs: src})
 	ms := []mutator.Mutant{plusMutant(t, srcAbs, src, "x + 0")}
 	var got int
-	// workers=0 exercises the `workers < 1 → 1` guard.
-	dg.Run(context.Background(), ms, 0, t.TempDir(), func(mutator.Mutant) { got++ })
+	// workers=0 exercises the `max(1, workers)` floor.
+	if n := dg.Run(context.Background(), ms, 0, t.TempDir(), func(mutator.Mutant) { got++ }); n != 1 {
+		t.Errorf("Run returned %d, want 1", n)
+	}
 	if got != 1 {
 		t.Errorf("onResult called %d times, want 1", got)
 	}

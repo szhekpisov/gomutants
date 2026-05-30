@@ -741,24 +741,10 @@ func run(ctx context.Context, args []string) error {
 	// verdicts are cached. Cached EQUIVALENT survivors stay EQUIVALENT and
 	// are skipped (their Status is no longer LIVED).
 	if cfg.DetectEquivalentEnabled() {
-		livedCount := 0
-		for _, m := range mutants {
-			if m.Status == mutator.StatusLived {
-				livedCount++
-			}
-		}
-		if livedCount > 0 {
-			term.Phase(fmt.Sprintf("Detecting equivalent mutants (%d survivors)...", livedCount))
-			det := tce.NewDetector(projectDir, cfg.Tags, srcCache)
-			det.Run(ctx, mutants, cfg.Workers, tmpDir, nil)
-			equiv := 0
-			for _, m := range mutants {
-				if m.Status == mutator.StatusEquivalent {
-					equiv++
-				}
-			}
-			term.PhaseDone(fmt.Sprintf("%d equivalent", equiv))
-		}
+		term.Phase("Detecting equivalent mutants...")
+		det := tce.NewDetector(projectDir, cfg.Tags, srcCache)
+		equiv := det.Run(ctx, mutants, cfg.Workers, tmpDir, nil)
+		term.PhaseDone(fmt.Sprintf("%d equivalent", equiv))
 	}
 
 	// Final flush. force=true bypasses the throttle and the disable

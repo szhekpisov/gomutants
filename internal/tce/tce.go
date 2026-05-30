@@ -212,11 +212,11 @@ type runShared struct {
 }
 
 // Run checks every StatusLived mutant for compiler equivalence in
-// parallel, flipping matches to StatusEquivalent in place. Mutants that
-// error or aren't equivalent stay LIVED. onResult (may be nil) is invoked
-// once per checked mutant, serialized so a non-concurrent terminal sink is
-// safe. Honors ctx cancellation.
-func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers int, tmpDir string, onResult func(mutator.Mutant)) {
+// parallel, flipping matches to StatusEquivalent in place and returning
+// how many it flipped. Mutants that error or aren't equivalent stay LIVED.
+// onResult (may be nil) is invoked once per checked mutant, serialized so a
+// non-concurrent terminal sink is safe. Honors ctx cancellation.
+func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers int, tmpDir string, onResult func(mutator.Mutant)) int {
 	lived := collectLived(mutants)
 	// No early return for an empty `lived`: the loop below feeds an empty
 	// work channel, so the workers spawn and exit immediately — keeping a
@@ -246,6 +246,16 @@ func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers in
 	}
 	close(work)
 	wg.Wait()
+
+	// Count the flips here (over the survivor indices only) so the caller
+	// doesn't re-scan the whole mutants slice for the same number.
+	equivalent := 0
+	for _, idx := range lived {
+		if mutants[idx].Status == mutator.StatusEquivalent {
+			equivalent++
+		}
+	}
+	return equivalent
 }
 
 // collectLived returns the indices of the StatusLived mutants.
