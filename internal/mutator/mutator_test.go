@@ -291,6 +291,39 @@ func f(a, b int) int { return a + b }
 	}
 }
 
+func TestInvertBitwiseSkipsGenericConstraints(t *testing.T) {
+	// The `|` in each generic type constraint is a union, parsed as the same
+	// *ast.BinaryExpr{Op: token.OR} as a bitwise OR. None of them must yield a
+	// candidate; only the real bitwise OR in g's body may. Covers all three
+	// constraint sites: interface element, type-decl type params, func type
+	// params — with and without the `~` approximation. Each interface and
+	// type-param list holds multiple elements (and the union is not always
+	// first) so a loop-break/short-circuit mutation on the collection walk
+	// would leave a later union unmarked and surface as an extra candidate.
+	src := `package p
+type IntOrString interface { comparable; ~int | ~string }
+type PlainUnion interface { int | string; ~float64 | ~float32 }
+type Box[K int | string, V uint | uint64] struct{ k K; v V }
+func h[T ~int | ~uint, U int | string](x T) T { return x }
+func g(a, b uint) uint { return a | b }
+`
+	fset, file, srcBytes := parse(t, src)
+	m := findMutator(t, mutator.InvertBitwise)
+	candidates := m.Discover(fset, file, srcBytes)
+
+	if len(candidates) != 1 {
+		t.Fatalf("expected exactly 1 candidate (the bitwise OR in g), got %d: %+v", len(candidates), candidates)
+	}
+	if c := candidates[0]; c.Original != "|" || c.Replacement != "&" {
+		t.Errorf("candidate = %q→%q, want |→&", c.Original, c.Replacement)
+	}
+	// The surviving candidate must be g's runtime OR, not any constraint union.
+	wantLine := 1 + strings.Count(src[:strings.Index(src, "return a | b")], "\n")
+	if candidates[0].Pos.Line != wantLine {
+		t.Errorf("candidate on line %d, want the bitwise OR in g on line %d", candidates[0].Pos.Line, wantLine)
+	}
+}
+
 func TestInvertBitwiseAssignments(t *testing.T) {
 	src := `package p
 func f(a, b uint) {
