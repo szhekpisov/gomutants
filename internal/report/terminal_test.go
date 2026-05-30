@@ -771,3 +771,20 @@ func TestStartHeartbeatSecondCallIsNoOp(t *testing.T) {
 	}
 	term.StopHeartbeat()
 }
+
+// TestSummaryEquivalentNonZero pins the Equivalent line against a non-zero
+// MutantsEquivalent, killing the BRANCH_IF guard and the STATEMENT_REMOVE
+// on its Fprintf.
+func TestSummaryEquivalentNonZero(t *testing.T) {
+	var buf bytes.Buffer
+	NewTerminal(&buf, 0, false, false).Summary(&Report{
+		MutantsKilled:     8,
+		MutantsLived:      1,
+		MutantsEquivalent: 1,
+		MutantsTotal:      10,
+		TestEfficacy:      88.89,
+	})
+	if !strings.Contains(buf.String(), "Equivalent:   1  (compiler-proven)\n") {
+		t.Errorf("expected Equivalent line, got %q", buf.String())
+	}
+}

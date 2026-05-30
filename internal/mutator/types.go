@@ -11,6 +11,7 @@ const (
 	StatusNotCovered              // No test covers this code.
 	StatusNotViable               // Mutant causes compile error.
 	StatusTimedOut                // Test execution timed out.
+	StatusEquivalent              // Mutant provably equivalent to the original (TCE).
 )
 
 func (s MutantStatus) String() string {
@@ -27,6 +28,8 @@ func (s MutantStatus) String() string {
 		return "NOT VIABLE"
 	case StatusTimedOut:
 		return "TIMED OUT"
+	case StatusEquivalent:
+		return "EQUIVALENT"
 	default:
 		return "UNKNOWN"
 	}

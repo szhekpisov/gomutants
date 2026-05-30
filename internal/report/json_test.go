@@ -287,3 +287,25 @@ func TestWriteJSON(t *testing.T) {
 	}
 }
 
+// TestGenerateCountsMutantsEquivalent pins the EQUIVALENT bucket: it is
+// counted, stays in MutantsTotal, and is excluded from the efficacy
+// denominator (an equivalent mutant is neither killed nor a surviving gap).
+func TestGenerateCountsMutantsEquivalent(t *testing.T) {
+	r := Generate([]mutator.Mutant{
+		{Type: mutator.ArithmeticBase, Status: mutator.StatusKilled, RelFile: "x.go"},
+		{Type: mutator.ArithmeticBase, Status: mutator.StatusEquivalent, RelFile: "x.go"},
+	}, "m", 0, 0)
+	if r.MutantsEquivalent != 1 {
+		t.Errorf("MutantsEquivalent=%d, want 1", r.MutantsEquivalent)
+	}
+	if r.MutantsTotal != 2 {
+		t.Errorf("MutantsTotal=%d, want 2 (equivalent stays in total)", r.MutantsTotal)
+	}
+	if r.MutantsLived != 0 {
+		t.Errorf("MutantsLived=%d, want 0 (equivalent is not lived)", r.MutantsLived)
+	}
+	if r.TestEfficacy != 100 {
+		t.Errorf("TestEfficacy=%v, want 100 (1 killed / (1 killed + 0 lived))", r.TestEfficacy)
+	}
+}
+

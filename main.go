@@ -27,6 +27,7 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 	"github.com/szhekpisov/gomutants/internal/report"
 	"github.com/szhekpisov/gomutants/internal/runner"
+	"github.com/szhekpisov/gomutants/internal/tce"
 )
 
 // Sentinel defaults; the effective* helpers upgrade these from build
@@ -224,6 +225,7 @@ func run(ctx context.Context, args []string) error {
 		timeoutMargin      float64
 		timeoutMin         time.Duration
 		adaptiveTimeout    config.AdaptiveTimeoutFlag
+		detectEquivalent   config.DetectEquivalentFlag
 		checkpointInterval config.CheckpointIntervalFlag
 		coverPkg           string
 		tags               string
@@ -260,6 +262,16 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("--adaptive-timeout: %w", err)
 		}
 		adaptiveTimeout = config.AdaptiveTimeoutFlag{Set: true, Value: v}
+		return nil
+	})
+	// Opt-in TCE pass. BoolFunc (like --adaptive-timeout) so ApplyFlags can
+	// tell "not provided" from an explicit value via the .Set bit.
+	fs.BoolFunc("detect-equivalent", "after testing, compile each surviving mutant with -gcflags=-S and mark it EQUIVALENT when the generated assembly is identical to the original (Trivial Compiler Equivalence; default false, adds one package compile per survivor)", func(s string) error {
+		v, err := strconv.ParseBool(s)
+		if err != nil {
+			return fmt.Errorf("--detect-equivalent: %w", err)
+		}
+		detectEquivalent = config.DetectEquivalentFlag{Set: true, Value: v}
 		return nil
 	})
 	// fs.Func (like the BoolFunc above) lets us distinguish "user set
@@ -333,6 +345,7 @@ func run(ctx context.Context, args []string) error {
 		TimeoutMargin:      timeoutMargin,
 		TimeoutMin:         timeoutMin,
 		AdaptiveTimeout:    adaptiveTimeout,
+		DetectEquivalent:   detectEquivalent,
 		CheckpointInterval: checkpointInterval,
 		CoverPkg:           coverPkg,
 		Tags:               tags,
@@ -382,9 +395,15 @@ func run(ctx context.Context, args []string) error {
 		loadedCache  *cache.Cache
 		hasher       *cache.Hasher
 		testFilesFor cache.TestFilesForFn
+		// goToolchain fingerprints the project's `go` (its `go version`
+		// string). It joins the cache metadata gate because EQUIVALENT
+		// verdicts are decided by the compiler, and feeds the coverage-key
+		// toolchain dimension below. Computed once, only when caching is on.
+		goToolchain string
 	)
 	if cfg.Cache != "" {
-		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion(), cfg.Tags)
+		goToolchain = goVersionFunc(ctx)
+		loadedCache = cacheLoadFunc(cfg.Cache, goModule, cacheToolVersion(), cfg.Tags, goToolchain)
 		// Hasher is created before discovery's PreReadFiles so the
 		// coverage-key calc can use it. SetSrcCache is called once
 		// the in-memory source map exists (after step 6), so
@@ -451,7 +470,7 @@ func run(ctx context.Context, args []string) error {
 		// coverage run rather than aborting — same conservative policy
 		// as the per-mutant Lookup path.
 		if pkgDirs, derr := coveragePkgDirs(ctx, projectDir, pkgs, cfg.CoverPkg, cfg.Tags); derr == nil {
-			toolchain := fmt.Sprintf("gomutants/%s|go/%s", runtime.Version(), goVersionFunc(ctx))
+			toolchain := fmt.Sprintf("gomutants/%s|go/%s", runtime.Version(), goToolchain)
 			if k, herr := hasher.HashCoverageInputs(pkgDirs, projectDir, cfg.CoverPkg, cfg.Tags, toolchain, captureCoverageEnv()); herr == nil {
 				coverageKey = k
 			}
@@ -635,6 +654,17 @@ func run(ctx context.Context, args []string) error {
 
 		if hits := loadedCache.Lookup(mutants, hasher, testFilesFor); hits > 0 {
 			pendingCount -= hits
+			// When equivalence detection is off this run, a cached EQUIVALENT
+			// must not surface — report the survivor honestly as LIVED. The
+			// reuse already validated prod+tests hashes (EQUIVALENT needs a
+			// tests hash), so a LIVED reading is sound.
+			if !cfg.DetectEquivalentEnabled() {
+				for i := range mutants {
+					if mutants[i].Status == mutator.StatusEquivalent {
+						mutants[i].Status = mutator.StatusLived
+					}
+				}
+			}
 			if !cfg.Quiet {
 				fmt.Fprintf(stdout, "Cache: %d mutant outcomes reused from %s\n", hits, cfg.Cache)
 			}
@@ -704,6 +734,23 @@ func run(ctx context.Context, args []string) error {
 		checkpoint(false)
 	})
 
+	// 8b. Trivial Compiler Equivalence pass (opt-in). Recompile each
+	// surviving (LIVED) mutant with package-scoped `-gcflags=-S` and
+	// reclassify it as EQUIVALENT when the assembly matches the original —
+	// a compiler-proven non-gap. Verdicts are checkpointed as they land (the
+	// throttled checkpoint callback, serialized with the workers' writes by
+	// the detector), so a hard kill mid-pass keeps the equivalence work done
+	// so far. Cached EQUIVALENT survivors stay EQUIVALENT and are skipped
+	// (their Status is no longer LIVED).
+	if cfg.DetectEquivalentEnabled() {
+		term.Phase("Detecting equivalent mutants...")
+		det := tce.NewDetector(projectDir, cfg.Tags, srcCache)
+		equiv := det.Run(ctx, mutants, cfg.Workers, tmpDir, func(mutator.Mutant) {
+			checkpoint(false)
+		})
+		term.PhaseDone(fmt.Sprintf("%d equivalent", equiv))
+	}
+
 	// Final flush. force=true bypasses the throttle and the disable
 	// switch, so even --checkpoint-interval=0 still writes the cache once.
 	checkpoint(true)
@@ -753,6 +800,9 @@ func run(ctx context.Context, args []string) error {
 	// always a config issue, not a test-quality issue, and reporting "0.00%
 	// below 80.00%" hides that. Error messages always include both
 	// percentages so a single read shows the full state.
+	// EQUIVALENT mutants are neither KILLED nor LIVED, so they fall out of
+	// both gates' denominators here — a compiler-proven non-gap shouldn't
+	// move efficacy or mutant coverage in either direction.
 	tested := r.MutantsKilled + r.MutantsLived
 	mcoverDenom := tested + r.MutantsNotCovered
 	mcover := 0.0

@@ -68,6 +68,7 @@ One-off manual runs or thin test suites (<70% line coverage) — the one-time se
 | Per-test coverage routing | yes | no | no |
 | Incremental cache | yes (on by default) | no | no |
 | `NOT_VIABLE` classification | yes | no[^2] | partial |
+| Equivalent-mutant detection (TCE) | yes (opt-in) | no | no |
 | OOM-safe subprocess control | 2 GiB RSS cap, process group | no | no |
 | gremlins-compatible JSON | yes | (native) | no |
 | Stryker dashboard format | yes | no | no |
@@ -242,6 +243,7 @@ gomutants --threshold-efficacy 80 ./...
 - **OOM-safe** — each `go test` child runs in its own process group with a 2 GiB RSS cap; output capped at 1 MiB per stream.
 - **Multiple report formats** — gremlins-compatible JSON (default), [Stryker `mutation-testing-elements` v2](https://github.com/stryker-mutator/mutation-testing-elements) JSON, and a self-contained interactive HTML report.
 - **Conservative discovery** — compile-failing mutants surface as `NOT_VIABLE` and don't inflate efficacy.
+- **Equivalent-mutant detection (opt-in)** — `--detect-equivalent` recompiles each survivor with `-gcflags=-S` and reclassifies it as `EQUIVALENT` when the generated assembly matches the original (Trivial Compiler Equivalence). Such mutants can't be killed by any test, so they drop out of the efficacy denominator instead of failing the gate. Sound: a killable mutant is never marked equivalent.
 - **Inline ignore directives** — `// gomutants:disable*` comments suppress specific mutants by line, function, or regex.
 - **GitHub Action** — surfaces surviving mutants as inline annotations on the PR diff.
 - **Claude Code plugin** — `/gomutants:mutants` slash command runs gomutants on changed code and proposes concrete `*_test.go` cases that would kill each surviving mutant.
@@ -472,6 +474,7 @@ Priority: built-in defaults < config file < CLI flags. See [`.gomutants.yml.exam
 | `--changed-since` | | | Only test mutants on lines changed vs git ref (e.g. `main`, `HEAD~1`); requires a git repo |
 | `--cache` | | `.gomutants-cache.json` | Path to incremental-analysis cache file. Skips mutants whose source and tests are byte-identical to the cached run. Pass `--cache=off` to disable. |
 | `--checkpoint-interval` | | 10s | How often to flush completed mutant outcomes to the cache mid-run, so a hard kill (OOM, CI timeout, SIGKILL) loses at most this much progress and the next run resumes from the last checkpoint. `0` disables periodic checkpointing (the cache is then written only once, at the end). Ignored when `--cache=off`. |
+| `--detect-equivalent` | | false | After testing, recompile each surviving mutant with package-scoped `-gcflags=-S` and reclassify it as `EQUIVALENT` when the generated assembly is identical to the original (Trivial Compiler Equivalence). Equivalent mutants can't be killed by any test, so they're dropped from the efficacy denominator. Adds one package compile per survivor. |
 | `--annotations` | | | Emit annotations for LIVED mutants. Supported: `github` (workflow-command warnings on stdout). |
 | `--stryker-output` | | | Also write a [Stryker mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) report at this path (for the HTML viewer and Stryker Dashboard). |
 | `--html-output` | | | Also write a self-contained interactive HTML mutation report at this path (Stryker mutation-testing-elements viewer bundled inline; no network access required to open). |
@@ -530,6 +533,7 @@ gomutants --workers=1 --test-cpu=8 ./...
    - Mutations are applied as byte-level patches; the original tree is never written to.
    - The mutant's covered tests are looked up; only those run via `go test -overlay -run=<regex>`.
    - Each `go test` child runs in its own process group with a 2 GiB RSS cap; output is capped at 1 MiB per stream.
+7. **Detect equivalent mutants** (only with `--detect-equivalent`). Each surviving mutant is recompiled with package-scoped `-gcflags=-S` under the same overlay mechanism; the reference (original) package is compiled once per package. When the normalized assembly matches the original, the mutation was folded away by the compiler and is reclassified `EQUIVALENT` — provably unkillable, so it leaves the efficacy denominator rather than failing the gate. The comparison is one-sided: any real difference in generated code diverges the hash, so a killable mutant is never marked equivalent.
 
 Performance optimizations layered on top:
 
@@ -560,6 +564,8 @@ Compatible with the gremlins JSON format:
 ```
 
 `mutants_suppressed` is omitted when zero; it counts mutants dropped by `// gomutants:disable*` directives and is excluded from every other count.
+
+`mutants_equivalent` is omitted when zero; it counts surviving mutants proven equivalent by `--detect-equivalent`. They stay in `mutants_total` but count as neither killed nor lived, so they drop out of the `test_efficacy` denominator.
 
 ## Self-efficacy (gomutants on itself)
 

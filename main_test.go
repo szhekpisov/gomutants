@@ -1411,9 +1411,16 @@ func TestRun_CoverageCacheMiss_RunsCoverage(t *testing.T) {
 		return origRC(ctx, projectDir, packages, coverPkg, tags, tmpDir)
 	}
 
+	// Pin the toolchain string so the hand-written cache below passes the
+	// metadata gate (otherwise the whole cache is discarded on go_toolchain
+	// mismatch and the coverage_key check this test targets never runs).
+	origGV := goVersionFunc
+	defer func() { goVersionFunc = origGV }()
+	goVersionFunc = func(context.Context) string { return "go-test-toolchain" }
+
 	staleCache := `{"schema_version":` + strconv.Itoa(cache.SchemaVersion) +
 		`,"go_module":"testmod","tool_version":"` + cacheToolVersion() +
-		`","coverage_key":"definitelywrongkey","coverage_profile":"mode: set\n","entries":[]}`
+		`","go_toolchain":"go-test-toolchain","coverage_key":"definitelywrongkey","coverage_profile":"mode: set\n","entries":[]}`
 	if err := os.WriteFile(cachePath, []byte(staleCache), 0o644); err != nil {
 		t.Fatal(err)
 	}

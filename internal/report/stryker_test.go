@@ -21,6 +21,7 @@ func TestStrykerStatusMapping(t *testing.T) {
 		{mutator.StatusNotCovered, "NoCoverage"},
 		{mutator.StatusNotViable, "CompileError"},
 		{mutator.StatusTimedOut, "Timeout"},
+		{mutator.StatusEquivalent, "Ignored"},
 		{mutator.StatusPending, "Pending"},
 	}
 	for _, tc := range cases {

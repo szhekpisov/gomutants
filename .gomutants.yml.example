@@ -53,6 +53,15 @@ output: mutation-report.json
 # written only once, at the end of the run). Ignored when cache is "off".
 # checkpoint-interval: 10s
 
+# Detect equivalent mutants via Trivial Compiler Equivalence (default:
+# false). After testing, each surviving mutant is recompiled with
+# package-scoped `-gcflags=-S`; if the generated assembly is identical to
+# the original, the mutation was folded away by the compiler and can never
+# be killed, so it's reclassified EQUIVALENT and dropped from the efficacy
+# denominator. Sound (a killable mutant is never marked equivalent) but
+# adds one package compile per survivor — opt-in.
+# detect-equivalent: true
+
 # Mutator types to disable (run all except these).
 # disable:
 #   - BRANCH_IF

@@ -1308,6 +1308,7 @@ func TestMutantStatusString(t *testing.T) {
 		{mutator.StatusNotCovered, "NOT COVERED"},
 		{mutator.StatusNotViable, "NOT VIABLE"},
 		{mutator.StatusTimedOut, "TIMED OUT"},
+		{mutator.StatusEquivalent, "EQUIVALENT"},
 		{mutator.MutantStatus(99), "UNKNOWN"},
 	}
 	for _, tc := range tests {

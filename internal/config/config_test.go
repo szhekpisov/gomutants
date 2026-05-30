@@ -465,3 +465,37 @@ func TestSplitAndTrim(t *testing.T) {
 		}
 	}
 }
+
+// TestDetectEquivalentEnabled pins the three-state default: nil → false
+// (opt-in), and the two explicit pointer states. Kills the nil-guard
+// CONDITIONALS_NEGATION / BRANCH_IF in DetectEquivalentEnabled.
+func TestDetectEquivalentEnabled(t *testing.T) {
+	if (&Config{}).DetectEquivalentEnabled() {
+		t.Error("nil DetectEquivalent should be false (opt-in default)")
+	}
+	tr, fa := true, false
+	if !(&Config{DetectEquivalent: &tr}).DetectEquivalentEnabled() {
+		t.Error("true pointer should report enabled")
+	}
+	if (&Config{DetectEquivalent: &fa}).DetectEquivalentEnabled() {
+		t.Error("false pointer should report disabled")
+	}
+}
+
+// TestApplyFlagsDetectEquivalent pins the three-state merge: a Set flag
+// overrides, an unset flag leaves the YAML-loaded value intact. Kills the
+// BRANCH_IF + STATEMENT_REMOVE on the applyToggleFlags merge branch.
+func TestApplyFlagsDetectEquivalent(t *testing.T) {
+	cfg := Default()
+	cfg.ApplyFlags(Flags{DetectEquivalent: DetectEquivalentFlag{Set: true, Value: true}})
+	if !cfg.DetectEquivalentEnabled() {
+		t.Error("Set=true,Value=true not merged into config")
+	}
+
+	yes := true
+	cfg2 := Config{DetectEquivalent: &yes}
+	cfg2.ApplyFlags(Flags{DetectEquivalent: DetectEquivalentFlag{Set: false}})
+	if !cfg2.DetectEquivalentEnabled() {
+		t.Error("unset flag wrongly overrode the config value")
+	}
+}
