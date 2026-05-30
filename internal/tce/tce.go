@@ -151,7 +151,7 @@ func (d *Detector) compileHash(ctx context.Context, importPath, overlayPath stri
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("tce: go build -S %s: %w\n%s", importPath, err, stderr.String())
 	}
-	return normalizeAsm(stderr.Bytes()), nil
+	return normalizeAsm(stderr.Bytes(), importPath), nil
 }
 
 // buildArgs assembles the `go build` argv. `-S` is emitted to stderr and
@@ -169,18 +169,22 @@ func buildArgs(importPath, overlayPath, tags string) []string {
 	return append(args, importPath)
 }
 
-// normalizeAsm hashes the `-S` assembly after dropping `# <importpath>`
-// package-header lines and trailing whitespace. Both are constant between
-// the original and the mutant for a given package, so the stripping is
-// purely defensive against incidental churn; the file:line refs, symbol
-// hashes, and object byte dumps that encode real differences are kept.
-func normalizeAsm(b []byte) string {
+// normalizeAsm hashes the `-S` assembly after dropping the single
+// `# <importpath>` package-header line and trailing whitespace. The header
+// is identical between the original and the mutant builds of the same
+// package, so stripping it is purely defensive against incidental churn —
+// and anchoring on the *exact* header (rather than any '#'-prefixed line)
+// keeps every signal-bearing line in the hash, including data dumps that
+// could legitimately begin with '#'. The file:line refs, symbol hashes, and
+// object byte dumps that encode real differences are all kept.
+func normalizeAsm(b []byte, importPath string) string {
+	header := append([]byte("# "), importPath...)
 	h := sha256.New()
 	for line := range bytes.SplitSeq(b, []byte("\n")) {
-		if len(line) > 0 && line[0] == '#' {
+		line = bytes.TrimRight(line, " \t\r")
+		if bytes.Equal(line, header) {
 			continue
 		}
-		line = bytes.TrimRight(line, " \t\r")
 		h.Write(line)
 		h.Write([]byte{'\n'})
 	}
@@ -208,14 +212,15 @@ type runShared struct {
 	mutants  []mutator.Mutant
 	work     <-chan int
 	onResult func(mutator.Mutant)
-	outMu    *sync.Mutex // serializes onResult (and its mutant read)
+	outMu    *sync.Mutex // serializes the status write + onResult (and its reads)
 }
 
 // Run checks every StatusLived mutant for compiler equivalence in
 // parallel, flipping matches to StatusEquivalent in place and returning
 // how many it flipped. Mutants that error or aren't equivalent stay LIVED.
-// onResult (may be nil) is invoked once per checked mutant, serialized so a
-// non-concurrent terminal sink is safe. Honors ctx cancellation.
+// onResult (may be nil) is invoked once per checked mutant, serialized with
+// the status writes so a non-concurrent sink that reads the whole slice
+// (e.g. a cache checkpoint) is safe. Honors ctx cancellation.
 func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers int, tmpDir string, onResult func(mutator.Mutant)) int {
 	lived := collectLived(mutants)
 	// No early return for an empty `lived`: the loop below feeds an empty
@@ -281,16 +286,19 @@ func (d *Detector) worker(ctx context.Context, rs *runShared, tmpSrc, overlayPat
 }
 
 // checkAndReport flips an equivalent survivor to StatusEquivalent and then
-// reports it via onResult under the shared mutex.
+// reports it via onResult. The compile (Check) runs unlocked, but the
+// status write and onResult are both held under outMu: a non-nil onResult
+// (e.g. a cache checkpoint) reads the whole mutants slice, so every worker's
+// Status write must take the same lock to stay race-free with that reader.
 func (d *Detector) checkAndReport(ctx context.Context, rs *runShared, idx int, tmpSrc, overlayPath string) {
-	if eq, err := d.Check(ctx, rs.mutants[idx], tmpSrc, overlayPath); err == nil && eq {
+	eq, err := d.Check(ctx, rs.mutants[idx], tmpSrc, overlayPath)
+	rs.outMu.Lock()
+	if err == nil && eq {
 		rs.mutants[idx].Status = mutator.StatusEquivalent
 	}
-	if rs.onResult == nil {
-		return
+	if rs.onResult != nil {
+		rs.onResult(rs.mutants[idx])
 	}
-	rs.outMu.Lock()
-	rs.onResult(rs.mutants[idx])
 	rs.outMu.Unlock()
 }
 

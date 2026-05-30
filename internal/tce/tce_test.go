@@ -15,16 +15,17 @@ import (
 )
 
 func TestNormalizeAsm_StripsHeaderAndTrailingWhitespace(t *testing.T) {
-	// The `# importpath` header and trailing whitespace are incidental and
+	const ip = "github.com/foo/bar"
+	// The `# <importpath>` header and trailing whitespace are incidental and
 	// must not affect the hash; the instruction lines must.
-	base := normalizeAsm([]byte("ADD R1,R0\nMOV x,y\n"))
-	withHeaderAndWS := normalizeAsm([]byte("# github.com/foo/bar\nADD R1,R0  \nMOV x,y\t\n"))
+	base := normalizeAsm([]byte("ADD R1,R0\nMOV x,y\n"), ip)
+	withHeaderAndWS := normalizeAsm([]byte("# "+ip+"\nADD R1,R0  \nMOV x,y\t\n"), ip)
 	if base != withHeaderAndWS {
 		t.Errorf("header / trailing whitespace changed the hash:\n base=%s\n  hw=%s", base, withHeaderAndWS)
 	}
 
 	// A real instruction difference must change the hash.
-	diff := normalizeAsm([]byte("SUB R1,R0\nMOV x,y\n"))
+	diff := normalizeAsm([]byte("SUB R1,R0\nMOV x,y\n"), ip)
 	if base == diff {
 		t.Error("ADD vs SUB produced the same hash; normalizeAsm is destroying signal")
 	}
@@ -384,18 +385,23 @@ func TestReferenceHash_MemoizedOncePerPackage(t *testing.T) {
 // mutant: two inputs with the same concatenation but different line splits
 // must hash differently.
 func TestNormalizeAsm_LineBoundaryMatters(t *testing.T) {
-	if normalizeAsm([]byte("AB\nC")) == normalizeAsm([]byte("A\nBC")) {
+	if normalizeAsm([]byte("AB\nC"), "p") == normalizeAsm([]byte("A\nBC"), "p") {
 		t.Error("normalizeAsm ignored line boundaries (newline separator dropped)")
 	}
 }
 
-// TestNormalizeAsm_SkipsSingleCharHeader pins `len(line) > 0`: a bare "#"
-// line (length 1) must still be recognised as a header and dropped. If the
-// length bound were widened to `> 1`, the one-char header would slip
-// through and be hashed.
-func TestNormalizeAsm_SkipsSingleCharHeader(t *testing.T) {
-	if normalizeAsm([]byte("#\nA")) != normalizeAsm([]byte("A")) {
-		t.Error("a single-char '#' header line was not skipped")
+// TestNormalizeAsm_OnlyStripsExactHeader pins the exact-header anchor: the
+// real `# <importpath>` package header is dropped (it's identical across the
+// reference and mutant builds), but any other '#'-prefixed line must stay in
+// the hash — a data dump that begins with '#' can carry real signal, so
+// stripping it would be over-detection. Kills the bytes.Equal-guard mutants.
+func TestNormalizeAsm_OnlyStripsExactHeader(t *testing.T) {
+	const ip = "github.com/foo/bar"
+	if normalizeAsm([]byte("# "+ip+"\nA"), ip) != normalizeAsm([]byte("A"), ip) {
+		t.Error("exact package header was not stripped")
+	}
+	if normalizeAsm([]byte("# other\nA"), ip) == normalizeAsm([]byte("A"), ip) {
+		t.Error("a non-header '#' line was wrongly stripped (over-detection risk)")
 	}
 }
 

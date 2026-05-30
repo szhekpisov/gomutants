@@ -737,13 +737,17 @@ func run(ctx context.Context, args []string) error {
 	// 8b. Trivial Compiler Equivalence pass (opt-in). Recompile each
 	// surviving (LIVED) mutant with package-scoped `-gcflags=-S` and
 	// reclassify it as EQUIVALENT when the assembly matches the original —
-	// a compiler-proven non-gap. Runs before the final checkpoint so the
-	// verdicts are cached. Cached EQUIVALENT survivors stay EQUIVALENT and
-	// are skipped (their Status is no longer LIVED).
+	// a compiler-proven non-gap. Verdicts are checkpointed as they land (the
+	// throttled checkpoint callback, serialized with the workers' writes by
+	// the detector), so a hard kill mid-pass keeps the equivalence work done
+	// so far. Cached EQUIVALENT survivors stay EQUIVALENT and are skipped
+	// (their Status is no longer LIVED).
 	if cfg.DetectEquivalentEnabled() {
 		term.Phase("Detecting equivalent mutants...")
 		det := tce.NewDetector(projectDir, cfg.Tags, srcCache)
-		equiv := det.Run(ctx, mutants, cfg.Workers, tmpDir, nil)
+		equiv := det.Run(ctx, mutants, cfg.Workers, tmpDir, func(mutator.Mutant) {
+			checkpoint(false)
+		})
 		term.PhaseDone(fmt.Sprintf("%d equivalent", equiv))
 	}
 
