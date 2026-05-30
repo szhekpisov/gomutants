@@ -69,38 +69,49 @@ func (i *invertBitwise) Discover(fset *token.FileSet, file *ast.File, src []byte
 // simpler and strictly safer than singling out token.OR.
 func constraintBinaryOps(file *ast.File) map[token.Pos]bool {
 	ops := make(map[token.Pos]bool)
-	markBinaryOps := func(expr ast.Expr) {
-		ast.Inspect(expr, func(n ast.Node) bool {
-			if b, ok := n.(*ast.BinaryExpr); ok {
-				ops[b.OpPos] = true
-			}
-			return true
-		})
-	}
-	markTypeParams := func(tp *ast.FieldList) {
-		if tp == nil {
-			return
-		}
-		for _, f := range tp.List {
-			markBinaryOps(f.Type)
-		}
-	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch t := n.(type) {
 		case *ast.InterfaceType:
-			for _, f := range t.Methods.List {
-				// Empty Names ⇒ embedded type element (a constraint), not a
-				// method signature.
-				if len(f.Names) == 0 {
-					markBinaryOps(f.Type)
-				}
-			}
+			recordInterfaceOps(t, ops)
 		case *ast.TypeSpec:
-			markTypeParams(t.TypeParams)
+			recordTypeParamOps(t.TypeParams, ops)
 		case *ast.FuncType:
-			markTypeParams(t.TypeParams)
+			recordTypeParamOps(t.TypeParams, ops)
 		}
 		return true
 	})
 	return ops
+}
+
+// recordBinaryOps records the OpPos of every binary operator within expr.
+func recordBinaryOps(expr ast.Expr, ops map[token.Pos]bool) {
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if b, ok := n.(*ast.BinaryExpr); ok {
+			ops[b.OpPos] = true
+		}
+		return true
+	})
+}
+
+// recordInterfaceOps records binary-operator positions in the embedded type
+// elements of an interface (its constraint unions), skipping method
+// signatures.
+func recordInterfaceOps(it *ast.InterfaceType, ops map[token.Pos]bool) {
+	for _, f := range it.Methods.List {
+		// Empty Names ⇒ embedded type element (a constraint), not a method.
+		if len(f.Names) == 0 {
+			recordBinaryOps(f.Type, ops)
+		}
+	}
+}
+
+// recordTypeParamOps records binary-operator positions in a type-parameter
+// constraint list (e.g. the `int | string` in `[T int | string]`).
+func recordTypeParamOps(tp *ast.FieldList, ops map[token.Pos]bool) {
+	if tp == nil {
+		return
+	}
+	for _, f := range tp.List {
+		recordBinaryOps(f.Type, ops)
+	}
 }
