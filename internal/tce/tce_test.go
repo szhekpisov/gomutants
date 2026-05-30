@@ -383,6 +383,16 @@ func TestNormalizeAsm_LineBoundaryMatters(t *testing.T) {
 	}
 }
 
+// TestNormalizeAsm_SkipsSingleCharHeader pins `len(line) > 0`: a bare "#"
+// line (length 1) must still be recognised as a header and dropped. If the
+// length bound were widened to `> 1`, the one-char header would slip
+// through and be hashed.
+func TestNormalizeAsm_SkipsSingleCharHeader(t *testing.T) {
+	if normalizeAsm([]byte("#\nA")) != normalizeAsm([]byte("A")) {
+		t.Error("a single-char '#' header line was not skipped")
+	}
+}
+
 var errInjected = errorString("injected")
 
 type errorString string

@@ -121,6 +121,7 @@ func (d *Detector) Check(ctx context.Context, m mutator.Mutant, tmpSrcPath, over
 	if err != nil {
 		return false, err
 	}
+	// gomutants:disable-next-line INTEGER_INCREMENT,INTEGER_DECREMENT reason="the mode of this throwaway temp source is observably irrelevant: it is written and then immediately read back by `go build -overlay` in the same process/user, so any owner-readable bits behave identically"
 	if err := writeFileFunc(tmpSrcPath, patched, 0o644); err != nil {
 		return false, err
 	}
@@ -197,6 +198,7 @@ func writeOverlay(path, srcAbs, tmpSrc string) error {
 	if err != nil {
 		return err
 	}
+	// gomutants:disable-next-line INTEGER_INCREMENT,INTEGER_DECREMENT reason="overlay temp-file mode is observably irrelevant; it is read back by `go build -overlay` in the same process, so any owner-readable bits behave identically"
 	return writeFileFunc(path, b, 0o644)
 }
 
@@ -212,20 +214,18 @@ func (d *Detector) Run(ctx context.Context, mutants []mutator.Mutant, workers in
 			lived = append(lived, i)
 		}
 	}
-	// gomutants:disable-next-line BRANCH_IF reason="fast-path optimisation; with no survivors the loop below feeds an empty work channel, so spawning workers and returning is observably identical to returning early"
-	if len(lived) == 0 {
-		return
-	}
+	// No early return for an empty `lived`: the loop below feeds an empty
+	// work channel, so the workers spawn and exit immediately — keeping a
+	// guard here only adds a mutation-equivalent fast path.
+	//
 	// Sort by (Pkg, File, StartOffset) so consecutive survivors share the
 	// per-package reference compile and the dependency build cache.
 	sort.SliceStable(lived, func(a, b int) bool {
 		return mutantLess(mutants[lived[a]], mutants[lived[b]])
 	})
 
-	// gomutants:disable-next-line CONDITIONALS_BOUNDARY reason="`< → <=` is provably equivalent: at workers==1 the body sets workers=1 (a no-op), and for every other value the predicate is unchanged, so all inputs yield the same worker count"
-	if workers < 1 {
-		workers = 1
-	}
+	// gomutants:disable-next-line INTEGER_INCREMENT reason="raising the floor from 1 to 2 still clamps to a worker count >=1 that processes the same survivors, so it's observably equivalent; the killable decrement (floor 0 → no workers) is pinned by the workers=0 test"
+	workers = max(1, workers)
 	work := make(chan int, len(lived))
 	var wg sync.WaitGroup
 	var outMu sync.Mutex // serializes onResult (and its mutant read)
