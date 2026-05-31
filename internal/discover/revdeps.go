@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// resolvePackagesFn indirects ResolvePackages so IntegrationClosure can be
+// unit-tested against canned package sets without shelling out to `go list`
+// (the real go-list path is covered by ResolvePackages's own tests and the
+// end-to-end integration acceptance test).
+var resolvePackagesFn = ResolvePackages
+
 // IntegrationClosure computes the reverse-dependency closure of the target
 // packages: R = targets ∪ {module-local packages whose imports or test
 // imports transitively reach a target}. Only R's tests can possibly kill a
@@ -22,7 +28,7 @@ import (
 func IntegrationClosure(ctx context.Context, dir string, targetImportPaths []string, moduleName, tags string) (rPatterns, rDirs []string, coverPkg string, err error) {
 	// Reuse ResolvePackages so integration mode shares the single, already
 	// vetted `go list` invocation rather than adding another exec call site.
-	pkgs, err := ResolvePackages(ctx, dir, []string{moduleName + "/..."}, tags)
+	pkgs, err := resolvePackagesFn(ctx, dir, []string{moduleName + "/..."}, tags)
 	if err != nil {
 		return nil, nil, "", err
 	}

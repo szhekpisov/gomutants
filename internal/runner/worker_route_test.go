@@ -119,21 +119,31 @@ func TestTestInvocationsNoRouting(t *testing.T) {
 }
 
 func TestOrderRoutePackages(t *testing.T) {
+	// Go randomizes map iteration order, so a dropped slices.Sort surfaces as
+	// a non-sorted result only on some iterations. Using several keys and
+	// looping makes the "rest must be sorted" assertion reliably catch it
+	// (the odds of the unsorted result accidentally matching every iteration
+	// are vanishing).
 	groups := map[string][]string{
+		"m/calc": {"T"}, // own — must come first regardless of order
 		"m/zoo":  {"T"},
-		"m/calc": {"T"}, // own
 		"m/app":  {"T"},
+		"m/qux":  {"T"},
+		"m/bar":  {"T"},
 	}
-	got := orderRoutePackages(groups, "m/calc")
-	want := []string{"m/calc", "m/app", "m/zoo"}
-	if !slices.Equal(got, want) {
-		t.Errorf("orderRoutePackages = %v, want %v", got, want)
+	want := []string{"m/calc", "m/app", "m/bar", "m/qux", "m/zoo"}
+	for range 50 {
+		if got := orderRoutePackages(groups, "m/calc"); !slices.Equal(got, want) {
+			t.Fatalf("orderRoutePackages = %v, want %v", got, want)
+		}
 	}
 
 	// Own package absent from the groups → just the sorted rest.
-	got = orderRoutePackages(map[string][]string{"m/app": {"T"}, "m/zoo": {"T"}}, "m/calc")
-	want = []string{"m/app", "m/zoo"}
-	if !slices.Equal(got, want) {
-		t.Errorf("orderRoutePackages (own absent) = %v, want %v", got, want)
+	wantRest := []string{"m/app", "m/bar", "m/zoo"}
+	for range 50 {
+		got := orderRoutePackages(map[string][]string{"m/zoo": {"T"}, "m/app": {"T"}, "m/bar": {"T"}}, "m/calc")
+		if !slices.Equal(got, wantRest) {
+			t.Fatalf("orderRoutePackages (own absent) = %v, want %v", got, wantRest)
+		}
 	}
 }

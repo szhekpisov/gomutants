@@ -251,9 +251,14 @@ func TestPreReadFilesMissing(t *testing.T) {
 
 func TestResolvePackagesIntegration(t *testing.T) {
 	dir := t.TempDir()
+	// add.go imports a stdlib package (Imports), the in-package test imports
+	// another (TestImports), and the external test a third (XTestImports), so
+	// all three decoded import fields are populated and asserted below.
 	files := map[string]string{
-		"go.mod":   "module testmod\n\ngo 1.26\n",
-		"add.go":   "package testmod\n\nfunc Add(a, b int) int { return a + b }\n",
+		"go.mod":        "module testmod\n\ngo 1.26\n",
+		"add.go":        "package testmod\n\nimport \"errors\"\n\nvar ErrX = errors.New(\"x\")\n\nfunc Add(a, b int) int { return a + b }\n",
+		"add_test.go":   "package testmod\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestAdd(t *testing.T) { _ = strings.ToUpper(\"x\") }\n",
+		"add_x_test.go": "package testmod_test\n\nimport (\n\t\"bytes\"\n\t\"testing\"\n)\n\nfunc TestX(t *testing.T) { _ = bytes.NewBuffer(nil) }\n",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
@@ -273,6 +278,17 @@ func TestResolvePackagesIntegration(t *testing.T) {
 	}
 	if len(pkgs[0].GoFiles) == 0 {
 		t.Error("GoFiles should not be empty")
+	}
+	// Decoded import fields must be populated (pins decodeGoListJSON's
+	// Imports/TestImports/XTestImports assignments).
+	if len(pkgs[0].Imports) == 0 {
+		t.Error("Imports should not be empty (add.go imports errors)")
+	}
+	if len(pkgs[0].TestImports) == 0 {
+		t.Error("TestImports should not be empty (add_test.go imports strings)")
+	}
+	if len(pkgs[0].XTestImports) == 0 {
+		t.Error("XTestImports should not be empty (add_x_test.go imports bytes)")
 	}
 }
 

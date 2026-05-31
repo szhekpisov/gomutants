@@ -2,11 +2,9 @@ package discover
 
 import (
 	"context"
-	"os"
-	"path/filepath"
+	"errors"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -170,42 +168,43 @@ func TestDirsFor(t *testing.T) {
 	}
 }
 
-// writeTempModule writes the given file map (relative paths → contents) into a
-// fresh temp module directory and returns it. Shared by the closure tests so
-// the module-scaffolding boilerplate lives in one place.
-func writeTempModule(t *testing.T, files map[string]string) string {
+// stubResolvePackages swaps resolvePackagesFn for the duration of a test,
+// capturing the arguments it was called with and returning canned packages.
+func stubResolvePackages(t *testing.T, pkgs []Package, retErr error) *struct {
+	dir      string
+	patterns []string
+	tags     string
+} {
 	t.Helper()
-	dir := t.TempDir()
-	for name, content := range files {
-		path := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	captured := &struct {
+		dir      string
+		patterns []string
+		tags     string
+	}{}
+	orig := resolvePackagesFn
+	t.Cleanup(func() { resolvePackagesFn = orig })
+	resolvePackagesFn = func(_ context.Context, dir string, patterns []string, tags string) ([]Package, error) {
+		captured.dir, captured.patterns, captured.tags = dir, patterns, tags
+		return pkgs, retErr
 	}
-	return dir
+	return captured
 }
 
-// TestIntegrationClosure drives the full closure through a real `go list` on a
-// synthesized module, exercising all three import kinds: app imports calc in
-// production (Imports), e2e from an in-package test (TestImports), and ext from
-// an external (`*_test` package) test (XTestImports). util imports none. The
-// closure of {calc} must pull in app, e2e, and ext, but not util.
+// TestIntegrationClosure drives the closure against a canned package set
+// exercising all three import kinds: app imports calc in production (Imports),
+// e2e from an in-package test (TestImports), and ext from an external test
+// (XTestImports). util imports none. The closure of {calc} must pull in app,
+// e2e, and ext, but not util — and it must query `go list` for `<module>/...`.
 func TestIntegrationClosure(t *testing.T) {
-	dir := writeTempModule(t, map[string]string{
-		"go.mod":            "module testmod\n\ngo 1.26\n",
-		"calc/calc.go":      "package calc\n\nfunc Add(a, b int) int { return a + b }\n",
-		"app/app.go":        "package app\n\nimport \"testmod/calc\"\n\nfunc Total() int { return calc.Add(1, 2) }\n",
-		"e2e/e2e.go":        "package e2e\n",
-		"e2e/e2e_test.go":   "package e2e\n\nimport (\n\t\"testing\"\n\n\t\"testmod/calc\"\n)\n\nfunc TestE2E(t *testing.T) { _ = calc.Add(1, 1) }\n",
-		"ext/ext.go":        "package ext\n",
-		"ext/ext_x_test.go": "package ext_test\n\nimport (\n\t\"testing\"\n\n\t\"testmod/calc\"\n)\n\nfunc TestExt(t *testing.T) { _ = calc.Add(2, 2) }\n",
-		"util/util.go":      "package util\n\nfunc U() int { return 0 }\n",
-	})
+	captured := stubResolvePackages(t, []Package{
+		{ImportPath: "testmod/calc", Dir: "/m/calc"},
+		{ImportPath: "testmod/app", Dir: "/m/app", Imports: []string{"testmod/calc"}},
+		{ImportPath: "testmod/e2e", Dir: "/m/e2e", TestImports: []string{"testmod/calc"}},
+		{ImportPath: "testmod/ext", Dir: "/m/ext", XTestImports: []string{"testmod/calc"}},
+		{ImportPath: "testmod/util", Dir: "/m/util"},
+	}, nil)
 
-	rPatterns, rDirs, coverPkg, err := IntegrationClosure(context.Background(), dir, []string{"testmod/calc"}, "testmod", "")
+	rPatterns, rDirs, coverPkg, err := IntegrationClosure(context.Background(), "/m", []string{"testmod/calc"}, "testmod", "tag1")
 	if err != nil {
 		t.Fatalf("IntegrationClosure: %v", err)
 	}
@@ -224,51 +223,23 @@ func TestIntegrationClosure(t *testing.T) {
 	if len(rDirs) != len(rPatterns) {
 		t.Errorf("rDirs (%d) and rPatterns (%d) length mismatch", len(rDirs), len(rPatterns))
 	}
-	for _, d := range rDirs {
-		if !strings.HasPrefix(d, dir) {
-			t.Errorf("rDir %q is outside the module dir %q", d, dir)
-		}
-	}
-}
 
-// TestIntegrationClosureForwardsTags pins the `-tags` forwarding: the `tagged`
-// package imports calc only from a file behind `//go:build mytag`, so it enters
-// calc's closure only when the tag is forwarded. A base file keeps the package
-// valid (and out of the closure) without the tag, so `go list` never errors.
-func TestIntegrationClosureForwardsTags(t *testing.T) {
-	dir := writeTempModule(t, map[string]string{
-		"go.mod":           "module testmod\n\ngo 1.26\n",
-		"calc/calc.go":     "package calc\n\nfunc Add(a, b int) int { return a + b }\n",
-		"tagged/base.go":   "package tagged\n",
-		"tagged/tagged.go": "//go:build mytag\n\npackage tagged\n\nimport \"testmod/calc\"\n\nvar _ = calc.Add\n",
-	})
-
-	// Without the tag, tagged's calc import is build-excluded → not in closure.
-	r, _, _, err := IntegrationClosure(context.Background(), dir, []string{"testmod/calc"}, "testmod", "")
-	if err != nil {
-		t.Fatalf("IntegrationClosure (no tag): %v", err)
+	// The closure must enumerate the whole module and forward the tags.
+	if !reflect.DeepEqual(captured.patterns, []string{"testmod/..."}) {
+		t.Errorf("go list patterns = %v, want [testmod/...]", captured.patterns)
 	}
-	if slices.Contains(r, "testmod/tagged") {
-		t.Errorf("without tag, tagged must not be in closure: %v", r)
-	}
-
-	// With tags=mytag, the import is active → tagged enters the closure.
-	r, _, _, err = IntegrationClosure(context.Background(), dir, []string{"testmod/calc"}, "testmod", "mytag")
-	if err != nil {
-		t.Fatalf("IntegrationClosure (tag=mytag): %v", err)
-	}
-	if !slices.Contains(r, "testmod/tagged") {
-		t.Errorf("with tag=mytag, tagged must be in closure: %v", r)
+	if captured.dir != "/m" || captured.tags != "tag1" {
+		t.Errorf("go list dir/tags = %q/%q, want /m/tag1", captured.dir, captured.tags)
 	}
 }
 
 // TestIntegrationClosureErrorPropagates pins the `go list` failure path: a
-// non-existent working directory makes the command fail to start, and the
-// error must surface rather than being swallowed into an empty closure.
+// ResolvePackages error must surface rather than being swallowed into an
+// empty closure.
 func TestIntegrationClosureErrorPropagates(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "does-not-exist")
-	_, _, _, err := IntegrationClosure(context.Background(), missing, []string{"nomod/calc"}, "nomod", "")
+	stubResolvePackages(t, nil, errors.New("go list boom"))
+	_, _, _, err := IntegrationClosure(context.Background(), "/m", []string{"testmod/calc"}, "testmod", "")
 	if err == nil {
-		t.Fatal("expected an error when `go list` fails, got nil")
+		t.Fatal("expected an error when ResolvePackages fails, got nil")
 	}
 }
