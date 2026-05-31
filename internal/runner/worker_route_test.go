@@ -29,92 +29,81 @@ func runArg(args []string) (string, bool) {
 	return "", false
 }
 
-// Same-package routing yields exactly one invocation against the mutant's
-// own package — byte-identical to the pre-integration single-package path.
-func TestTestInvocationsSinglePackage(t *testing.T) {
-	const calc = "m/calc"
-	w := &Worker{testMap: routeMap("f.go:1", coverage.TestRef{Pkg: calc, Name: "TestA"})}
-	m := mutator.Mutant{Pkg: calc, CoverageFile: "f.go", Line: 1}
-
-	invs := w.testInvocations(m, false, time.Second)
-	if len(invs) != 1 {
-		t.Fatalf("got %d invocations, want 1: %v", len(invs), invs)
-	}
-	if got := lastArg(invs[0]); got != calc {
-		t.Errorf("package arg = %q, want %q", got, calc)
-	}
-	if r, ok := runArg(invs[0]); !ok || r != "-run=^(TestA)$" {
-		t.Errorf("-run arg = %q (present=%v), want -run=^(TestA)$", r, ok)
-	}
+// invocationsFor builds a worker around tm and returns the `go test`
+// invocations it routes for a mutant in ownPkg at f.go:1.
+func invocationsFor(t *testing.T, tm *coverage.TestMap, ownPkg string) [][]string {
+	t.Helper()
+	w := &Worker{testMap: tm}
+	m := mutator.Mutant{Pkg: ownPkg, CoverageFile: "f.go", Line: 1}
+	return w.testInvocations(m, false, time.Second)
 }
 
-// Cross-package routing yields one invocation per covering package, the
-// mutant's own package first, each filtered to that package's tests.
-func TestTestInvocationsCrossPackageOrdersOwnFirst(t *testing.T) {
+// TestTestInvocations covers how a mutant is routed to per-package `go test`
+// invocations: same-package, cross-package (own package ordered first), an
+// importer-only mutant, and the no-routing fallback (whole own package, no
+// -run filter). wantRuns[i]=="" means invocation i must carry no -run filter.
+func TestTestInvocations(t *testing.T) {
 	const (
 		calc = "m/calc"
 		app  = "m/app"
 	)
-	w := &Worker{testMap: routeMap("f.go:1",
-		coverage.TestRef{Pkg: app, Name: "TestApp"},
-		coverage.TestRef{Pkg: calc, Name: "TestCalc"},
-	)}
-	m := mutator.Mutant{Pkg: calc, CoverageFile: "f.go", Line: 1}
-
-	invs := w.testInvocations(m, false, time.Second)
-	if len(invs) != 2 {
-		t.Fatalf("got %d invocations, want 2: %v", len(invs), invs)
+	cases := []struct {
+		name     string
+		tm       *coverage.TestMap
+		ownPkg   string
+		wantPkgs []string
+		wantRuns []string
+	}{
+		{
+			name:     "same package, one invocation",
+			tm:       routeMap("f.go:1", coverage.TestRef{Pkg: calc, Name: "TestA"}),
+			ownPkg:   calc,
+			wantPkgs: []string{calc},
+			wantRuns: []string{"-run=^(TestA)$"},
+		},
+		{
+			name: "cross package orders own first",
+			tm: routeMap("f.go:1",
+				coverage.TestRef{Pkg: app, Name: "TestApp"},
+				coverage.TestRef{Pkg: calc, Name: "TestCalc"}),
+			ownPkg:   calc,
+			wantPkgs: []string{calc, app},
+			wantRuns: []string{"-run=^(TestCalc)$", "-run=^(TestApp)$"},
+		},
+		{
+			name:     "importer only, never own package",
+			tm:       routeMap("f.go:1", coverage.TestRef{Pkg: app, Name: "TestApp"}),
+			ownPkg:   calc,
+			wantPkgs: []string{app},
+			wantRuns: []string{"-run=^(TestApp)$"},
+		},
+		{
+			name:     "no routing runs whole own package",
+			tm:       routeMap("other.go:9", coverage.TestRef{Pkg: calc, Name: "TestA"}),
+			ownPkg:   calc,
+			wantPkgs: []string{calc},
+			wantRuns: []string{""},
+		},
 	}
-	// Own package (calc) must run first.
-	if got := lastArg(invs[0]); got != calc {
-		t.Errorf("first invocation package = %q, want %q (own package first)", got, calc)
-	}
-	if got := lastArg(invs[1]); got != app {
-		t.Errorf("second invocation package = %q, want %q", got, app)
-	}
-	if r, _ := runArg(invs[0]); r != "-run=^(TestCalc)$" {
-		t.Errorf("calc invocation -run = %q, want -run=^(TestCalc)$", r)
-	}
-	if r, _ := runArg(invs[1]); r != "-run=^(TestApp)$" {
-		t.Errorf("app invocation -run = %q, want -run=^(TestApp)$", r)
-	}
-}
-
-// A mutant whose own package has no covering test but an importer does is
-// routed to the importer's package — never to its own.
-func TestTestInvocationsForeignPackageOnly(t *testing.T) {
-	const (
-		calc = "m/calc"
-		app  = "m/app"
-	)
-	w := &Worker{testMap: routeMap("f.go:1", coverage.TestRef{Pkg: app, Name: "TestApp"})}
-	m := mutator.Mutant{Pkg: calc, CoverageFile: "f.go", Line: 1}
-
-	invs := w.testInvocations(m, false, time.Second)
-	if len(invs) != 1 {
-		t.Fatalf("got %d invocations, want 1: %v", len(invs), invs)
-	}
-	if got := lastArg(invs[0]); got != app {
-		t.Errorf("package arg = %q, want %q (importer, not own package)", got, app)
-	}
-}
-
-// No routing info → a single invocation against the mutant's package with no
-// -run filter (run the whole package).
-func TestTestInvocationsNoRouting(t *testing.T) {
-	const calc = "m/calc"
-	w := &Worker{testMap: routeMap("other.go:9", coverage.TestRef{Pkg: calc, Name: "TestA"})}
-	m := mutator.Mutant{Pkg: calc, CoverageFile: "f.go", Line: 1} // no index entry
-
-	invs := w.testInvocations(m, false, time.Second)
-	if len(invs) != 1 {
-		t.Fatalf("got %d invocations, want 1: %v", len(invs), invs)
-	}
-	if got := lastArg(invs[0]); got != calc {
-		t.Errorf("package arg = %q, want %q", got, calc)
-	}
-	if r, ok := runArg(invs[0]); ok {
-		t.Errorf("unexpected -run filter %q; whole package should run", r)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			invs := invocationsFor(t, tc.tm, tc.ownPkg)
+			if len(invs) != len(tc.wantPkgs) {
+				t.Fatalf("got %d invocations, want %d: %v", len(invs), len(tc.wantPkgs), invs)
+			}
+			for i, inv := range invs {
+				if got := lastArg(inv); got != tc.wantPkgs[i] {
+					t.Errorf("invocation %d package = %q, want %q", i, got, tc.wantPkgs[i])
+				}
+				r, ok := runArg(inv)
+				switch {
+				case tc.wantRuns[i] == "" && ok:
+					t.Errorf("invocation %d has unexpected -run %q; whole package should run", i, r)
+				case tc.wantRuns[i] != "" && r != tc.wantRuns[i]:
+					t.Errorf("invocation %d -run = %q, want %q", i, r, tc.wantRuns[i])
+				}
+			}
+		})
 	}
 }
 
