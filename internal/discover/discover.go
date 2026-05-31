@@ -18,21 +18,31 @@ import (
 	"github.com/szhekpisov/gomutants/internal/mutator"
 )
 
-// Package holds resolved package info from go list.
+// Package holds resolved package info from go list. Imports/TestImports/
+// XTestImports carry the production, in-package-test, and external-test
+// import paths respectively; the integration-mode reverse-dependency closure
+// reads them (test imports are how an importing package's test reaches a
+// target).
 type Package struct {
-	Dir        string   // Absolute directory path.
-	ImportPath string   // e.g. "github.com/szhekpisov/gomutants/internal/discover"
-	GoFiles    []string // .go source files (base names).
-	TestGoFiles []string // _test.go files (base names).
+	Dir          string   // Absolute directory path.
+	ImportPath   string   // e.g. "github.com/szhekpisov/gomutants/internal/discover"
+	GoFiles      []string // .go source files (base names).
+	TestGoFiles  []string // _test.go files (base names).
+	Imports      []string // production imports.
+	TestImports  []string // imports of in-package (_test.go) test files.
+	XTestImports []string // imports of external (foo_test) test files.
 }
 
 // goListJSON mirrors the fields we need from `go list -json`.
 type goListJSON struct {
-	Dir         string   `json:"Dir"`
-	ImportPath  string   `json:"ImportPath"`
-	GoFiles     []string `json:"GoFiles"`
-	TestGoFiles []string `json:"TestGoFiles"`
-	Error       *struct {
+	Dir          string   `json:"Dir"`
+	ImportPath   string   `json:"ImportPath"`
+	GoFiles      []string `json:"GoFiles"`
+	TestGoFiles  []string `json:"TestGoFiles"`
+	Imports      []string `json:"Imports"`
+	TestImports  []string `json:"TestImports"`
+	XTestImports []string `json:"XTestImports"`
+	Error        *struct {
 		Err string `json:"Err"`
 	} `json:"Error"`
 }
@@ -73,10 +83,13 @@ func decodeGoListJSON(r io.Reader) ([]Package, error) {
 			return nil, fmt.Errorf("go list error for %s: %s", p.ImportPath, p.Error.Err)
 		}
 		pkgs = append(pkgs, Package{
-			Dir:         p.Dir,
-			ImportPath:  p.ImportPath,
-			GoFiles:     p.GoFiles,
-			TestGoFiles: p.TestGoFiles,
+			Dir:          p.Dir,
+			ImportPath:   p.ImportPath,
+			GoFiles:      p.GoFiles,
+			TestGoFiles:  p.TestGoFiles,
+			Imports:      p.Imports,
+			TestImports:  p.TestImports,
+			XTestImports: p.XTestImports,
 		})
 	}
 	return pkgs, nil

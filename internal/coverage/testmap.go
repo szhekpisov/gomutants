@@ -357,11 +357,10 @@ func (tm *TestMap) TestsFor(file string, line int) []string {
 	seen := make(map[string]bool, len(testSet))
 	tests := make([]string, 0, len(testSet))
 	for k := range testSet {
-		if seen[k.name] {
-			continue
+		if !seen[k.name] {
+			seen[k.name] = true
+			tests = append(tests, k.name)
 		}
-		seen[k.name] = true
-		tests = append(tests, k.name)
 	}
 	return tests
 }

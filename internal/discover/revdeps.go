@@ -1,29 +1,10 @@
 package discover
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"os/exec"
 	"sort"
 	"strings"
 )
-
-// goListDeps mirrors the dependency fields of `go list -json`. Imports holds
-// non-test imports; TestImports and XTestImports hold the imports of a
-// package's in-package (`_test.go`) and external (`foo_test`) test files.
-// Test imports are load-bearing for integration mode: the canonical case —
-// an integration test in package `app` exercising code in package `calc` —
-// shows up only as a TestImport of `app`, never in its plain Imports.
-type goListDeps struct {
-	ImportPath   string   `json:"ImportPath"`
-	Dir          string   `json:"Dir"`
-	Imports      []string `json:"Imports"`
-	TestImports  []string `json:"TestImports"`
-	XTestImports []string `json:"XTestImports"`
-}
 
 // IntegrationClosure computes the reverse-dependency closure of the target
 // packages: R = targets ∪ {module-local packages whose imports or test
@@ -39,7 +20,9 @@ type goListDeps struct {
 // moduleName scopes the import graph to the current module; stdlib and
 // external dependencies are never part of the closure.
 func IntegrationClosure(ctx context.Context, dir string, targetImportPaths []string, moduleName, tags string) (rPatterns, rDirs []string, coverPkg string, err error) {
-	pkgs, err := listModuleDeps(ctx, dir, moduleName, tags)
+	// Reuse ResolvePackages so integration mode shares the single, already
+	// vetted `go list` invocation rather than adding another exec call site.
+	pkgs, err := ResolvePackages(ctx, dir, []string{moduleName + "/..."}, tags)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -53,7 +36,7 @@ func IntegrationClosure(ctx context.Context, dir string, targetImportPaths []str
 // import graph (package → the in-module packages its production OR test code
 // imports) and an import-path → directory lookup. Pure so the indexing — and
 // the test-import inclusion it depends on — is unit-testable without `go list`.
-func buildImportGraph(pkgs []goListDeps, moduleName string) (fwd map[string][]string, dirs map[string]string) {
+func buildImportGraph(pkgs []Package, moduleName string) (fwd map[string][]string, dirs map[string]string) {
 	fwd = make(map[string][]string, len(pkgs))
 	dirs = make(map[string]string, len(pkgs))
 	for _, p := range pkgs {
@@ -75,44 +58,10 @@ func dirsFor(importPaths []string, dirs map[string]string) []string {
 	return out
 }
 
-// listModuleDeps runs `go list -json <module>/...` and decodes the
-// dependency fields for every package in the module.
-func listModuleDeps(ctx context.Context, dir, moduleName, tags string) ([]goListDeps, error) {
-	args := []string{"list", "-json"}
-	if tags != "" {
-		args = append(args, "-tags="+tags)
-	}
-	args = append(args, moduleName+"/...")
-	cmd := exec.CommandContext(ctx, "go", args...)
-	cmd.Dir = dir
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("go list %s/...: %w\n%s", moduleName, err, stderr.String())
-	}
-	return decodeGoListDeps(&stdout)
-}
-
-func decodeGoListDeps(r io.Reader) ([]goListDeps, error) {
-	var pkgs []goListDeps
-	dec := json.NewDecoder(r)
-	for dec.More() {
-		var p goListDeps
-		if err := dec.Decode(&p); err != nil {
-			return nil, fmt.Errorf("parsing go list output: %w", err)
-		}
-		pkgs = append(pkgs, p)
-	}
-	return pkgs, nil
-}
-
 // moduleLocalImports returns the union of a package's regular, in-test, and
 // external-test imports, keeping only those within moduleName. Deduplicated
 // so a package imported from both production and test code appears once.
-func moduleLocalImports(p goListDeps, moduleName string) []string {
+func moduleLocalImports(p Package, moduleName string) []string {
 	seen := make(map[string]bool)
 	var out []string
 	for _, group := range [][]string{p.Imports, p.TestImports, p.XTestImports} {
@@ -152,7 +101,7 @@ func reverseClosure(targets []string, fwd map[string][]string) []string {
 	}
 
 	visited := make(map[string]bool, len(targets))
-	queue := make([]string, 0, len(targets))
+	var queue []string
 	for _, t := range targets {
 		if !visited[t] {
 			visited[t] = true
