@@ -16,7 +16,7 @@ import (
 // Falling back to the BuildTestMap pipeline would require spinning up
 // real `go test` invocations, which is the opposite of what a unit test
 // for the timeout selector should do.
-func newTestMapWithDurations(t *testing.T, perTest map[[2]string]time.Duration, coverIndex map[string][]string) *coverage.TestMap {
+func newTestMapWithDurations(t *testing.T, perTest map[[2]string]time.Duration, coverIndex map[string][]coverage.TestRef) *coverage.TestMap {
 	t.Helper()
 	tm := coverage.NewTestMapForTesting(perTest, coverIndex)
 	return tm
@@ -40,8 +40,8 @@ func TestTimeoutPolicyForAdaptiveDisabledIgnoresTestMap(t *testing.T) {
 		map[[2]string]time.Duration{
 			{"p", "TestA"}: 100 * time.Millisecond,
 		},
-		map[string][]string{
-			"f.go:1": {"TestA"},
+		map[string][]coverage.TestRef{
+			"f.go:1": {{Pkg: "p", Name: "TestA"}},
 		},
 	)
 	p := TimeoutPolicy{Global: 30 * time.Second, Margin: 3, Min: time.Second, Adaptive: false}
@@ -57,8 +57,8 @@ func TestTimeoutPolicyForUsesPerTestSum(t *testing.T) {
 			{"p", "TestA"}: 100 * time.Millisecond,
 			{"p", "TestB"}: 200 * time.Millisecond,
 		},
-		map[string][]string{
-			"f.go:10": {"TestA", "TestB"},
+		map[string][]coverage.TestRef{
+			"f.go:10": {{Pkg: "p", Name: "TestA"}, {Pkg: "p", Name: "TestB"}},
 		},
 	)
 	p := TimeoutPolicy{Global: 30 * time.Second, Margin: 3, Min: time.Second, Adaptive: true}
@@ -75,8 +75,8 @@ func TestTimeoutPolicyForFloorClampsBelowMin(t *testing.T) {
 		map[[2]string]time.Duration{
 			{"p", "TestA"}: 5 * time.Millisecond,
 		},
-		map[string][]string{
-			"f.go:1": {"TestA"},
+		map[string][]coverage.TestRef{
+			"f.go:1": {{Pkg: "p", Name: "TestA"}},
 		},
 	)
 	p := TimeoutPolicy{Global: 30 * time.Second, Margin: 3, Min: 2 * time.Second, Adaptive: true}
@@ -91,8 +91,8 @@ func TestTimeoutPolicyForCeilingClampsAboveGlobal(t *testing.T) {
 		map[[2]string]time.Duration{
 			{"p", "TestSlow"}: 60 * time.Second,
 		},
-		map[string][]string{
-			"f.go:1": {"TestSlow"},
+		map[string][]coverage.TestRef{
+			"f.go:1": {{Pkg: "p", Name: "TestSlow"}},
 		},
 	)
 	p := TimeoutPolicy{Global: 30 * time.Second, Margin: 3, Min: time.Second, Adaptive: true}
@@ -110,8 +110,8 @@ func TestTimeoutPolicyForFallsBackToPackageWhenPerTestMissing(t *testing.T) {
 			{"p", "TestA"}: 50 * time.Millisecond,
 			{"p", "TestB"}: 50 * time.Millisecond,
 		},
-		map[string][]string{
-			"f.go:1": {"TestUnseen"},
+		map[string][]coverage.TestRef{
+			"f.go:1": {{Pkg: "p", Name: "TestUnseen"}},
 		},
 	)
 	p := TimeoutPolicy{Global: 30 * time.Second, Margin: 4, Min: 0, Adaptive: true}
@@ -142,8 +142,8 @@ func TestWorkerComputeTimeoutWiresPolicyAndTestMap(t *testing.T) {
 		map[[2]string]time.Duration{
 			{"p", "TestA"}: time.Second, // 1s × 3 = 3s, between Min(2s) and Global(30s)
 		},
-		map[string][]string{
-			"f.go:1": {"TestA"},
+		map[string][]coverage.TestRef{
+			"f.go:1": {{Pkg: "p", Name: "TestA"}},
 		},
 	)
 	w := &Worker{
@@ -170,8 +170,8 @@ func TestWorkerBuildTestArgsUsesAdaptiveTimeout(t *testing.T) {
 		map[[2]string]time.Duration{
 			{"p", "TestA"}: 500 * time.Millisecond,
 		},
-		map[string][]string{
-			"f.go:7": {"TestA"},
+		map[string][]coverage.TestRef{
+			"f.go:7": {{Pkg: "p", Name: "TestA"}},
 		},
 	)
 	w := &Worker{
@@ -210,8 +210,8 @@ func TestTimeoutPolicyForNoCoveringSetUsesPackage(t *testing.T) {
 		map[[2]string]time.Duration{
 			{"p", "TestA"}: 250 * time.Millisecond,
 		},
-		map[string][]string{
-			"other.go:5": {"TestA"},
+		map[string][]coverage.TestRef{
+			"other.go:5": {{Pkg: "p", Name: "TestA"}},
 		},
 	)
 	p := TimeoutPolicy{Global: 30 * time.Second, Margin: 2, Min: 0, Adaptive: true}

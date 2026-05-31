@@ -65,6 +65,13 @@ type Config struct {
 	// compile per survivor.
 	DetectEquivalent *bool                     `yaml:"detect-equivalent"`
 	Mutants          map[string]*MutatorConfig `yaml:"mutants"`
+	// Integration enables cross-package per-test routing: a mutant is
+	// routed to (and killed by) covering tests in any package that imports
+	// it, not just tests in its own package. Coverage instrumentation and
+	// the per-test map widen to the reverse-dependency closure of the
+	// target packages. Off by default; see main.go for the -coverpkg
+	// conflict guard.
+	Integration bool `yaml:"integration"`
 }
 
 // Default values for adaptive-timeout knobs. Exposed as package-level
@@ -225,6 +232,7 @@ type Flags struct {
 	DryRun             bool
 	Verbose            bool
 	Quiet              bool
+	Integration        bool
 }
 
 // ApplyFlags merges CLI-provided flag values into c, with CLI winning
@@ -298,6 +306,9 @@ func (c *Config) applyToggleFlags(f Flags) {
 	}
 	if f.Quiet {
 		c.Quiet = true
+	}
+	if f.Integration {
+		c.Integration = true
 	}
 	if f.DetectEquivalent.Set {
 		v := f.DetectEquivalent.Value

@@ -62,6 +62,15 @@ output: mutation-report.json
 # adds one package compile per survivor — opt-in.
 # detect-equivalent: true
 
+# Cross-package routing (default: false). Route each mutant to covering
+# tests in any package that imports it — so a mutant can be killed by a
+# cross-package/E2E test, not just tests in its own package. Widens
+# coverage and the per-test build to the reverse-dependency closure of the
+# target packages and manages -coverpkg itself (setting coverpkg too is an
+# error). Slower; efficacy scores aren't comparable to a non-integration
+# run. Opt-in.
+# integration: true
+
 # Mutator types to disable (run all except these).
 # disable:
 #   - BRANCH_IF

@@ -31,6 +31,7 @@
 - [Features](#features)
 - [Usage](#usage)
   - [PR-Scoped Mode](#pr-scoped-mode)
+  - [Cross-Package Mode](#cross-package-mode)
   - [Stryker-format Reports](#stryker-format-reports)
   - [HTML Reports](#html-reports)
   - [Exit Codes & CI Integration](#exit-codes--ci-integration)
@@ -244,6 +245,7 @@ gomutants --threshold-efficacy 80 ./...
 - **Multiple report formats** — gremlins-compatible JSON (default), [Stryker `mutation-testing-elements` v2](https://github.com/stryker-mutator/mutation-testing-elements) JSON, and a self-contained interactive HTML report.
 - **Conservative discovery** — compile-failing mutants surface as `NOT_VIABLE` and don't inflate efficacy.
 - **Equivalent-mutant detection (opt-in)** — `--detect-equivalent` recompiles each survivor with `-gcflags=-S` and reclassifies it as `EQUIVALENT` when the generated assembly matches the original (Trivial Compiler Equivalence). Such mutants can't be killed by any test, so they drop out of the efficacy denominator instead of failing the gate. Sound: a killable mutant is never marked equivalent.
+- **Cross-package routing (opt-in)** — `--integration` extends per-test routing across package boundaries so a mutant is killed by a covering test in *any* importing package (cross-package/E2E tests), not just its own. See [Cross-Package Mode](#cross-package-mode).
 - **Inline ignore directives** — `// gomutants:disable*` comments suppress specific mutants by line, function, or regex.
 - **GitHub Action** — surfaces surviving mutants as inline annotations on the PR diff.
 - **Claude Code plugin** — `/gomutants:mutants` slash command runs gomutants on changed code and proposes concrete `*_test.go` cases that would kill each surviving mutant.
@@ -267,6 +269,30 @@ gomutants --changed-since HEAD~1 ./...
 ```
 
 The flag runs `git diff --unified=0 <ref>` and keeps only mutants on added/modified lines. Combine with `--threshold-efficacy 100` to fail on any LIVED mutant on changed lines. A typical setup runs `--changed-since` per PR and the full tree post-merge; see [`.github/workflows/mutation.yml`](.github/workflows/mutation.yml) for an example.
+
+### Cross-Package Mode
+
+By default each mutant runs only against the tests in **its own package** whose coverage touches the mutated line. That's the fast path, and usually the right one: a mutant that only a downstream test kills means the mutated package's own tests are weak, and the `LIVED` report is the nudge to strengthen them.
+
+But some architectures legitimately assert behavior across package boundaries — thin wiring/glue packages, generated code, or a black-box/E2E suite that tests through the public API. There, a mutant's only killer lives in an *importing* package, and per-package routing reports it `LIVED` (a false survivor) or `NOT COVERED`.
+
+`--integration` closes that gap:
+
+```bash
+gomutants --integration ./...
+```
+
+It routes each mutant to the covering tests in **any** package that imports it. Concretely it:
+
+- computes the reverse-dependency closure of the target packages (every package whose imports *or test imports* reach a target) and widens coverage collection and the per-test build to that set;
+- pins `-coverpkg` to the target packages so importing tests record coverage on the mutated code (passing `--coverpkg` as well is an error);
+- runs each covering package's tests in its own `go test` invocation, short-circuiting on the first kill.
+
+Trade-offs:
+
+- **Slower.** The per-test coverage build expands to the reverse-dependency closure, and `-coverpkg` instrumentation adds overhead. The closure keeps this bounded to packages that can actually reach a target, but on large modules it's a real cost.
+- **Scores aren't comparable** to a non-integration run: mutants flip `LIVED`/`NOT COVERED` → `KILLED`, raising efficacy and mutant coverage. Pick one mode per gate.
+- Default (per-package) routing remains the recommended path; reach for `--integration` only when your suite deliberately asserts behavior across package boundaries.
 
 ### Stryker-format Reports
 
@@ -399,6 +425,7 @@ coverpkg: "./pkg/mypackage/..."
 tags: ""                # build tags forwarded to the inner go list/go test (e.g. "integration,debug")
 output: mutation-report.json
 changed-since: ""       # set to e.g. "main" to scope runs by default
+integration: false      # cross-package routing; manages -coverpkg itself (don't also set coverpkg)
 cache: ""               # path to incremental-analysis cache; "" = .gomutants-cache.json, "off" = disabled
 checkpoint-interval: 10s # how often to flush the cache mid-run; 0s disables (final flush still runs)
 disable: []
@@ -475,6 +502,7 @@ Priority: built-in defaults < config file < CLI flags. See [`.gomutants.yml.exam
 | `--cache` | | `.gomutants-cache.json` | Path to incremental-analysis cache file. Skips mutants whose source and tests are byte-identical to the cached run. Pass `--cache=off` to disable. |
 | `--checkpoint-interval` | | 10s | How often to flush completed mutant outcomes to the cache mid-run, so a hard kill (OOM, CI timeout, SIGKILL) loses at most this much progress and the next run resumes from the last checkpoint. `0` disables periodic checkpointing (the cache is then written only once, at the end). Ignored when `--cache=off`. |
 | `--detect-equivalent` | | false | After testing, recompile each surviving mutant with package-scoped `-gcflags=-S` and reclassify it as `EQUIVALENT` when the generated assembly is identical to the original (Trivial Compiler Equivalence). Equivalent mutants can't be killed by any test, so they're dropped from the efficacy denominator. Adds one package compile per survivor. |
+| `--integration` | | false | Route each mutant to covering tests in *any* package that imports it, not just its own. Widens coverage and the per-test build to the reverse-dependency closure of the target packages and manages `-coverpkg` itself (passing `--coverpkg` too is an error). Lets a mutant be killed by a cross-package/E2E test. See [Cross-Package Mode](#cross-package-mode). |
 | `--annotations` | | | Emit annotations for LIVED mutants. Supported: `github` (workflow-command warnings on stdout). |
 | `--stryker-output` | | | Also write a [Stryker mutation-testing-elements](https://github.com/stryker-mutator/mutation-testing-elements) report at this path (for the HTML viewer and Stryker Dashboard). |
 | `--html-output` | | | Also write a self-contained interactive HTML mutation report at this path (Stryker mutation-testing-elements viewer bundled inline; no network access required to open). |

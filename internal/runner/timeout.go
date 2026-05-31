@@ -66,14 +66,16 @@ func (p TimeoutPolicy) For(tm *coverage.TestMap, m mutator.Mutant) time.Duration
 		return p.Global
 	}
 
-	// Try per-test sum first. SumDurationsFor returns complete=false on
-	// missing entries; in that case fall through to package-level data.
-	// SumDurationsFor's contract guarantees complete=true ⇒ base>0 (sums of
-	// strictly-positive recordDuration entries), so a single `!complete`
-	// guard handles both "no data" cases — checking `base <= 0` here as
-	// well would be dead and shows up as four equivalent mutants.
-	tests := tm.TestsFor(m.CoverageFile, m.Line)
-	base, complete := tm.SumDurationsFor(m.Pkg, tests)
+	// Try the per-test sum first, by (pkg, name) reference so a mutant
+	// routed to covering tests in importing packages (integration mode) is
+	// sized from those tests' real durations. SumDurationsForRefs returns
+	// complete=false on any missing entry; in that case fall through to
+	// package-level data. Its contract guarantees complete=true ⇒ base>0
+	// (sums of strictly-positive recordDuration entries), so a single
+	// `!complete` guard handles both "no data" cases — checking `base <= 0`
+	// here as well would be dead and shows up as four equivalent mutants.
+	refs := tm.TestRefsFor(m.CoverageFile, m.Line)
+	base, complete := tm.SumDurationsForRefs(refs)
 	if !complete {
 		base = tm.PackageDuration(m.Pkg)
 	}

@@ -160,6 +160,29 @@ func TestApplyFlagsCheckpointIntervalZeroOverride(t *testing.T) {
 	}
 }
 
+// TestApplyFlagsIntegration pins the --integration toggle merge: passing the
+// flag sets Integration; not passing it leaves the value untouched. Kills
+// BRANCH_IF and STATEMENT_REMOVE on the `if f.Integration { c.Integration = true }`
+// merge.
+func TestApplyFlagsIntegration(t *testing.T) {
+	cfg := Default()
+	if cfg.Integration {
+		t.Fatal("default Integration should be false")
+	}
+
+	cfg.ApplyFlags(Flags{Integration: true})
+	if !cfg.Integration {
+		t.Error("ApplyFlags(Integration: true) must set Integration; the merge guard or assignment was dropped")
+	}
+
+	// Omitting the flag must not turn Integration on from its zero value.
+	other := Default()
+	other.ApplyFlags(Flags{})
+	if other.Integration {
+		t.Error("ApplyFlags without Integration must leave it false")
+	}
+}
+
 func TestLoadReadError(t *testing.T) {
 	// Use a directory path as config file — will cause a read error (not IsNotExist).
 	dir := t.TempDir()
