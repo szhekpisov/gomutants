@@ -38,6 +38,23 @@ func invocationsFor(t *testing.T, tm *coverage.TestMap, ownPkg string) [][]strin
 	return w.testInvocations(m, false, time.Second)
 }
 
+// checkInvocation asserts that invocation i targets wantPkg and carries the
+// expected -run filter. wantRun=="" means the invocation must have no -run
+// filter (the whole package runs).
+func checkInvocation(t *testing.T, i int, inv []string, wantPkg, wantRun string) {
+	t.Helper()
+	if got := lastArg(inv); got != wantPkg {
+		t.Errorf("invocation %d package = %q, want %q", i, got, wantPkg)
+	}
+	r, ok := runArg(inv)
+	switch {
+	case wantRun == "" && ok:
+		t.Errorf("invocation %d has unexpected -run %q; whole package should run", i, r)
+	case wantRun != "" && r != wantRun:
+		t.Errorf("invocation %d -run = %q, want %q", i, r, wantRun)
+	}
+}
+
 // TestTestInvocations covers how a mutant is routed to per-package `go test`
 // invocations: same-package, cross-package (own package ordered first), an
 // importer-only mutant, and the no-routing fallback (whole own package, no
@@ -92,16 +109,7 @@ func TestTestInvocations(t *testing.T) {
 				t.Fatalf("got %d invocations, want %d: %v", len(invs), len(tc.wantPkgs), invs)
 			}
 			for i, inv := range invs {
-				if got := lastArg(inv); got != tc.wantPkgs[i] {
-					t.Errorf("invocation %d package = %q, want %q", i, got, tc.wantPkgs[i])
-				}
-				r, ok := runArg(inv)
-				switch {
-				case tc.wantRuns[i] == "" && ok:
-					t.Errorf("invocation %d has unexpected -run %q; whole package should run", i, r)
-				case tc.wantRuns[i] != "" && r != tc.wantRuns[i]:
-					t.Errorf("invocation %d -run = %q, want %q", i, r, tc.wantRuns[i])
-				}
+				checkInvocation(t, i, inv, tc.wantPkgs[i], tc.wantRuns[i])
 			}
 		})
 	}
