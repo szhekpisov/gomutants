@@ -40,8 +40,11 @@ var (
 // mutate TestMap state after BuildTestMap returns, or the lock-free
 // read assumption breaks.
 type TestMap struct {
-	// index maps "file:line" to a set of test function names.
-	index map[string]map[string]bool
+	// index maps "file:line" to the set of covering tests, keyed by
+	// (pkg, name). Package context is retained so cross-package integration
+	// routing can dispatch a covering test to its own `go test` invocation;
+	// TestsFor projects the names out for the package-agnostic cache path.
+	index map[string]map[testKey]bool
 
 	// durations is the per-test execution time captured during the
 	// per-test coverage build, keyed by (pkg, test). Per-mutant adaptive
@@ -125,7 +128,7 @@ func BuildTestMap(ctx context.Context, projectDir string, packages []string, cov
 
 	// 4. Collect and index results.
 	tm := &TestMap{
-		index:        make(map[string]map[string]bool),
+		index:        make(map[string]map[testKey]bool),
 		durations:    make(map[testKey]time.Duration),
 		pkgDurations: make(map[string]time.Duration),
 	}
@@ -142,7 +145,7 @@ func BuildTestMap(ctx context.Context, projectDir string, packages []string, cov
 // to assert on (the receive loop is otherwise invisible to a unit
 // test that doesn't drive real `go test` invocations).
 func (tm *TestMap) ingestResult(tc testCoverage) {
-	tm.addBlocks(tc.testName, tc.blocks)
+	tm.addBlocks(tc.pkg, tc.testName, tc.blocks)
 	tm.recordDuration(tc.pkg, tc.testName, tc.duration)
 }
 
@@ -166,7 +169,7 @@ func (tm *TestMap) recordDuration(pkg, name string, d time.Duration) {
 // with tiny inputs and a tight deadline — calling BuildTestMap to exercise
 // it would let mutations like `line++ → line--` allocate gigabytes of
 // map entries before any test-side timer can fire.
-func (tm *TestMap) addBlocks(testName string, blocks []Block) {
+func (tm *TestMap) addBlocks(pkg, testName string, blocks []Block) {
 	for _, b := range blocks {
 		if b.Count == 0 {
 			continue
@@ -174,9 +177,9 @@ func (tm *TestMap) addBlocks(testName string, blocks []Block) {
 		for line := b.StartLine; line <= b.EndLine; line++ {
 			key := b.File + ":" + fmt.Sprint(line)
 			if tm.index[key] == nil {
-				tm.index[key] = make(map[string]bool)
+				tm.index[key] = make(map[testKey]bool)
 			}
-			tm.index[key][testName] = true
+			tm.index[key][testKey{pkg: pkg, name: testName}] = true
 		}
 	}
 }
@@ -311,8 +314,37 @@ func runCompiledTest(ctx context.Context, cp *compiledPkg, testName, profilePath
 	return profile.blocks, dur
 }
 
-// TestsFor returns the test function names that cover the given position.
-// Returns nil if no mapping exists (caller should run all tests).
+// TestRef identifies a single covering test by its package import path and
+// test function name. Cross-package routing needs the package so a covering
+// test can be dispatched to a `go test` invocation against its own package.
+type TestRef struct {
+	Pkg  string
+	Name string
+}
+
+// TestRefsFor returns the (pkg, name) references of the tests covering the
+// given position. Returns nil if no mapping exists (caller should run all
+// tests). The runner uses this to preserve package context across packages.
+func (tm *TestMap) TestRefsFor(file string, line int) []TestRef {
+	if tm == nil {
+		return nil
+	}
+	key := file + ":" + fmt.Sprint(line)
+	testSet := tm.index[key]
+	if len(testSet) == 0 {
+		return nil
+	}
+	refs := make([]TestRef, 0, len(testSet))
+	for k := range testSet {
+		refs = append(refs, TestRef{Pkg: k.pkg, Name: k.name})
+	}
+	return refs
+}
+
+// TestsFor returns the test function names that cover the given position,
+// deduplicated across packages. Returns nil if no mapping exists (caller
+// should run all tests). Used by the package-agnostic cache resolver; the
+// runner uses TestRefsFor to keep package context.
 func (tm *TestMap) TestsFor(file string, line int) []string {
 	if tm == nil {
 		return nil
@@ -322,9 +354,13 @@ func (tm *TestMap) TestsFor(file string, line int) []string {
 	if len(testSet) == 0 {
 		return nil
 	}
+	seen := make(map[string]bool, len(testSet))
 	tests := make([]string, 0, len(testSet))
-	for t := range testSet {
-		tests = append(tests, t)
+	for k := range testSet {
+		if !seen[k.name] {
+			seen[k.name] = true
+			tests = append(tests, k.name)
+		}
 	}
 	return tests
 }
@@ -356,6 +392,27 @@ func (tm *TestMap) SumDurationsFor(pkg string, tests []string) (time.Duration, b
 	return total, true
 }
 
+// SumDurationsForRefs is the cross-package analogue of SumDurationsFor: it
+// sums the recorded wall-time of the given (pkg, name) references and reports
+// whether every reference had a recorded timing. Empty input or any missing
+// timing yields (0, false) so the caller degrades to a coarser estimate
+// (per-package fallback, then the global ceiling) rather than trusting a
+// partial or zero sum.
+func (tm *TestMap) SumDurationsForRefs(refs []TestRef) (time.Duration, bool) {
+	if tm == nil || len(refs) == 0 {
+		return 0, false
+	}
+	var total time.Duration
+	for _, r := range refs {
+		d, ok := tm.durations[testKey{pkg: r.Pkg, name: r.Name}]
+		if !ok {
+			return 0, false
+		}
+		total += d
+	}
+	return total, true
+}
+
 // PackageDuration returns the sum of per-test durations recorded for
 // `pkg` during the coverage build. Used as the per-package fallback
 // when a mutant has no resolvable per-test covering set.
@@ -378,19 +435,23 @@ func (tm *TestMap) PackageDuration(pkg string) time.Duration {
 // perTest: keys are [pkg, name] pairs; the helper aggregates them into
 // the internal (pkg, name)→duration map and the rolling per-package
 // totals so PackageDuration matches what BuildTestMap would produce.
-func NewTestMapForTesting(perTest map[[2]string]time.Duration, coverIndex map[string][]string) *TestMap {
+//
+// coverIndex: keys are "file:line"; values are the covering tests as
+// (pkg, name) references, mirroring the package-aware index BuildTestMap
+// produces.
+func NewTestMapForTesting(perTest map[[2]string]time.Duration, coverIndex map[string][]TestRef) *TestMap {
 	tm := &TestMap{
-		index:        make(map[string]map[string]bool),
+		index:        make(map[string]map[testKey]bool),
 		durations:    make(map[testKey]time.Duration),
 		pkgDurations: make(map[string]time.Duration),
 	}
 	for k, d := range perTest {
 		tm.recordDuration(k[0], k[1], d)
 	}
-	for fileLine, names := range coverIndex {
-		set := make(map[string]bool, len(names))
-		for _, n := range names {
-			set[n] = true
+	for fileLine, refs := range coverIndex {
+		set := make(map[testKey]bool, len(refs))
+		for _, r := range refs {
+			set[testKey{pkg: r.Pkg, name: r.Name}] = true
 		}
 		tm.index[fileLine] = set
 	}

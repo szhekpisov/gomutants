@@ -244,6 +244,7 @@ func run(ctx context.Context, args []string) error {
 		dryRun             bool
 		verbose            bool
 		quiet              bool
+		integration        bool
 		showVersion        bool
 	)
 
@@ -309,6 +310,7 @@ func run(ctx context.Context, args []string) error {
 	fs.BoolVar(&verbose, "v", false, "verbose (shorthand)")
 	fs.BoolVar(&quiet, "quiet", false, "suppress header, phase lines, and per-mutant progress; only the final summary prints (warnings still go to stderr)")
 	fs.BoolVar(&quiet, "q", false, "quiet (shorthand)")
+	fs.BoolVar(&integration, "integration", false, "cross-package mode: route each mutant to covering tests in any package that imports it (widens coverage + the per-test build to the reverse-dependency closure). Manages -coverpkg itself; passing --coverpkg too is an error")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -358,8 +360,17 @@ func run(ctx context.Context, args []string) error {
 		DryRun:             dryRun,
 		Verbose:            verbose,
 		Quiet:              quiet,
+		Integration:        integration,
 	})
 	cfg.ResolveCache()
+
+	// Integration mode computes -coverpkg from the target packages so that
+	// tests in importing packages record coverage on the mutated code. An
+	// explicit --coverpkg would conflict with that computed value, so refuse
+	// rather than silently pick one.
+	if cfg.Integration && cfg.CoverPkg != "" {
+		return fmt.Errorf("--integration manages -coverpkg automatically; do not also pass --coverpkg")
+	}
 
 	// Periodic checkpointing rides on the cache file; with --cache=off
 	// there is nothing to flush. Warn rather than silently ignore so a
@@ -444,6 +455,19 @@ func run(ctx context.Context, args []string) error {
 	}
 	term.PhaseDone(resolveMsg)
 
+	// Integration mode widens coverage collection, the baseline run, and the
+	// per-test map to the reverse-dependency closure R of the target packages
+	// (T) — so a mutant in T can be killed by a covering test in any package
+	// that imports it — with -coverpkg pinned to T so those importing tests
+	// record coverage on the mutated code. Mutant *discovery* stays on T.
+	// Non-integration runs leave the patterns and -coverpkg untouched.
+	coveragePatterns := packages
+	coverPkgEff := cfg.CoverPkg
+	rDirs := dirsOfPackages(pkgs)
+	if cfg.Integration {
+		coveragePatterns, rDirs, coverPkgEff = integrationScope(ctx, projectDir, goModule, pkgs, cfg.Tags, stderr)
+	}
+
 	// 2. Create temp directory.
 	tmpDir, err := mkdirTempFunc("", "gomutants-*")
 	if err != nil {
@@ -469,9 +493,23 @@ func run(ctx context.Context, args []string) error {
 		// Hash failures (unreadable file/dir) fall through to a fresh
 		// coverage run rather than aborting — same conservative policy
 		// as the per-mutant Lookup path.
-		if pkgDirs, derr := coveragePkgDirs(ctx, projectDir, pkgs, cfg.CoverPkg, cfg.Tags); derr == nil {
+		// In integration mode the coverage profile is produced by running R's
+		// tests with -coverpkg=T, so the hash must fingerprint R's sources
+		// (rDirs, which already include T) and the effective -coverpkg. The
+		// distinct coverPkgEff value also keeps integration and
+		// non-integration runs in separate cache namespaces.
+		var (
+			hashDirs []string
+			derr     error
+		)
+		if cfg.Integration {
+			hashDirs = rDirs
+		} else {
+			hashDirs, derr = coveragePkgDirs(ctx, projectDir, pkgs, coverPkgEff, cfg.Tags)
+		}
+		if derr == nil {
 			toolchain := fmt.Sprintf("gomutants/%s|go/%s", runtime.Version(), goToolchain)
-			if k, herr := hasher.HashCoverageInputs(pkgDirs, projectDir, cfg.CoverPkg, cfg.Tags, toolchain, captureCoverageEnv()); herr == nil {
+			if k, herr := hasher.HashCoverageInputs(hashDirs, projectDir, coverPkgEff, cfg.Tags, toolchain, captureCoverageEnv()); herr == nil {
 				coverageKey = k
 			}
 		}
@@ -485,7 +523,7 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	if profile == nil {
-		profilePath, rerr := runCoverageFunc(ctx, projectDir, packages, cfg.CoverPkg, cfg.Tags, tmpDir)
+		profilePath, rerr := runCoverageFunc(ctx, projectDir, coveragePatterns, coverPkgEff, cfg.Tags, tmpDir)
 		if rerr != nil {
 			return rerr
 		}
@@ -511,7 +549,7 @@ func run(ctx context.Context, args []string) error {
 
 	// 4. Measure baseline test duration.
 	term.Phase("Measuring baseline...")
-	baseline, err := measureBaselineFunc(ctx, projectDir, packages, cfg.Tags)
+	baseline, err := measureBaselineFunc(ctx, projectDir, coveragePatterns, cfg.Tags)
 	if err != nil {
 		return err
 	}
@@ -596,7 +634,7 @@ func run(ctx context.Context, args []string) error {
 
 	// 7. Build per-test coverage map.
 	term.Phase("Building per-test coverage map...")
-	testMap, err := buildTestMapFunc(ctx, projectDir, packages, cfg.CoverPkg, cfg.Tags, tmpDir, cfg.Workers)
+	testMap, err := buildTestMapFunc(ctx, projectDir, coveragePatterns, coverPkgEff, cfg.Tags, tmpDir, cfg.Workers)
 	if err != nil {
 		// Non-fatal: fall back to running all tests per mutant.
 		fmt.Fprintf(stderr, "warning: per-test coverage map failed: %v\n", err)
@@ -613,14 +651,11 @@ func run(ctx context.Context, args []string) error {
 	// coverage phase could already consult them — here we just build
 	// the test-files resolver and run the lookup.
 	if loadedCache != nil {
-		// TestIndex is built from every package's directory so cross-
-		// package coverage (tests in pkg B exercising code in pkg A
-		// via -coverpkg) resolves correctly.
-		pkgDirs := make([]string, 0, len(pkgs))
-		for _, p := range pkgs {
-			pkgDirs = append(pkgDirs, p.Dir)
-		}
-		testIndex := cache.BuildTestIndex(pkgDirs)
+		// TestIndex is built from the reverse-dependency closure's directories
+		// (rDirs; equal to the target dirs when integration mode is off) so
+		// cross-package coverage — tests in an importing package exercising a
+		// mutated target via -coverpkg — resolves to the right test files.
+		testIndex := cache.BuildTestIndex(rDirs)
 
 		// Resolver: prefer the per-test coverage map's covering set,
 		// mapped through the index to defining files. When the map is
@@ -865,12 +900,9 @@ func captureCoverageEnv() string {
 	return b.String()
 }
 
-// coveragePkgDirs returns the set of package directories whose source
-// could land in the coverage profile. With cfg.CoverPkg unset (or
-// matching the target patterns), this is exactly `pkgs`. With a
-// broader -coverpkg pattern, we resolve it separately so the hash
-// covers every package that go test will instrument.
-func coveragePkgDirs(ctx context.Context, projectDir string, pkgs []discover.Package, coverPkg, tags string) ([]string, error) {
+// dirsOfPackages returns the unique directories of the given packages,
+// preserving first-seen order.
+func dirsOfPackages(pkgs []discover.Package) []string {
 	dirs := make([]string, 0, len(pkgs))
 	seen := make(map[string]bool, len(pkgs))
 	for _, p := range pkgs {
@@ -879,8 +911,46 @@ func coveragePkgDirs(ctx context.Context, projectDir string, pkgs []discover.Pac
 			dirs = append(dirs, p.Dir)
 		}
 	}
+	return dirs
+}
+
+// integrationScope computes the reverse-dependency closure of the target
+// packages for --integration mode: the `go test` patterns to run (R), the
+// package directories of R (for the cache test index and the coverage-key
+// hash), and the -coverpkg value (the targets themselves, so importing tests
+// record coverage on the mutated code). On any failure it falls back to the
+// whole module (./...) with -coverpkg pinned to the targets, warning that
+// this can be slow on large modules.
+func integrationScope(ctx context.Context, projectDir, goModule string, pkgs []discover.Package, tags string, stderr io.Writer) (patterns, dirs []string, coverPkg string) {
+	targets := make([]string, 0, len(pkgs))
+	for _, p := range pkgs {
+		targets = append(targets, p.ImportPath)
+	}
+	rPatterns, rDirs, cpkg, err := discover.IntegrationClosure(ctx, projectDir, targets, goModule, tags)
+	if err == nil {
+		return rPatterns, rDirs, cpkg
+	}
+	fmt.Fprintf(stderr, "gomutants: integration closure failed (%v); falling back to ./... — this can be slow on large modules\n", err)
+	coverPkg = strings.Join(targets, ",")
+	if all, rerr := discover.ResolvePackages(ctx, projectDir, []string{"./..."}, tags); rerr == nil {
+		return []string{"./..."}, dirsOfPackages(all), coverPkg
+	}
+	return []string{"./..."}, dirsOfPackages(pkgs), coverPkg
+}
+
+// coveragePkgDirs returns the set of package directories whose source
+// could land in the coverage profile. With cfg.CoverPkg unset (or
+// matching the target patterns), this is exactly `pkgs`. With a
+// broader -coverpkg pattern, we resolve it separately so the hash
+// covers every package that go test will instrument.
+func coveragePkgDirs(ctx context.Context, projectDir string, pkgs []discover.Package, coverPkg, tags string) ([]string, error) {
+	dirs := dirsOfPackages(pkgs)
 	if coverPkg == "" {
 		return dirs, nil
+	}
+	seen := make(map[string]bool, len(dirs))
+	for _, d := range dirs {
+		seen[d] = true
 	}
 	expanded, err := resolveCoverPkgFunc(ctx, projectDir, []string{coverPkg}, tags)
 	if err != nil {

@@ -293,6 +293,11 @@ func TestAdd(t *testing.T) {
 	if result.Status != mutator.StatusLived {
 		t.Errorf("Status=%v, want LIVED", result.Status)
 	}
+	// The all-lived tail must still stamp Duration — STATEMENT_REMOVE on
+	// `m.Duration = time.Since(start)` would leave it at zero.
+	if result.Duration <= 0 {
+		t.Errorf("Duration=%v on LIVED mutant, want > 0", result.Duration)
+	}
 }
 
 func TestWorkerTestTimeout(t *testing.T) {

@@ -13,9 +13,9 @@ import (
 
 func TestTestMapTestsFor(t *testing.T) {
 	tm := &TestMap{
-		index: map[string]map[string]bool{
-			"file.go:10": {"TestA": true, "TestB": true},
-			"file.go:20": {"TestC": true},
+		index: map[string]map[testKey]bool{
+			"file.go:10": {{pkg: "p", name: "TestA"}: true, {pkg: "p", name: "TestB"}: true},
+			"file.go:20": {{pkg: "p", name: "TestC"}: true},
 		},
 	}
 
@@ -40,6 +40,106 @@ func TestTestMapTestsFor(t *testing.T) {
 	tests = nilTm.TestsFor("file.go", 10)
 	if tests != nil {
 		t.Errorf("nil TestMap.TestsFor = %v, want nil", tests)
+	}
+}
+
+func TestTestMapTestRefsFor(t *testing.T) {
+	tm := &TestMap{
+		index: map[string]map[testKey]bool{
+			"f.go:10": {{pkg: "m/a", name: "TestA"}: true, {pkg: "m/b", name: "TestB"}: true},
+		},
+	}
+
+	refs := tm.TestRefsFor("f.go", 10)
+	if len(refs) != 2 {
+		t.Fatalf("TestRefsFor(f.go, 10) = %d refs, want 2: %v", len(refs), refs)
+	}
+	got := map[TestRef]bool{}
+	for _, r := range refs {
+		got[r] = true
+	}
+	if !got[TestRef{Pkg: "m/a", Name: "TestA"}] || !got[TestRef{Pkg: "m/b", Name: "TestB"}] {
+		t.Errorf("TestRefsFor lost a (pkg,name) pair; got %v", refs)
+	}
+
+	// No mapping for the position.
+	if refs := tm.TestRefsFor("f.go", 99); refs != nil {
+		t.Errorf("TestRefsFor(f.go, 99) = %v, want nil", refs)
+	}
+
+	// Nil receiver tolerated.
+	var nilTm *TestMap
+	if refs := nilTm.TestRefsFor("f.go", 10); refs != nil {
+		t.Errorf("nil TestMap.TestRefsFor = %v, want nil", refs)
+	}
+}
+
+func TestTestMapSumDurationsForRefs(t *testing.T) {
+	tm := &TestMap{
+		durations: map[testKey]time.Duration{
+			{pkg: "m/a", name: "TestA"}: 100 * time.Millisecond,
+			{pkg: "m/b", name: "TestB"}: 200 * time.Millisecond,
+		},
+	}
+
+	// Cross-package sum: both refs present → total and complete.
+	got, complete := tm.SumDurationsForRefs([]TestRef{{Pkg: "m/a", Name: "TestA"}, {Pkg: "m/b", Name: "TestB"}})
+	if got != 300*time.Millisecond || !complete {
+		t.Errorf("SumDurationsForRefs([a/A, b/B]) = (%v, %v), want (300ms, true)", got, complete)
+	}
+
+	// A missing ref → (0, false) so the caller falls back, not a partial sum.
+	got, complete = tm.SumDurationsForRefs([]TestRef{{Pkg: "m/a", Name: "TestA"}, {Pkg: "m/x", Name: "TestMissing"}})
+	if got != 0 || complete {
+		t.Errorf("SumDurationsForRefs(with missing) = (%v, %v), want (0, false)", got, complete)
+	}
+
+	// Same name, wrong package must not match (cross-package isolation).
+	got, complete = tm.SumDurationsForRefs([]TestRef{{Pkg: "m/b", Name: "TestA"}})
+	if got != 0 || complete {
+		t.Errorf("SumDurationsForRefs([b/A]) = (%v, %v), want (0, false) — package must be part of the key", got, complete)
+	}
+
+	// Empty input → (0, false).
+	got, complete = tm.SumDurationsForRefs(nil)
+	if got != 0 || complete {
+		t.Errorf("SumDurationsForRefs(nil) = (%v, %v), want (0, false)", got, complete)
+	}
+
+	// Nil receiver tolerated.
+	var nilTm *TestMap
+	got, complete = nilTm.SumDurationsForRefs([]TestRef{{Pkg: "m/a", Name: "TestA"}})
+	if got != 0 || complete {
+		t.Errorf("nil.SumDurationsForRefs = (%v, %v), want (0, false)", got, complete)
+	}
+}
+
+// TestTestMapTestsForDedupsAcrossPackages pins the name dedup in TestsFor:
+// the same test name covering a line from two packages must surface once,
+// since the cache resolver keys by name and is package-agnostic.
+func TestTestMapTestsForDedupsAcrossPackages(t *testing.T) {
+	tm := &TestMap{
+		index: map[string]map[testKey]bool{
+			"f.go:1": {
+				{pkg: "m/a", name: "TestShared"}: true,
+				{pkg: "m/b", name: "TestShared"}: true,
+				{pkg: "m/a", name: "TestOther"}:  true,
+			},
+		},
+	}
+	got := tm.TestsFor("f.go", 1)
+	if len(got) != 2 {
+		t.Fatalf("TestsFor = %v (%d names), want 2 deduped names", got, len(got))
+	}
+	seen := map[string]bool{}
+	for _, n := range got {
+		if seen[n] {
+			t.Errorf("duplicate name %q — TestsFor must dedup across packages", n)
+		}
+		seen[n] = true
+	}
+	if !seen["TestShared"] || !seen["TestOther"] {
+		t.Errorf("TestsFor = %v, want {TestShared, TestOther}", got)
 	}
 }
 
@@ -111,7 +211,7 @@ func TestTestMapPackageDuration(t *testing.T) {
 // invisible — the index map still gets populated by addBlocks.
 func TestTestMapIngestResultUpdatesBothMaps(t *testing.T) {
 	tm := &TestMap{
-		index:        map[string]map[string]bool{},
+		index:        map[string]map[testKey]bool{},
 		durations:    map[testKey]time.Duration{},
 		pkgDurations: map[string]time.Duration{},
 	}
@@ -130,7 +230,7 @@ func TestTestMapIngestResultUpdatesBothMaps(t *testing.T) {
 	if got := tm.pkgDurations["p"]; got != 25*time.Millisecond {
 		t.Errorf("pkgDurations not populated; got %v want 25ms", got)
 	}
-	if !tm.index["f.go:5"]["TestA"] {
+	if !tm.index["f.go:5"][testKey{pkg: "p", name: "TestA"}] {
 		t.Errorf("addBlocks side of ingestResult missing the f.go:5 → TestA edge; index=%v", tm.index)
 	}
 }
@@ -178,9 +278,9 @@ func TestNewTestMapForTestingPopulatesAllMaps(t *testing.T) {
 			{"p", "TestB"}: 70 * time.Millisecond,
 			{"q", "TestA"}: 100 * time.Millisecond, // same name, different pkg
 		},
-		map[string][]string{
-			"f.go:10": {"TestA", "TestB"},
-			"g.go:1":  {"TestA"},
+		map[string][]TestRef{
+			"f.go:10": {{Pkg: "p", Name: "TestA"}, {Pkg: "p", Name: "TestB"}},
+			"g.go:1":  {{Pkg: "p", Name: "TestA"}},
 		},
 	)
 
@@ -200,11 +300,11 @@ func TestNewTestMapForTestingPopulatesAllMaps(t *testing.T) {
 		t.Errorf("pkgDurations[q]=%v, want 100ms", got)
 	}
 
-	// Cover index entries are converted from []string to set[string]bool.
-	if !tm.index["f.go:10"]["TestA"] || !tm.index["f.go:10"]["TestB"] {
+	// Cover index entries are converted from []TestRef to set[testKey]bool.
+	if !tm.index["f.go:10"][testKey{pkg: "p", name: "TestA"}] || !tm.index["f.go:10"][testKey{pkg: "p", name: "TestB"}] {
 		t.Errorf("f.go:10 → {TestA, TestB} edges missing; got %v — STATEMENT_REMOVE on the index assignment would empty this", tm.index["f.go:10"])
 	}
-	if !tm.index["g.go:1"]["TestA"] {
+	if !tm.index["g.go:1"][testKey{pkg: "p", name: "TestA"}] {
 		t.Errorf("g.go:1 → TestA edge missing; got %v", tm.index["g.go:1"])
 	}
 
@@ -347,8 +447,8 @@ func TestFeedWorkNormal(t *testing.T) {
 // block aborts the entire block walk so later Count>0 blocks never make
 // it into the index.
 func TestAddBlocksContinuesPastCount0(t *testing.T) {
-	tm := &TestMap{index: make(map[string]map[string]bool)}
-	tm.addBlocks("TestX", []Block{
+	tm := &TestMap{index: make(map[string]map[testKey]bool)}
+	tm.addBlocks("p", "TestX", []Block{
 		// Count==0 first — must be skipped, not break.
 		{File: "f.go", StartLine: 1, EndLine: 1, Count: 0},
 		// Count>0 covering line 10 — must be indexed.
@@ -359,7 +459,7 @@ func TestAddBlocksContinuesPastCount0(t *testing.T) {
 	}
 }
 
-func keysOf(m map[string]map[string]bool) []string {
+func keysOf(m map[string]map[testKey]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -715,4 +815,3 @@ func TestSanitize(t *testing.T) {
 		}
 	}
 }
-

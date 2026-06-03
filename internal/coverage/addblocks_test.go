@@ -21,7 +21,7 @@ import (
 // process is RSS-killed within seconds — too fast for a deadline wrapped
 // around the whole BuildTestMap pipeline.
 func TestTestMapAddBlocksLineLoopBounded(t *testing.T) {
-	tm := &TestMap{index: make(map[string]map[string]bool)}
+	tm := &TestMap{index: make(map[string]map[testKey]bool)}
 	blocks := []Block{
 		{File: "a.go", StartLine: 1, EndLine: 3, Count: 1},
 	}
@@ -29,7 +29,7 @@ func TestTestMapAddBlocksLineLoopBounded(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		tm.addBlocks("TestX", blocks)
+		tm.addBlocks("p", "TestX", blocks)
 	}()
 	select {
 	case <-done:
