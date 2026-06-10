@@ -54,7 +54,10 @@ func effectiveVersion() string {
 	}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if v := info.Main.Version; v != "" && v != "(devel)" {
-			return v
+			// Module versions carry a leading "v" (v0.4.0) while
+			// ldflags-injected versions don't (goreleaser's {{.Version}}
+			// strips it); trim so formatVersion's "v%s" doesn't print "vv".
+			return strings.TrimPrefix(v, "v")
 		}
 	}
 	return version
